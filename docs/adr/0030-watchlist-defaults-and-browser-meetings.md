@@ -15,4 +15,4 @@ WeChat on by default (maximal never-miss; rejected for the consent posture and f
 - A Browser Meetings recording labels as the browser ("Chrome") until the post-meeting title suggestion names it; precise per-site labels are available via an **opt-in** Screen Recording grant in Settings ("name browser meetings precisely") — ADR-0024's mechanism demoted from load-bearing to optional.
 - A browser voice app that isn't a meeting (Discord web, a dictation site) can trigger; the entry is a visible, removable row and whole-Meeting delete is the triage.
 - The M2 detection test matrix becomes per-browser mic attribution (Chrome, Safari, Arc, Edge — helpers correctly attributed) instead of locale-sensitive title parsing.
-- Windows mic attribution is fast-follow homework with no shipped prior art (anarlog's Windows detector is a stub); the Windows column cannot be.
+- Windows mic attribution is fast-follow homework — anarlog's Windows detector is a no-op stub, but Granola ships Windows mic-session attribution (`mic_monitor_v2`, mined from the shared JS bundle: backoff, give-up, exe→app table) as real prior art; the Windows column cannot be hollow.
