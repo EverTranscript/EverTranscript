@@ -2,6 +2,8 @@
 
 > **Amended by ADR-0030:** the shipped Watchlist grows — VooV Meeting joins; a single Browser Meetings entry (any browser with a hot mic, per-process attribution) replaces title-based Google Meet detection after ADR-0027 removed the Screen Recording grant it rode on; WeChat ships suggested-not-default. The AND-mic trigger and the any-mic-use rejection below stand unchanged.
 
+> **Amended 2026-08-27 (pre-roll rejected):** a pre-trigger ring buffer — continuously holding recent audio in memory so recording can reach back before the trigger — is rejected outright, in any form. It is ambient content capture regardless of persistence, and it falsifies the Briefing's "nothing is captured before" sentence. Recording begins at the trigger; the lost opening seconds are an accepted cost, mitigated by a minimal trigger threshold and the partial-capture posture (PRD story 12).
+
 Detection triggers only when a Watchlist app is active AND the microphone is in use — both conditions, so an idle Zoom window doesn't record the office all day and a hot mic alone (dictation, voice memos) doesn't trigger either. The Watchlist ships with Zoom and Microsoft Teams (process detection) and Google Meet (browser window title — readable under the Screen Recording permission the app already holds for system-audio capture, so the sanctioned permission set is unchanged), and it is Operator-visible and extensible in Settings.
 
 ## Considered options
