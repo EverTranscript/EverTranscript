@@ -15,7 +15,7 @@ Anyone else on the call. Their voice is recorded, transcribed, and diarized; the
 _Avoid_: attendee, counterparty
 
 **Speaker**:
-A persistent voice identity, created automatically the first time a voice is heard and recognized across Meetings thereafter. Pseudonymous ("Speaker A") until the Operator names it; naming retroactively labels all past appearances.
+A persistent voice identity, created automatically the first time a voice is heard and recognized across Meetings thereafter. Pseudonymous ("Speaker 1", "Speaker 2", …) until the Operator names it; naming retroactively labels all past appearances and confirms the Voiceprint for future recognition.
 
 **Voiceprint**:
 The stored voice embedding by which a Speaker is recognized in later Meetings. Biometric data; one exists for every Speaker.

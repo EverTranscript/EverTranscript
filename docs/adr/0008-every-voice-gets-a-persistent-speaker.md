@@ -1,5 +1,7 @@
 # Every voice gets a persistent Speaker with a stored Voiceprint
 
+> **Amended 2026-08-27 (naming is also confirmation):** the Operator's naming act is a learning signal, not just a label — it promotes that Speaker's Voiceprint to an Operator-confirmed tier that carries more weight in future matching (confirmed Voiceprints win ties; unconfirmed ones still match, conservatively). Pseudonyms are numbered ("Speaker 1", "Speaker 2", …).
+
 Diarization resolves every voice in every Meeting to a persistent Speaker, named or not ("Speaker A, seen in 14 meetings"); naming retroactively labels all past appearances. Chosen eyes-open over named-only enrollment and text-only identity (both offered and re-challenged): cross-Meeting recall ("what did Alice say last month" works without ceremony) and diarization quality that improves with every Meeting outweigh the biometric footprint for a personal, local-only tool.
 
 ## Consequences
