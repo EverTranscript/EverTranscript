@@ -107,7 +107,7 @@ The property that History reaches the cloud through no code path — the surface
 _Avoid_: redaction boundary (nothing is redacted, because nothing crosses)
 
 **Nothing Ambient**:
-The input-side twin of the Closed Boundary, narrowed by Auto-Record: the product processes no content it wasn't explicitly handed — no calendar, screen, filesystem, or contacts. Its one ambient sense is Meeting Detection, which reads state, never content.
+The input-side twin of the Closed Boundary, twice narrowed: the product processes no input it wasn't explicitly handed — no screen, filesystem, or contacts. Its ambient senses are Meeting Detection (application and microphone state) and, only when granted, the local calendar (schedule, titles, attendees — never via cloud APIs).
 _Avoid_: passive capture, background monitoring
 
 **Sanctioned Traffic**:

@@ -2,6 +2,8 @@
 
 > **Amended 2026-08-27 (continuity window):** auto-stop fires after a short continuity window (~15s default), not instantly on mic release — a Bluetooth-device swap or capture hiccup that re-arms the same trigger inside the window continues the *same* Meeting; the Meeting ends and persists when the window expires. "Record-start to record-stop" is unchanged; the window defines where record-stop is.
 
+> **Amended by ADR-0036:** the local calendar (when granted) pre-arms detection and posts the heads-up at a scheduled meeting's start, and its scheduled end feeds the continuity window. The trigger itself is unchanged — Watchlist AND mic.
+
 Never missing a meeting is the product's headline promise, and ADR-0020's chosen mitigation — a maximally frictionless manual Record — still misses every meeting the Operator forgot. The product therefore gains one ambient sense, Meeting Detection: it observes application and microphone state — never content — to identify an active meeting. Auto-Record, the standing policy that detection starts and stops recording without a per-meeting act, ships **on by default**, and the app installs a launch-at-login item so detection is always running.
 
 What still holds:

@@ -2,6 +2,8 @@
 
 > **Amended by ADR-0023:** the "no detection exists" clause below is reversed — Meeting Detection (application + microphone state, never content) exists, and under Auto-Record it starts recording by itself; the "'I forgot to record' is an accepted risk" consequence is likewise obsolete. Everything else stands: no calendar, no screen pixels, no filesystem indexing, no contacts, no content observation.
 
+> **Amended by ADR-0036 (2026-08-27):** the calendar clause below is also reversed — the product may read the *local* calendar store (never cloud calendar APIs) to arm detection, name Meetings, and suggest Speaker names, behind a skippable onboarding grant; capture still starts only on the ADR-0024 trigger. Screen pixels, filesystem indexing, and contacts remain foreclosed.
+
 The input-side twin of the Closed Boundary (ADR-0001), fully strict: the product processes no input it wasn't explicitly handed. No calendar (rejected outright, even read-only EventKit), no screen pixels, no filesystem indexing, no contacts — and no ambient STATE observation either: the app does not watch for meeting apps or microphone activity. Recording starts only because the Operator hits Record. **This amends ADR-0007: the "detection may prompt" allowance is removed; no detection exists.**
 
 Explicit one-shot acts remain open by definition — e.g., a future explicit audio-file import — because anything the Operator hands over per-act is not ambient.
