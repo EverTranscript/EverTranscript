@@ -1,0 +1,141 @@
+# PRD: EverTranscript — Local-first Meeting Notetaker, v1
+
+**Status:** ready-for-agent (no tracker configured; this file is the published PRD)
+**Date:** 2026-07-09 (rev. 2026-07-10: notetaker-only scope, ADR-0022; Auto-Record added, ADR-0023/0024. rev. 2026-07-11: replatform — Electron UI, Rust Core, macOS + Windows, ADR-0025/0026. rev. 2026-08-27: source-level competitive sweep — capture, detection, protocol, audio pipeline, and local Summary concretized, ADR-0027–0032; posture sweep — open source, no telemetry, Sanctioned Traffic, default model, CLI name, ADR-0033/0034; build stratum — React+Vite Client, rusqlite writer thread, workspace layout, stable Mirror filenames, EN+zh-CN i18n)
+**Source of truth for decisions:** `CONTEXT.md` (glossary) and `docs/adr/0001`–`0034`. Numbering has gaps where live-assist ADRs were retired (0004, 0006, 0012, 0017 — see ADR-0022). Where this PRD and an ADR disagree, the ADR wins.
+
+## Problem Statement
+
+People who live in meetings need a durable, searchable record of every conversation. Today they choose between polish and privacy. Cloud notetakers (Granola) deliver the polished record — summaries woven from the transcript and the user's own rough notes, searchable history — by putting every conversation on someone else's servers. Local notetakers keep the record home but hedge it: anarlog ships local diarization and cross-meeting voiceprints, yet surrounds them with thirty cloud ASR adapters, hosted routing, and cloud sync — local is a mode, not a guarantee; Meetily's free edition stays thin (no diarization, no auto-record, no CLI). And every local notetaker still puts a per-meeting act between the Operator and capture — a prompt to accept, a button to press — so the most painful missing transcript remains the meeting you forgot. Nobody offers the polished record — diarized, speaker-persistent across meetings, steered by the Operator's own notes, captured automatically — over storage that provably never leaves the machine.
+
+## Solution
+
+A desktop app for macOS and Windows (macOS ships v1; Windows fast-follows — ADR-0025): a Notetaker that never misses a meeting. One Rust binary — the Core — runs at login and watches for a Watchlist meeting app (Zoom, Microsoft Teams, VooV, or any browser in a call) using the microphone; when one is, it starts recording by itself (Auto-Record, on by default). It live-transcribes on-device, shows live captions, and — post-meeting — diarizes into persistent Speakers, generates a Summary steered by the Operator's own Notes, and files everything into a searchable local History with Markdown mirrors. The Electron app and the CLI are thin Clients of the Core over a typed local protocol — capture never depends on a UI being open. Summary — the product's one LLM feature — is switchable between a local model and a BYO cloud API.
+
+Two by-construction guarantees define the product:
+
+1. **Closed Boundary** — History reaches the cloud through no code path. A cloud Backend can only ever receive the Current Meeting.
+2. **Nothing Ambient (narrowed, ADR-0023)** — beyond Meeting Detection, which reads application and microphone *state* and never content, the app processes no input it wasn't explicitly handed: no calendar, no screen content, no filesystem indexing, no contacts.
+
+## User Stories
+
+### Recording & transcription
+
+1. As an Operator, I want manual record controls (menu-bar/tray control and global hotkey) alongside Auto-Record, so that I can capture conversations the Watchlist doesn't cover.
+2. As an Operator, I want microphone and system audio captured together, so that both sides of the call are in the Transcript.
+3. As an Operator, I want live captions while recording, so that I can confirm transcription works and glance back at what was just said.
+4. As an Operator, I want an always-visible recording indicator, so that I am never recording without knowing it.
+5. As an Operator, I want stopping the recording to immediately persist the Meeting, so that a crash after the call cannot lose the record.
+6. As an Operator, I want transcription to run entirely on my machine with no configuration able to change that, so that raw meeting audio can never leave my device.
+7. As a multilingual Operator, I want transcription that handles the languages my meetings actually happen in, including code-switching, so that the record is usable.
+
+### Auto-Record
+
+8. As an Operator, I want EverTranscript to start recording by itself when a Watchlist app is in a meeting (app active + microphone in use), so that no meeting is ever missed.
+9. As an Operator, I want the watcher to launch at login, so that detection is already running at my first meeting of the day.
+10. As an Operator, I want recording to stop by itself when the detected meeting ends, so that unattended capture never runs all day.
+11. As an Operator, I want my manual Stop to win — detection must not restart recording for the rest of that meeting — so that the machine never overrules me.
+12. As an Operator, I want recording to begin mid-meeting when detection comes online during one, so that a partial record beats no record.
+13. As an Operator, I want to see and edit the Watchlist, so that I always know exactly what the app watches — and can extend it.
+14. As an Operator, I want a single visible Auto-Record switch, so that turning the ambient behavior off (and back on) is one legible act.
+
+### The Core & Clients
+
+15. As an Operator, I want capture, transcription, and storage to live in the always-on Core with the UI as a separate process, so that closing — or crashing — the app window never kills a recording.
+16. As an Operator, I want a CLI for control and query (daemon status, record start/stop, Auto-Record switch, Watchlist edits, History search, transcript export to stdout), so that my record is scriptable and pipeable.
+17. As a Windows Operator, I want the same product with the same local-only guarantees, so that my platform doesn't decide my privacy — macOS ships first, Windows fast-follows.
+
+### The record
+
+18. As an Operator, I want every Meeting in a local, full-text-searchable store, so that I can find any conversation ever had.
+19. As an Operator, I want each Meeting auto-mirrored to a Markdown file in a folder I choose, so that my record is greppable, syncable, and usable without the app.
+20. As an Operator, I want the record to be immutable — the app never rewrites what was said, so that my History is trustworthy evidence.
+21. As an Operator, I want to delete a whole Meeting (including its audio) as a single legible act, so that removal is exact and complete — including recordings Auto-Record captured that I never wanted.
+22. As an Operator, I want meeting audio kept by default, so that better future models can re-transcribe and re-diarize my History; and I want a global knob to not keep it.
+23. As an Operator, I want to title a Meeting myself or accept a post-meeting title suggested from the Transcript, so that my auto-captured History isn't a list of "Untitled, 3pm".
+
+### Notes
+
+24. As an Operator, I want a markdown Notes pane I can jot into during the call, so that my own thoughts are captured next to the transcript.
+25. As an Operator, I want Notes to stay editable forever (unlike the record), so that I can annotate past Meetings anytime.
+26. As an Operator, I want the Summary to treat my Notes as its strongest signal of what mattered, so that rough jottings come back as clean, personal notes.
+
+### Speakers & diarization
+
+27. As an Operator, I want post-meeting Diarization to attribute the Transcript to Speakers, so that I know who said what.
+28. As an Operator, I want every voice to resolve to a persistent Speaker across Meetings, so that "what did Alice say last month" works without ceremony.
+29. As an Operator, I want naming a Speaker to retroactively label all their past appearances, so that one act organizes my whole History.
+30. As an Operator, I want a Voice Registry listing every Speaker and Voiceprint the app holds, so that the biometric inventory is fully inspectable.
+31. As an Operator, I want to delete any Speaker's Voiceprint, so that the app stops recognizing them without touching the record.
+32. As an Operator honoring a Participant's deletion request, I want Voiceprint deletion plus Speaker rename to compose into de-identification, so that I can honor the request to the degree I choose.
+33. As an Operator, I want Diarization to run only locally with no cloud form at all, so that voices are never a network question.
+
+### Summary
+
+34. As an Operator, I want a post-meeting Summary generated locally by default, so that ending a meeting never silently ships its transcript anywhere.
+35. As an Operator, I want the Summary to end with extracted action items, so that follow-ups don't require re-reading.
+36. As an Operator, I want enabling cloud Summary to require a hard one-time warning, so that the single biggest possible exfiltration is impossible to enable unknowingly.
+
+### Backend & the Knob
+
+37. As an Operator, I want a local/cloud Knob on Summary — the one LLM feature — so that its privacy/quality trade is mine to make.
+38. As an Operator, I want cloud-Backend failures to auto-switch cloud→local only — never local→cloud — with a visible active-backend indicator, so that a network blip can't betray a privacy choice.
+39. As an Operator, I want Strict Mode ("never auto-switch; tell me on failure"), so that I can trade resilience for absolute predictability.
+40. As an Operator, I want curated cloud presets carrying verified data-handling labels (training, retention, ZDR), plus a fully open custom base-URL field, so that I'm informed but never gated.
+41. As an Operator, I want API keys stored only in the OS credential store (macOS Keychain / Windows Credential Manager), so that secrets never appear in the database, mirrors, or logs.
+42. As an Operator, I want Summary's system prompt exposed as an editable field with reset-to-default, so that I can shape my notes without waiting for a feature.
+
+### Onboarding & trust
+
+43. As a new Operator, I want a blunt one-time Briefing on recording consent law, voice profiling, and the fact that Auto-Record is on unless I turn it off, ending in an explicit acknowledgment — and nothing captured before that acknowledgment — so that I understand my obligations before the machine acts.
+44. As a new Operator, I want linear setup where every requirement (permissions, model download, API key) is explained at the moment it's demanded, so that I exit setup fully armed and am never configuration-prompted at runtime again.
+45. As a new Operator, I want the Summary Backend choice made explicitly by me (Local badged "Recommended", never preselected), so that runtime configuration traces to my own act.
+46. As a privacy-conscious evaluator, I want the two guarantees stated in plain language and verifiable — the source open to read, entitlements on macOS, and a wire that speaks only enumerable Sanctioned Traffic — so that I can check the claims before trusting the product.
+47. As an Operator, I want certainty that the app never indexes my filesystem, calendar, or contacts, and never reads screen content, so that "what does it know?" always has the answer "exactly what I gave it, plus which meeting app is running."
+
+### Distribution
+
+48. As an Operator, I want a signed direct download (Homebrew cask on macOS, winget on Windows) with in-app updates, so that installing and updating never depends on an app store's review of system-audio capture.
+
+## Implementation Decisions
+
+- **Platform & architecture:** Electron UI; all logic and the CLI in Rust (ADR-0025). One Rust binary — the Core — runs as an always-on daemon (the login item) owning detection, capture, ASR, Diarization, and storage, and doubles as the CLI via subcommands (binary `evertranscript`; `evt` documented as the suggested alias); the Electron app is a thin Client over a typed local IPC protocol — the codex app-server blueprint (ADR-0028): JSON-RPC-shaped JSONL over a unix socket (macOS) / named pipe (Windows), per-connection initialize with capability gating, a macro-defined protocol crate with ts-rs + schemars codegen, Meeting-scoped vs broadcast notification fanout, snapshot-then-tail on attach, and a lossy caption-delta subscription. The Core is the record's only writer (ADR-0026), owns the always-visible tray (recording indicator + record/stop controls; clicking opens the Client), and never auto-launches the Client — Auto-Record surfaces a system notification instead. Client stack: React 19 + Vite + Tailwind, strict TypeScript, protocol types from the generated ts-rs bindings, minimal state, no meta-framework. Repo layout: one Cargo workspace — `crates/evertranscript-core`, `crates/evertranscript-protocol`, `crates/evertranscript` (the binary; the Summary sidecar crate joins later) — with `clients/electron` (pnpm) beside it. Targets: macOS 14.4+ Apple Silicon in v1 (ADR-0027); Windows fast-follows off the same cross-platform Core (platform traits for capture, detection, autostart, credentials; CI builds and tests both from M1).
+- **Capture (platform trait):** macOS — CoreAudio process taps + private aggregate device for system audio (ADR-0027) + cpal for microphone; Windows — WASAPI loopback + capture. Dual-channel end-to-end, with DTLN-shape AEC (via ort, system channel as echo reference) on the mic channel from M1 (ADR-0029). Recording starts by explicit Operator action or by Auto-Record (ADR-0023); it never starts before the Briefing acknowledgment.
+- **Detection (platform trait):** macOS — NSWorkspace running-app observation for process entries (Zoom, Teams, VooV incl. 腾讯会议) plus per-process microphone attribution via CoreAudio, which serves both the AND-mic condition and the Browser Meetings entry (any browser with a hot mic, helper processes mapped to the responsible app — ADR-0030); no window titles, no content. Optional precision naming (Settings, off by default): a Screen Recording grant restores per-site browser labels. Windows — Win32 process/window enumeration and audio-session mic state, no permission grant required; per-process attribution is fast-follow homework with no shipped prior art. Watchlist membership AND mic activity are both required to trigger (ADR-0024). Detection latches once triggered: a Meet tab moved to the background mid-call keeps recording while the mic stays hot. Launch-at-login via SMAppService / registry Run key; auto-stop when the detected meeting ends; a manual Stop suppresses re-trigger for the remainder of that meeting (ADR-0023).
+- **ASR:** whisper.cpp via whisper-rs (ADR-0014 as amended by 0025 — the binding Meetily and anarlog both ship in production). Shipped default model: large-v3-turbo q8_0 (~870MB — the multilingual/Chinese quality the record deserves), smaller models selectable in Settings. The meeting-grade streaming layer (VAD + sliding-window chunking) is built in-house. GPU per platform: Metal on macOS, Vulkan/CUDA on Windows. ASR and Diarization are Anchors — permanently local, no Knob (ADR-0002).
+- **Diarization:** post-meeting, local, channel-aware (ADR-0029): the mic channel is the Operator by construction; Speakers cluster on the system channel. The pipeline is the anarlog-proven pyannote-rs shape — segmentation ONNX + speaker-embedding ONNX via ort, fbank features, cosine clustering — cross-platform by construction, with WeSpeaker-family embeddings as the Voiceprint (vs. Granola's ReDimNet: M3 evaluates both against fixture audio). Produces per-segment Speaker attribution and voice embeddings; every voice clusters to a persistent Speaker with a stored Voiceprint (ADR-0008). Transcript segments reference Speaker records; display names are a live join, so renames propagate retroactively (ADR-0009).
+- **Models:** downloaded at first need with pinned checksums — Hugging Face primary plus an Operator-configurable mirror URL (ModelScope serves China); covers Whisper ggml, the Diarization ONNX pair, the AEC ONNX, and (Local Summary only) the sidecar's GGUF.
+- **Storage:** SQLite with FTS as source of truth, accessed via rusqlite on a dedicated writer thread — the single-writer rule made executable — with embedded migrations; per-Meeting Markdown Mirrors are regenerable projections, never independently edited (ADR-0005, 0009). Mirror filenames are stable forever (`YYYY-MM-DD-HHMM-<id>.md`; the title lives inside), so outside references never break on retitle. Audio persists by default as one stereo AAC file per Meeting — mic left, system right — encoded incrementally by a bundled ffmpeg so a crash leaves a recoverable file, with a global keep-audio knob (ADR-0019, 0029, 0032). Notes are a first-class mutable entity; the record (Transcript, attribution) is immutable — whole-Meeting deletion and Voiceprint deletion are the only destructive operations (ADR-0009, 0018).
+- **LLM plumbing:** one OpenAI-compatible chat-completions abstraction serves Summary, the sole LLM feature; local backends and cloud presets are the same interface with different base URLs. The shipped local default is a bundled llama.cpp sidecar — Core-supervised, JSON over stdio, spawn-on-demand with idle timeout (ADR-0031) — with an installed Ollama/LM Studio auto-detected and preferred when present; Apple Foundation Models is a post-v1 opportunistic tier. Keys only in the OS credential store via a `keyring`-style abstraction (Keychain / Credential Manager). A small local model is the default Backend and the Fallback target.
+- **Knob semantics:** Backend selection exists on Summary only; Fallback is cloud→local only with a required active-backend indicator; Strict Mode disables Fallback (ADR-0002, 0003). A cloud Backend receives at most the Current Meeting — the Closed Boundary is the absence of any other path, not a filter (ADR-0001).
+- **Onboarding:** Briefing (consent + voice-profiling + Auto-Record disclosure, explicit acknowledgment) → permissions (macOS: microphone + system-audio recording; Windows: none) and model downloads (Whisper, Diarization + AEC ONNX) → explicit Summary-Backend choice (Local recommended, never preselected) → that choice's remaining requirements. Configuration never prompts at runtime; unconfigured features show a legible state (ADR-0011, 0013). Auto-Record ships On; the Briefing states it bluntly (ADR-0023).
+- **Localization:** UI strings externalized from M1; v1 ships English + Simplified Chinese at the public M2 moment. The Briefing's legal copy is per-jurisdiction counsel work, not mere translation.
+- **Milestones:** M1 walking skeleton — Core daemon + ADR-0028 protocol end-to-end (manual record → dual-channel capture with AEC → live captions → SQLite + incremental AAC → mirror), the Core-owned tray, minimal Electron Client, CLI record/search; M2 Auto-Record (Watchlist watcher, login item, auto start/stop, suppression); M3 Diarization + Speakers/Registry; M4 provider abstraction + the Summary Knob (keyring, Strict Mode, Fallback) proven end-to-end on Summary; M5 onboarding + polish. Windows fast-follow: platform trait impls + distribution (ADR-0015, 0025).
+- **Distribution:** macOS — Developer ID, notarized, direct download + Homebrew cask; Windows — signed installer, direct download + winget; electron-updater for both (it covers the bundled Core, ffmpeg, and the llama sidecar). No app stores (ADR-0016 as amended).
+- **Posture:** open source, Apache-2.0, repo public at M2 dogfood quality; monetization deliberately deferred (ADR-0033). No telemetry or crash-reporting SDKs — crashes write local reports with manual export; the wire speaks only Sanctioned Traffic: the disableable update check, checksummed model downloads, and the Operator-chosen cloud Summary Backend (ADR-0034).
+
+## Testing Decisions
+
+- **Philosophy:** test external behavior only — observable outputs are SQLite content, mirror files, protocol responses/events as seen by Clients, and the exact bytes sent to LLM endpoints. No mocking of storage, diarization models, or the ASR engine in the default suite. Harness is Rust (`cargo test`); the Electron Client stays thin enough that the protocol contract, not a GUI rig, is the tested surface in v1.
+- **Exactly three seams**, each a trait boundary in the Core (the original two were user-approved; DetectionSource was added with Auto-Record):
+  1. **AudioSource** — live capture and fixture WAV/PCM playback are interchangeable at one point. End-to-end tests feed fixture meeting audio through the real whisper.cpp → store → Diarization → mirror → Summary pipeline and assert on the artifacts (transcript rows exist, Speakers cluster consistently across two fixture meetings sharing a voice, mirrors regenerate on rename).
+  2. **LLM Backend endpoint** — tests point the Summary Knob at a local fake OpenAI-compatible server. This seam doubles as the **Closed Boundary sentinel**: the fake "cloud" asserts no request body ever contains History content (seeded canary strings from prior fixture Meetings must never appear). Killing the fake mid-generation exercises Fallback (switches to local, indicator state observable) and Strict Mode (no switch, failure surfaced).
+  3. **DetectionSource** — the watcher consumes an injectable stream of app/mic state events. Fixture event sequences drive the Auto-Record contract end-to-end: Watchlist app + mic → recording starts; mic released → recording stops and the Meeting persists; manual Stop → no re-trigger for that meeting; off-list app + mic → nothing.
+- **Guarantee tests are the crown jewels:** the Closed Boundary sentinel above; a Nothing Ambient audit asserting the macOS binary's entitlement/permission set stays exactly (microphone, system-audio recording — detection rides on these, adding none; Screen Recording appears only when the Operator enables precision browser naming, ADR-0030) and, on both platforms, that traffic never exceeds Sanctioned Traffic — none of it carrying meeting content — and that an all-local configuration with updates off produces literally zero network traffic; an artifact scan asserting key material never appears in SQLite, mirrors, or logs, and that no analytics or crash-reporting SDK exists in the binary (ADR-0034).
+- **Framework & prior art:** greenfield — the fixture-audio library, the detection-event fixtures, and the fake endpoint server are built in M1/M2/M4 respectively and become the shared harness for everything after.
+
+## Out of Scope
+
+- Removed from scope by decision (ADR-0022): in-call assistance of any kind — teleprompter/suggestion feeds, in-meeting chat, stealth/capture-invisible overlays — and the assistant Corpus/retrieval stack that served it. This product is a notetaker, not a meeting copilot.
+- Ratified non-goals (ADR-0021): mobile apps, team spaces/sharing/roles, coaching analytics, CRM/task-manager push, PDF/DOCX export (the mirror is the export), summary-template library, auto-JOINING meetings (detection observes; it never joins, bots, or acts outward), external audio import.
+- Platform non-goals: Linux (a post-v1 question at best); Mac App Store and Microsoft Store (ADR-0016); CLI–GUI parity — the CLI stays control + query (ADR-0026).
+- Post-v1 by decision: the Enhance family (Operator-invoked re-transcription/re-diarization, unlocked by kept audio); prompt-on-unknown-mic-use as a Watchlist complement (ADR-0024); a browser extension for precise browser-meeting metadata (ADR-0030); an MCP-server CLI subcommand speaking to the Core as a Client (anarlog precedent); Apple Foundation Models as an opportunistic Summary tier (ADR-0031); monetization, deliberately deferred (ADR-0033); Windows itself is the first fast-follow (ADR-0025).
+- Foreclosed permanently: calendar integration, ambient screen-content awareness, redaction/bridge mechanisms of any kind (ADR-0001, 0020 as amended by 0023).
+
+## Further Notes
+
+- Top risks from the accumulated register: **detection reliability is product-defining** — a false negative is a broken headline promise. The fragile edge moved with ADR-0030: browser meetings ride per-process mic attribution (helper-process→responsible-app mapping, which M2's test matrix must prove across Chrome/Safari/Arc — Edge joins when Windows does); the costs are coarse labels ("Chrome" until the post-meeting title suggestion lands) and non-meeting browser voice apps triggering — the mic-continuity latch, the removable Watchlist row, and whole-Meeting delete are the mitigations. **Counsel review of default-on Auto-Record against all-party-consent law before v1 ships** (mandatory, not a design task). **The protocol is load-bearing** — every feature crosses it; ADR-0028 answers the day-one versioning demand (per-connection initialize capabilities + experimental gating; keep changes additive). The scope trap ("thin" must be brutally enforced per milestone). whisper.cpp streaming quality on the Operator's real meeting languages is unverified homework (the cited prior art is dictation-shaped, not meeting-shaped). GPU contention is bounded — the local Summary model runs post-meeting, so it contends with live transcription only if a Summary is still generating when the next recording starts; profile in M4.
+- The usual anti-Electron objection (resident footprint) is answered by the architecture, not denied: the thing that lives at login is the Rust Core; the Electron Client runs only when opened (ADR-0026).
+- Auto-Record raises recording volume by an order of magnitude (every standup, every huddle): post-meeting title suggestions (story 23) and whole-Meeting delete (story 21) are the triage tools; ADR-0019's keep-audio default stands — disk cost (~20–30MB/hr stereo, ADR-0032) stays trivial at this volume.
+- Verified competitive landscape as of 2026-08-27 — source-level: the Granola bundle reverse-engineered, anarlog/Meetily/codex read from source — lives in `docs/competitive-facts-2026-08-27.md` (the 2026-07-09 link-level sweep is retained for history). Key correction from the sweep: anarlog ships local diarization and cross-meeting voiceprints — our differentiation is the Closed Boundary, silent Auto-Record (they prompt per meeting), the always-on Core + query CLI, and working Windows detection, not diarization's existence. Detection-with-local-only-storage remains uncontested.
+- The glossary (`CONTEXT.md`) is normative for all naming in code and UI: Operator, Participant, Speaker, Voiceprint, Voice Registry, Meeting, Transcript, Notes, Summary, History, Current Meeting, Meeting Detection, Auto-Record, Watchlist, Browser Meetings, Core, Client, Backend, Anchor, Knob, Fallback, Strict Mode, Closed Boundary, Nothing Ambient, Briefing.
