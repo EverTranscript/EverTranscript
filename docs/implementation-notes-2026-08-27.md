@@ -98,7 +98,7 @@ Curated, evidence-backed guidance mined from three shipped notetakers, organized
 8. Raw multi-WAV persistence per meeting ([G]) — ADR-0032 chose incremental stereo AAC.
 9. UI scraping / outward automation ([G]'s AX stack) — Nothing Ambient forecloses it; only the fusion *model* (interval overlap on one clock) carries over.
 
-## Deferred decisions (raised 2026-08-27, explicitly not decided)
+## Deferred decisions — both resolved 2026-08-27 by ADR-0035
 
-- **D1 — History-at-rest encryption.** Options: (a) plaintext SQLite + Voiceprint vectors in the OS keyring ([A]'s pattern; consistent with plaintext Mirrors, FileVault covers disk); (b) SQLCipher with a Keychain-DEK ([G]'s recipe: `PRAGMA cipher='sqlcipher'; legacy=4; hex key`, DEK get-or-create in Keychain, ephemeral `:memory:` on missing key, no rekey flow). Note the Mirrors are plaintext by design either way. **Decide before M1 storage freeze**; keep the seam open (SQLCipher is a rusqlite build feature).
-- **D2 — Voiceprint retention & matching policy.** [A]'s reference bundle: 45-day TTL on unconfirmed candidates, promotion to exemplar only on the Operator's naming act, vectors outside SQLite, model/version columns for clean invalidation, conservative match thresholds (0.62 / 0.08 margin / mutual-best), `local_only` CHECK. **Decide by M3 start** (candidate ADR-0035).
+- **D1 — History-at-rest encryption: resolved, plaintext.** FileVault/BitLocker is the disk story; no SQLCipher, no DEK; the keyring remains API-keys-only. ([G]'s SQLCipher recipe above stays as reference only.)
+- **D2 — Voiceprint storage & retention: resolved — BLOB columns in History's SQLite, no TTL.** Recognition travels with the folder (the deliberate inversion of [A]'s keyring pattern); deletion is the Operator's act (ADR-0009); model/version columns adopted. [A]'s conservative match thresholds (0.62 / 0.08 margin / mutual-best) remain M3 tuning reference, not policy.

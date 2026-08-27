@@ -1,0 +1,13 @@
+# Voiceprints live in History's database, unencrypted; the History folder is the complete portable unit
+
+Voiceprint vectors are BLOB columns in the SQLite database inside the History folder — not the OS keyring, not encrypted (decided 2026-08-27, resolving deferred decisions D1 and D2). This deliberately inverts the reference pattern (anarlog keeps vectors in the keyring, so a copied database moves the record but not recognition — "biometrics don't silently travel"): for a product whose promise is never losing the record, **recognition is part of the record**. Copying or restoring the folder moves both; on a new machine, Speakers recognize voices immediately — no re-clustering, no re-naming. History at rest is plaintext everywhere: the Mirrors are plaintext by design, FileVault/BitLocker is the disk-at-rest story, and a SQLCipher DEK lifecycle adds a lost-key-equals-lost-History failure mode without protecting content the product deliberately keeps greppable. The keyring remains solely for API keys. **No TTL**: Voiceprints persist until the Operator deletes them — retroactive naming (a headline story) requires kept Voiceprints for not-yet-named Speakers, so ADR-0008/0009 stand and deletion remains a legible Operator act, never a timer. Rows carry model/version so a model upgrade re-embeds cleanly from kept audio.
+
+## Considered options
+
+Keyring-stored vectors (the biometrics-don't-travel default — rejected: breaks recognition portability, the point of this decision); SQLCipher with a Keychain DEK (rejected: inconsistent with plaintext Mirrors, adds key-loss risk); a 45-day purge of unconfirmed Voiceprints (rejected: silently amputates retroactive naming).
+
+## Consequences
+
+- Backups and Operator-made copies of the History folder carry biometric data. The Briefing states it plainly ("copies of your History folder include voice data"); the Voice Registry, per-Speaker Voiceprint delete, and whole-Meeting delete remain the controls; the mandatory counsel review covers the class.
+- Coherent with the Closed Boundary (which forbids code paths, not the Operator's own acts — the Mirrors are already syncable by design) and with ADR-0019's doctrine: local artifacts on the Operator's own disk are the Operator's property.
+- The History glossary entry now names Voiceprints as part of the corpus that travels.

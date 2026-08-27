@@ -44,7 +44,7 @@ Operator-authored writing attached to a Meeting — jotted live or added after. 
 _Avoid_: annotations, comments
 
 **History**:
-The corpus of all past Meetings — audio, transcripts, diarization, Summaries, Notes. It exists only on the Operator's machine.
+The corpus of all past Meetings — audio, transcripts, diarization, Summaries, Notes — and the Voiceprints that recognize its Speakers. It exists only on the Operator's machine.
 _Avoid_: archive, library
 
 **Mirror**:
