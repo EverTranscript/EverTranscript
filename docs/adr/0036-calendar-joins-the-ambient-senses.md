@@ -11,4 +11,4 @@ Cloud calendar APIs (anarlog's OAuth path — rejected: credentials, a token lif
 - Nothing Ambient narrows a second time, and its "reads state, never content" clause is reworded honestly — an event title is content. Story 47 becomes tiered (granted vs skipped).
 - The permission sheet gains an optional Calendars prompt; the Nothing-Ambient audit's expected set gains a conditional entry.
 - The Briefing and the mandatory counsel review gain a calendar clause.
-- Windows appointment-store access joins the fast-follow homework list beside per-process mic attribution.
+- Windows appointment-store access lands in M2 beside per-process mic attribution (ADR-0025 as amended: simultaneous v1).

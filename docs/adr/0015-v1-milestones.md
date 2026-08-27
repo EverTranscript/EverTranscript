@@ -1,5 +1,7 @@
 # v1 milestone spine
 
+> **Amended by ADR-0025's 2026-08-27 staging reversal:** the Windows fast-follow paragraph below is overturned — Windows platform-trait work lands inside M1–M5, every milestone closes on both platforms, and v1 ships macOS + Windows together, gated on Windows detection parity.
+
 The v1 order: **M1** walking skeleton — the Core daemon and its protocol stood up end-to-end: manual record (capture behind the platform trait) → live whisper.cpp captions → SQLite → Markdown mirror, visible in a minimal Electron Client and driveable from CLI subcommands, dogfoodable immediately; **M2** Auto-Record — Watchlist watcher, launch-at-login, auto start/stop, manual-stop suppression — the headline lands right after the skeleton, so dogfooding stops missing meetings; **M3** Diarization + Speaker/Voice Registry including cluster-every-voice (the identity model lands before anything depends on it; retrofitting it later is misery); **M4** LLM plumbing — provider abstraction, keyring, the Summary Knob, Strict Mode, Fallback — proven end-to-end on Summary, the product's one LLM feature; **M5** onboarding + polish.
 
 The Windows fast-follow (ADR-0025) is its own post-v1 milestone: the platform trait implementations (capture, detection, autostart, credentials) plus Windows distribution — a port, not a rewrite, because CI compiles and tests both targets from M1.

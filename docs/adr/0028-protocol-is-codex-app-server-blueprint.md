@@ -9,5 +9,5 @@ Two deliberate deviations, both where our clients and workload differ from codex
 ## Consequences
 
 - codex remains the reference implementation for questions the blueprint leaves open.
-- codex's daemon-lifecycle affordances are Unix-only; the Windows fast-follow owns that gap.
+- codex's daemon-lifecycle affordances are Unix-only; the Windows half of v1 owns that gap (ADR-0025 as amended).
 - The Core owns supervision-independent framing: launchd/SMAppService (macOS) and the Run key (Windows) start it; the codex pidfile daemonizer is unnecessary under a supervisor.
