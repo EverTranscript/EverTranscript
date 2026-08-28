@@ -161,12 +161,28 @@ async fn attaching_mid_meeting_returns_the_transcript_so_far() {
     let core = TestCore::start(&["earlier words", "later words", "final words"]).await;
     let mut first = core.client().await;
 
-    first
-        .request::<MeetingResponse>("meeting/start", None)
-        .await
-        .expect("start");
-    // Let some transcript accumulate before anyone is watching.
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let started: MeetingResponse = first.request("meeting/start", None).await.expect("start");
+
+    // Wait for transcript to actually exist before attaching, rather than
+    // sleeping a hopeful interval: how long the pipeline takes depends on
+    // the machine, and a fixed sleep turns that into a flaky test.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let (_, segments) = core
+            .core
+            .get_meeting(&started.meeting.id)
+            .await
+            .expect("get")
+            .expect("the Meeting");
+        if !segments.is_empty() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no transcript was produced within 10s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
 
     let mut late = core.client().await;
     let snapshot: TranscriptSnapshotResponse = late

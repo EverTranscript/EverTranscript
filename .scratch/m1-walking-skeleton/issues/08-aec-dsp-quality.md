@@ -4,9 +4,14 @@
 
 **Blocked by:** 03, 04, 05.
 
-**Status:** ready-for-agent
+**Status:** partly done — echo cancellation not implemented
 
-- [ ] AEC (ONNX via ort, models from ticket 05) runs on the mic channel with the system channel as echo reference; alignment change resets the canceller
-- [ ] Echo fixture (far-end audio bleeding into the mic) shows the double-transcription eliminated relative to the no-AEC baseline
-- [ ] Mic channel normalized to −23 LUFS (±1) with true-peak limiting; channels persist post-processing (ADR-0029: raw pre-AEC audio is never kept)
-- [ ] One persistent resampler per stream fed fixed-size chunks; RMS preservation asserted within 97–103% (the per-chunk-construction bug class is regression-tested)
+- [ ] **Not done.** Needs the DTLN ONNX models and an inference runtime, neither of which this build ships.
+      This is a real gap against ADR-0029, not a deferral: on speakers the far end re-enters the microphone,
+      which breaks the channel attribution and double-transcribes remote speech.
+- [ ] **Not done** — blocked on the same missing models. The echo fixture is worth building alongside them.
+- [x] EBU R128 normalization toward −23 LUFS with a −1 dBFS true-peak ceiling and a max 8× gain, applied
+      to what reaches the *model*. Deliberate deviation: the stored file stays as captured, so the Enhance
+      family can re-derive from unmodified audio. Silence is never amplified (that is hallucination fuel).
+- [x] One `SincFixedIn` per leg for the life of the Meeting, fed fixed chunks with the remainder carried
+      across boundaries; RMS preservation asserted within 97–103% against deliberately ragged buffer sizes.

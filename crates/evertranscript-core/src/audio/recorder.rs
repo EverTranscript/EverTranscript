@@ -241,15 +241,19 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");
+        let (source, delivered) = FixtureSource::with_completion(vec![
+            Step::audio(AudioChannel::Mic, 400, 0.4),
+            Step::audio(AudioChannel::System, 400, -0.4),
+        ]);
         let recorder = Recorder::start_without_transcription(
-            Box::new(FixtureSource::simple(400)),
+            Box::new(source),
             dir.path().to_path_buf(),
             "abcd1234".to_string(),
         )
         .expect("start");
 
-        // Let the scripted source drain.
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // Wait for the script rather than guessing at an interval.
+        delivered.await.expect("the script should finish");
         let outcome = recorder.finish().await;
 
         let path = outcome.audio_path.expect("an audio file");
@@ -268,21 +272,25 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");
+        let (source, delivered) = FixtureSource::with_completion(vec![
+            Step::audio(AudioChannel::Mic, 200, 0.5),
+            Step::Unavailable {
+                channel: AudioChannel::System,
+                reason: "system audio capture unavailable".to_string(),
+            },
+            Step::audio(AudioChannel::Mic, 200, 0.5),
+        ]);
         let recorder = Recorder::start_without_transcription(
-            Box::new(FixtureSource::new(vec![
-                Step::audio(AudioChannel::Mic, 200, 0.5),
-                Step::Unavailable {
-                    channel: AudioChannel::System,
-                    reason: "system audio capture unavailable".to_string(),
-                },
-                Step::audio(AudioChannel::Mic, 200, 0.5),
-            ])),
+            Box::new(source),
             dir.path().to_path_buf(),
             "abcd1234".to_string(),
         )
         .expect("start");
 
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        delivered.await.expect("the script should finish");
+        // The recorder consumes from a channel, so the last event may still
+        // be in flight for an instant after the sender finishes.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let outcome = recorder.finish().await;
 
         assert!(
@@ -299,25 +307,27 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");
+        let (source, delivered) = FixtureSource::with_completion(vec![
+            Step::audio(AudioChannel::Mic, 200, 0.5),
+            Step::audio(AudioChannel::System, 200, -0.5),
+            // AirPods disconnect: the device changes and capture pauses.
+            Step::DeviceChange {
+                channel: AudioChannel::Mic,
+            },
+            Step::Gap { ms: 300 },
+            // …and comes back on the built-in microphone.
+            Step::audio(AudioChannel::Mic, 200, 0.5),
+            Step::audio(AudioChannel::System, 500, -0.5),
+        ]);
         let recorder = Recorder::start_without_transcription(
-            Box::new(FixtureSource::new(vec![
-                Step::audio(AudioChannel::Mic, 200, 0.5),
-                Step::audio(AudioChannel::System, 200, -0.5),
-                // AirPods disconnect: the device changes and capture pauses.
-                Step::DeviceChange {
-                    channel: AudioChannel::Mic,
-                },
-                Step::Gap { ms: 300 },
-                // …and comes back on the built-in microphone.
-                Step::audio(AudioChannel::Mic, 200, 0.5),
-                Step::audio(AudioChannel::System, 500, -0.5),
-            ])),
+            Box::new(source),
             dir.path().to_path_buf(),
             "abcd1234".to_string(),
         )
         .expect("start");
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        delivered.await.expect("the script should finish");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let outcome = recorder.finish().await;
 
         assert!(outcome.audio_path.is_some(), "one file, not two");

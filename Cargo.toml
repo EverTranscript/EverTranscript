@@ -24,12 +24,14 @@ clap = { version = "4", features = ["derive"] }
 dirs = "5"
 cpal = "0.15"
 crc32fast = "1"
+ebur128 = "0.1"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "stream",
     "http2",
 ] }
+rubato = "0.16"
 rusqlite = { version = "0.37", features = ["bundled"] }
 sha2 = "0.10"
 # Metal on Apple Silicon; CPU elsewhere until the Windows GPU story lands.

@@ -14,6 +14,7 @@ use super::vad::Chunker;
 use super::vad::EnergyDetector;
 use super::whisper::WHISPER_RATE;
 use super::Transcriber;
+use crate::audio::dsp;
 use crate::audio::joiner::StereoBlock;
 use crate::audio::SAMPLE_RATE;
 
@@ -38,10 +39,16 @@ pub struct TranscriptionPipeline {
     transcriber: Box<dyn Transcriber>,
     /// Last accepted text, fed forward as whisper's rolling prompt.
     previous_text: Option<String>,
-    /// Leftover samples from resampling, so a block boundary never loses a
-    /// fraction of a sample period.
-    mic_remainder: Vec<f32>,
-    system_remainder: Vec<f32>,
+    /// Stateful resamplers, one per leg for the life of the Meeting.
+    /// Rebuilding them per block loses the filter state at every boundary —
+    /// the 173%-amplitude bug the DSP tests guard against.
+    mic_resampler: Option<dsp::StreamResampler>,
+    system_resampler: Option<dsp::StreamResampler>,
+    /// Loudness conditioning, applied to what reaches the *model* rather
+    /// than to what is stored: the file on disk stays as captured, so
+    /// Enhance can re-derive from unmodified audio later (ADR-0019).
+    mic_loudness: Option<dsp::LoudnessNormalizer>,
+    system_loudness: Option<dsp::LoudnessNormalizer>,
 }
 
 impl TranscriptionPipeline {
@@ -55,8 +62,10 @@ impl TranscriptionPipeline {
             system: Chunker::new(WHISPER_RATE, policy, Box::new(EnergyDetector::new())),
             transcriber,
             previous_text: None,
-            mic_remainder: Vec::new(),
-            system_remainder: Vec::new(),
+            mic_resampler: dsp::StreamResampler::new(SAMPLE_RATE, WHISPER_RATE).ok(),
+            system_resampler: dsp::StreamResampler::new(SAMPLE_RATE, WHISPER_RATE).ok(),
+            mic_loudness: dsp::LoudnessNormalizer::new(WHISPER_RATE).ok(),
+            system_loudness: dsp::LoudnessNormalizer::new(WHISPER_RATE).ok(),
         }
     }
 
@@ -65,14 +74,20 @@ impl TranscriptionPipeline {
         let (mic, system) = split(block);
         let mut segments = Vec::new();
 
-        let mic_ready = decimate(&mut self.mic_remainder, &mic);
+        let mut mic_ready = resample(self.mic_resampler.as_mut(), &mic);
+        if let Some(loudness) = self.mic_loudness.as_mut() {
+            loudness.process(&mut mic_ready);
+        }
         for chunk in self.mic.push(&mic_ready) {
             if let Some(segment) = self.transcribe(AudioChannel::Mic, chunk) {
                 segments.push(segment);
             }
         }
 
-        let system_ready = decimate(&mut self.system_remainder, &system);
+        let mut system_ready = resample(self.system_resampler.as_mut(), &system);
+        if let Some(loudness) = self.system_loudness.as_mut() {
+            loudness.process(&mut system_ready);
+        }
         for chunk in self.system.push(&system_ready) {
             if let Some(segment) = self.transcribe(AudioChannel::System, chunk) {
                 segments.push(segment);
@@ -151,26 +166,19 @@ fn split(block: &StereoBlock) -> (Vec<f32>, Vec<f32>) {
     (mic, system)
 }
 
-/// 48 kHz capture down to the 16 kHz whisper needs, averaging each group of
-/// three samples.
+/// Capture rate down to the rate whisper needs.
 ///
-/// Averaging rather than picking every third sample: dropping samples aliases
-/// everything above 8 kHz back down into the speech band as artefacts, which
-/// a transcription model then dutifully tries to interpret. `remainder`
-/// carries the partial group across block boundaries so no sample is lost.
-fn decimate(remainder: &mut Vec<f32>, input: &[f32]) -> Vec<f32> {
+/// Falls back to plain decimation if the resampler could not be built, so a
+/// resampler failure costs quality rather than the transcript.
+fn resample(resampler: Option<&mut dsp::StreamResampler>, input: &[f32]) -> Vec<f32> {
     const FACTOR: usize = (SAMPLE_RATE / WHISPER_RATE) as usize;
-    remainder.extend_from_slice(input);
-
-    let groups = remainder.len() / FACTOR;
-    let mut out = Vec::with_capacity(groups);
-    for group in 0..groups {
-        let start = group * FACTOR;
-        let sum: f32 = remainder[start..start + FACTOR].iter().sum();
-        out.push(sum / FACTOR as f32);
+    match resampler {
+        Some(resampler) => resampler.process(input),
+        None => input
+            .chunks_exact(FACTOR)
+            .map(|group| group.iter().sum::<f32>() / FACTOR as f32)
+            .collect(),
     }
-    remainder.drain(..groups * FACTOR);
-    out
 }
 
 #[cfg(test)]
@@ -192,36 +200,6 @@ mod tests {
             offset: CaptureOffset::ZERO,
             samples,
         }
-    }
-
-    #[test]
-    fn decimation_preserves_duration_and_level() {
-        let mut remainder = Vec::new();
-        let input = vec![0.5f32; 4_800]; // 100 ms at 48 kHz
-        let out = decimate(&mut remainder, &input);
-        assert_eq!(out.len(), 1_600, "100 ms at 16 kHz");
-        assert!(
-            out.iter().all(|sample| (*sample - 0.5).abs() < 1e-6),
-            "averaging a constant must not change its level"
-        );
-        assert!(remainder.is_empty());
-    }
-
-    #[test]
-    fn decimation_carries_partial_groups_across_blocks() {
-        let mut remainder = Vec::new();
-        // Deliberately not a multiple of 3.
-        let first = decimate(&mut remainder, &[1.0; 100]);
-        assert_eq!(first.len(), 33);
-        assert_eq!(remainder.len(), 1, "the leftover sample is kept");
-
-        let second = decimate(&mut remainder, &[1.0; 101]);
-        assert_eq!(second.len(), 34, "the leftover joins the next block");
-        assert_eq!(
-            first.len() + second.len(),
-            (100 + 101) / 3,
-            "no samples are lost at a block boundary"
-        );
     }
 
     #[test]

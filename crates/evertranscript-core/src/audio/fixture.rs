@@ -72,6 +72,12 @@ pub struct FixtureSource {
     mic_offset: u64,
     system_offset: u64,
     handle: Option<tokio::task::JoinHandle<()>>,
+    /// Fires once the whole script has been delivered.
+    ///
+    /// Without this a test can only sleep and hope, which is a race: under
+    /// load the script is still playing when the assertion runs, and the
+    /// test fails for reasons that have nothing to do with the code.
+    finished: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
 impl FixtureSource {
@@ -81,7 +87,19 @@ impl FixtureSource {
             mic_offset: 0,
             system_offset: 0,
             handle: None,
+            finished: None,
         }
+    }
+
+    /// A source plus a signal that fires when its script is fully delivered.
+    ///
+    /// Tests await the signal instead of sleeping, so they assert on a
+    /// finished script rather than on a hopeful interval.
+    pub fn with_completion(steps: Vec<Step>) -> (Self, tokio::sync::oneshot::Receiver<()>) {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let mut source = Self::new(steps);
+        source.finished = Some(sender);
+        (source, receiver)
     }
 
     /// A simple two-leg meeting: both channels talking for `ms`.
@@ -152,11 +170,15 @@ impl FixtureSource {
 impl AudioSource for FixtureSource {
     fn start(&mut self, _clock: CaptureClock, events: mpsc::Sender<CaptureEvent>) -> Result<()> {
         let scripted = FixtureSource::new(std::mem::take(&mut self.steps)).into_events();
+        let finished = self.finished.take();
         self.handle = Some(tokio::spawn(async move {
             for event in scripted {
                 if events.send(event).await.is_err() {
                     return;
                 }
+            }
+            if let Some(finished) = finished {
+                let _ = finished.send(());
             }
         }));
         Ok(())
