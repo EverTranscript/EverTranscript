@@ -39,7 +39,12 @@ use evertranscript_protocol::ServerCapabilities;
 use evertranscript_protocol::ServerInfo;
 use evertranscript_protocol::ServerNotification;
 use evertranscript_protocol::StatusResponse;
+use evertranscript_protocol::TranscriptCaptionsDroppedParams;
 use evertranscript_protocol::TranscriptSegment;
+use evertranscript_protocol::TranscriptSegmentAddedParams;
+use evertranscript_protocol::TranscriptSnapshotResponse;
+use evertranscript_protocol::TranscriptUnsubscribeResponse;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -81,10 +86,70 @@ pub struct Core {
     /// How to open capture. Swapped in tests for the fixture source — the
     /// AudioSource seam the PRD names.
     source_factory: Mutex<SourceFactory>,
+    /// Notifications the Core raises on its own — transcript segments above
+    /// all. A broadcast channel rather than a direct call into the server so
+    /// the recording path never has to know whether anyone is attached:
+    /// capture continues at zero Clients (ADR-0026).
+    notifications: broadcast::Sender<ServerNotification>,
+    /// How to open transcription. Overridden in tests so the caption path
+    /// can be driven without a 900 MB model.
+    transcriber_factory: Mutex<Option<TranscriberFactory>>,
 }
+
+/// Produces a transcription engine for a new Meeting.
+pub type TranscriberFactory =
+    Arc<dyn Fn() -> Option<Box<dyn crate::asr::Transcriber>> + Send + Sync>;
+
+/// How many Core-raised notifications to buffer. A subscriber that falls
+/// this far behind loses the oldest, which is the lossy caption policy
+/// ADR-0028 requires: degraded captions, never blocked capture.
+const NOTIFICATION_CAPACITY: usize = 512;
 
 /// Produces a capture source for a new Meeting.
 pub type SourceFactory = Arc<dyn Fn() -> Box<dyn audio::AudioSource> + Send + Sync>;
+
+/// Persists transcript segments as they are produced, and announces them.
+async fn write_segments(
+    store: Store,
+    mirror_wake: Arc<Notify>,
+    notifications: broadcast::Sender<ServerNotification>,
+    meeting_id: String,
+    mut segments: mpsc::Receiver<crate::asr::pipeline::TranscribedSegment>,
+) {
+    while let Some(segment) = segments.recv().await {
+        let id = meeting_id.clone();
+        let written = store
+            .write(move |connection| {
+                meetings::append_segment(
+                    connection,
+                    &id,
+                    segment.channel,
+                    segment.start_ms as i64,
+                    segment.end_ms as i64,
+                    &segment.text,
+                )
+            })
+            .await;
+
+        match written {
+            Ok(row) => {
+                let _ = notifications.send(ServerNotification::TranscriptSegmentAdded(
+                    TranscriptSegmentAddedParams {
+                        meeting_id: meeting_id.clone(),
+                        segment: row,
+                    },
+                ));
+                mirror_wake.notify_one();
+            }
+            Err(error) => {
+                // Losing a segment is bad; losing the recording because a
+                // write failed would be worse.
+                warn!(meeting = meeting_id, %error, "could not persist a transcript segment");
+            }
+        }
+    }
+    debug!(meeting = meeting_id, "transcript writer finished");
+}
 
 fn live_source_factory() -> SourceFactory {
     Arc::new(|| Box::new(audio::live::LiveSource::new()))
@@ -129,7 +194,19 @@ impl Core {
             mirror_wake: Arc::new(Notify::new()),
             recorder: Mutex::new(None),
             source_factory: Mutex::new(live_source_factory()),
+            notifications: broadcast::channel(NOTIFICATION_CAPACITY).0,
+            transcriber_factory: Mutex::new(None),
         }))
+    }
+
+    /// Replaces transcription. Tests use this to produce captions on demand.
+    pub async fn set_transcriber_factory(&self, factory: TranscriberFactory) {
+        *self.transcriber_factory.lock().await = Some(factory);
+    }
+
+    /// Subscribes to Core-raised notifications.
+    pub fn notifications(&self) -> broadcast::Receiver<ServerNotification> {
+        self.notifications.subscribe()
     }
 
     /// Replaces the capture source. Tests use this to drive the whole
@@ -221,8 +298,28 @@ impl Core {
         // Capture starts after the Meeting exists, so a recording can never
         // be running without a row to attach it to.
         let source = (self.source_factory.lock().await)();
-        match audio::recorder::Recorder::start(source, self.audio_dir(), mirror::id8(&meeting.id)) {
-            Ok(recorder) => *self.recorder.lock().await = Some(recorder),
+        let transcriber = self.open_transcriber().await;
+        let (segments_tx, segments_rx) = mpsc::channel(256);
+
+        match audio::recorder::Recorder::start(
+            source,
+            self.audio_dir(),
+            mirror::id8(&meeting.id),
+            transcriber,
+            Some(segments_tx),
+        ) {
+            Ok(recorder) => {
+                *self.recorder.lock().await = Some(recorder);
+                // Segments are persisted by their own task, so a slow disk
+                // slows the transcript rather than the recording.
+                tokio::spawn(write_segments(
+                    self.store.clone(),
+                    Arc::clone(&self.mirror_wake),
+                    self.notifications.clone(),
+                    meeting.id.clone(),
+                    segments_rx,
+                ));
+            }
             Err(error) => {
                 // The transcript is the record; audio is the bonus
                 // (ADR-0019). A Meeting with no audio still beats no Meeting.
@@ -287,6 +384,17 @@ impl Core {
         self.store
             .read(move |connection| meetings::list(connection, limit, offset))
             .await
+    }
+
+    /// The Meeting in progress with its transcript so far, if one is running.
+    pub async fn current_meeting_with_transcript(
+        &self,
+    ) -> Result<Option<(Meeting, Vec<TranscriptSegment>)>> {
+        let running = self.store.read(meetings::active).await?;
+        match running {
+            Some(meeting) => self.get_meeting(&meeting.id).await,
+            None => Ok(None),
+        }
     }
 
     pub async fn get_meeting(&self, id: &str) -> Result<Option<(Meeting, Vec<TranscriptSegment>)>> {
@@ -397,6 +505,40 @@ impl Core {
         self.mirror_wake.notify_one();
     }
 
+    /// Loads the transcription engine, or reports why there isn't one.
+    ///
+    /// A missing model degrades to "record without captions" rather than
+    /// refusing to record: never missing a meeting outranks transcribing it
+    /// live (ADR-0019, ADR-0023).
+    async fn open_transcriber(&self) -> Option<Box<dyn crate::asr::Transcriber>> {
+        if let Some(factory) = self.transcriber_factory.lock().await.as_ref() {
+            return factory();
+        }
+        let downloader = models::Downloader::new(paths::models_dir()).ok()?;
+        let entry = &models::registry::WHISPER_DEFAULT;
+        let models::ModelStatus::Ready { path } = downloader.status(entry) else {
+            warn!(
+                model = entry.key,
+                "no transcription model yet; recording without live captions. \
+                 Run `evertranscript models fetch`."
+            );
+            return None;
+        };
+        match tokio::task::spawn_blocking(move || crate::asr::whisper::WhisperEngine::load(&path))
+            .await
+        {
+            Ok(Ok(engine)) => Some(Box::new(engine) as Box<dyn crate::asr::Transcriber>),
+            Ok(Err(error)) => {
+                warn!(%error, "the transcription model failed to load; recording without captions");
+                None
+            }
+            Err(error) => {
+                warn!(%error, "loading the transcription model panicked");
+                None
+            }
+        }
+    }
+
     // -------------------------------------------------------------- Models
 
     /// What is on disk and what is still needed. Never touches the network.
@@ -478,6 +620,12 @@ struct Connection {
     writer: mpsc::Sender<JsonRpcMessage>,
     initialized: bool,
     experimental_api: bool,
+    /// Captions are opt-in: a CLI running `search` should not be sent every
+    /// word of a live meeting.
+    captions: bool,
+    /// Captions dropped because this connection was not keeping up, so the
+    /// Client can be told it has a gap rather than silently missing words.
+    captions_dropped: u32,
 }
 
 /// Runs the protocol for every attached Client.
@@ -504,17 +652,40 @@ impl Server {
         mut events: mpsc::Receiver<TransportEvent>,
         shutdown: CancellationToken,
     ) {
+        let mut core_notifications = self.core.notifications();
         loop {
-            let event = tokio::select! {
+            tokio::select! {
                 _ = shutdown.cancelled() => break,
                 event = events.recv() => match event {
-                    Some(event) => event,
+                    Some(event) => self.handle_event(event).await,
                     None => break,
                 },
-            };
-            self.handle_event(event).await;
+                notification = core_notifications.recv() => match notification {
+                    Ok(notification) => self.fan_out(notification).await,
+                    // Lagged: the Core produced faster than this loop
+                    // consumed. Captions are lossy by design (ADR-0028), so
+                    // the gap is reported and the stream continues.
+                    Err(broadcast::error::RecvError::Lagged(count)) => {
+                        warn!(count, "the server fell behind on Core notifications");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        core_notifications = self.core.notifications();
+                    }
+                },
+            }
         }
         debug!("server loop finished");
+    }
+
+    /// Routes a Core notification to the connections that asked for it.
+    async fn fan_out(&mut self, notification: ServerNotification) {
+        match notification {
+            // Captions go only to subscribers, and only lossily.
+            ServerNotification::TranscriptSegmentAdded(_) => {
+                self.broadcast_captions(notification).await
+            }
+            other => self.broadcast(other).await,
+        }
     }
 
     async fn handle_event(&mut self, event: TransportEvent) {
@@ -529,6 +700,8 @@ impl Server {
                         writer,
                         initialized: false,
                         experimental_api: false,
+                        captions: false,
+                        captions_dropped: 0,
                     },
                 );
             }
@@ -749,6 +922,89 @@ impl Server {
                     .await?;
                 Ok(serde_json::to_value(self.core.models_status()?)?)
             }
+
+            ClientRequest::TranscriptSubscribe(params) => {
+                // Subscribing and snapshotting in one step is the point: a
+                // Client that fetched then subscribed would lose any segment
+                // completing between the two calls.
+                if let Some(connection) = self.connections.get_mut(&connection_id) {
+                    connection.captions = true;
+                    connection.captions_dropped = 0;
+                }
+                let target = match params.meeting_id {
+                    Some(id) => self.core.get_meeting(&id).await?,
+                    None => self.core.current_meeting_with_transcript().await?,
+                };
+                let (meeting, segments) = match target {
+                    Some((meeting, segments)) => (Some(meeting), segments),
+                    None => (None, Vec::new()),
+                };
+                Ok(serde_json::to_value(TranscriptSnapshotResponse {
+                    meeting,
+                    segments,
+                    subscribed: true,
+                })?)
+            }
+
+            ClientRequest::TranscriptUnsubscribe(_) => {
+                if let Some(connection) = self.connections.get_mut(&connection_id) {
+                    connection.captions = false;
+                }
+                Ok(serde_json::to_value(TranscriptUnsubscribeResponse {
+                    subscribed: false,
+                })?)
+            }
+        }
+    }
+
+    /// Delivers captions to subscribers, lossily.
+    ///
+    /// A subscriber whose queue is full loses this caption and is told how
+    /// many it has missed. It is never disconnected and capture is never
+    /// slowed — a slow UI must not be able to damage the recording
+    /// (ADR-0028's deviation from codex, which disconnects slow clients).
+    async fn broadcast_captions(&mut self, notification: ServerNotification) {
+        let (method, params) = notification.to_wire();
+        let message = JsonRpcMessage::Notification(evertranscript_protocol::JsonRpcNotification {
+            method: method.to_string(),
+            params: Some(params),
+        });
+
+        let mut catch_up = Vec::new();
+        for (connection_id, connection) in self.connections.iter_mut() {
+            if !connection.initialized || !connection.captions {
+                continue;
+            }
+            if connection.writer.try_send(message.clone()).is_err() {
+                connection.captions_dropped += 1;
+                catch_up.push((*connection_id, connection.captions_dropped));
+            } else if connection.captions_dropped > 0 {
+                // Room again: tell them what they missed, then reset.
+                catch_up.push((*connection_id, connection.captions_dropped));
+                connection.captions_dropped = 0;
+            }
+        }
+
+        for (connection_id, dropped) in catch_up {
+            let Some(connection) = self.connections.get(&connection_id) else {
+                continue;
+            };
+            if connection.captions_dropped > 0 {
+                // Still behind; the gap notice can wait until there is room.
+                continue;
+            }
+            let notice =
+                ServerNotification::TranscriptCaptionsDropped(TranscriptCaptionsDroppedParams {
+                    meeting_id: String::new(),
+                    dropped,
+                });
+            let (method, params) = notice.to_wire();
+            let _ = connection.writer.try_send(JsonRpcMessage::Notification(
+                evertranscript_protocol::JsonRpcNotification {
+                    method: method.to_string(),
+                    params: Some(params),
+                },
+            ));
         }
     }
 

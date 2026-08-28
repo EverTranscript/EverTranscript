@@ -23,6 +23,8 @@ use super::supervisor::ChurnPolicy;
 use super::AudioSource;
 use super::CaptureClock;
 use super::CaptureEvent;
+use crate::asr::pipeline::TranscribedSegment;
+use crate::asr::pipeline::TranscriptionPipeline;
 
 /// What a finished recording produced.
 #[derive(Debug, Default)]
@@ -34,6 +36,8 @@ pub struct RecordingOutcome {
     /// Legs that ended early, with why. Surfaced so a Meeting recorded with
     /// half its audio says so rather than looking complete.
     pub degraded: Vec<String>,
+    /// How many Transcript segments this recording produced.
+    pub segments: usize,
 }
 
 /// A running recording.
@@ -45,10 +49,15 @@ pub struct Recorder {
 
 impl Recorder {
     /// Starts recording into `audio_dir`, keyed by the Meeting's id8.
+    ///
+    /// `transcriber` is optional: with no model downloaded the Meeting still
+    /// records audio, it just has no live captions (ADR-0019).
     pub fn start(
         mut source: Box<dyn AudioSource>,
         audio_dir: PathBuf,
         meeting_key: String,
+        transcriber: Option<Box<dyn crate::asr::Transcriber>>,
+        segments: Option<mpsc::Sender<TranscribedSegment>>,
     ) -> Result<Self> {
         let clock = CaptureClock::start();
         let (events_tx, events_rx) = mpsc::channel::<CaptureEvent>(256);
@@ -65,6 +74,8 @@ impl Recorder {
             stop.clone(),
             finished_tx,
             meeting_key,
+            transcriber.map(TranscriptionPipeline::new),
+            segments,
         ));
 
         Ok(Self {
@@ -72,6 +83,15 @@ impl Recorder {
             finished: finished_rx,
             clock,
         })
+    }
+
+    /// Records audio only, with no transcription.
+    pub fn start_without_transcription(
+        source: Box<dyn AudioSource>,
+        audio_dir: PathBuf,
+        meeting_key: String,
+    ) -> Result<Self> {
+        Self::start(source, audio_dir, meeting_key, None, None)
     }
 
     pub fn clock(&self) -> &CaptureClock {
@@ -85,6 +105,7 @@ impl Recorder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     mut source: Box<dyn AudioSource>,
     mut events: mpsc::Receiver<CaptureEvent>,
@@ -92,10 +113,29 @@ async fn run(
     stop: CancellationToken,
     finished: oneshot::Sender<RecordingOutcome>,
     meeting_key: String,
+    mut transcription: Option<TranscriptionPipeline>,
+    segments_tx: Option<mpsc::Sender<TranscribedSegment>>,
 ) {
     let mut joiner = Joiner::new();
     let mut policy = ChurnPolicy::default();
     let mut degraded = Vec::new();
+    let mut transcribed = 0usize;
+
+    /// Sends transcript segments on, dropping them only if the consumer is
+    /// gone — never blocking capture on a slow writer.
+    async fn deliver(
+        sender: &Option<mpsc::Sender<TranscribedSegment>>,
+        segments: Vec<TranscribedSegment>,
+        count: &mut usize,
+    ) {
+        let Some(sender) = sender else { return };
+        for segment in segments {
+            *count += 1;
+            if sender.send(segment).await.is_err() {
+                return;
+            }
+        }
+    }
 
     loop {
         let event = tokio::select! {
@@ -127,8 +167,14 @@ async fn run(
             joiner.push(frame);
         }
         for block in joiner.drain() {
+            // Audio to disk first: the recording must survive even if
+            // transcription is slow or broken.
             if let Err(error) = sink.write(&block).await {
                 warn!(%error, "writing audio failed");
+            }
+            if let Some(pipeline) = transcription.as_mut() {
+                let produced = pipeline.push(&block);
+                deliver(&segments_tx, produced, &mut transcribed).await;
             }
         }
     }
@@ -138,6 +184,16 @@ async fn run(
         if let Err(error) = sink.write(&block).await {
             warn!(%error, "writing the final audio block failed");
         }
+        if let Some(pipeline) = transcription.as_mut() {
+            let produced = pipeline.push(&block);
+            deliver(&segments_tx, produced, &mut transcribed).await;
+        }
+    }
+    // The tail: whatever is still buffered when the Operator hits stop.
+    // Without this the last sentence of every Meeting is lost (story 5).
+    if let Some(pipeline) = transcription.as_mut() {
+        let produced = pipeline.flush();
+        deliver(&segments_tx, produced, &mut transcribed).await;
     }
 
     let seconds = sink.seconds_written();
@@ -153,6 +209,7 @@ async fn run(
         audio_path,
         seconds,
         degraded,
+        segments: transcribed,
     });
 }
 
@@ -184,7 +241,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");
-        let recorder = Recorder::start(
+        let recorder = Recorder::start_without_transcription(
             Box::new(FixtureSource::simple(400)),
             dir.path().to_path_buf(),
             "abcd1234".to_string(),
@@ -211,7 +268,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");
-        let recorder = Recorder::start(
+        let recorder = Recorder::start_without_transcription(
             Box::new(FixtureSource::new(vec![
                 Step::audio(AudioChannel::Mic, 200, 0.5),
                 Step::Unavailable {
@@ -242,7 +299,7 @@ mod tests {
             return;
         }
         let dir = tempfile::tempdir().expect("tempdir");
-        let recorder = Recorder::start(
+        let recorder = Recorder::start_without_transcription(
             Box::new(FixtureSource::new(vec![
                 Step::audio(AudioChannel::Mic, 200, 0.5),
                 Step::audio(AudioChannel::System, 200, -0.5),

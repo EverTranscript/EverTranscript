@@ -4,12 +4,12 @@
 
 **Blocked by:** 02, 03, 04, 05.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Fixture audio through the seam yields transcript rows (text, channel tag, start/end on the shared clock) via the delta journal (unique sequence, CAS fold at finalize)
-- [ ] Duration-adaptive chunking per the catalog's envelope (natural-pause closes between 3s and 20s, 25s hard cap with carried context)
-- [ ] A test client attaching mid-recording receives the Meeting snapshot + transcript-so-far, then live deltas, with stable word/segment ids and Partial→Final states
-- [ ] The caption subscription is opt-in and lossy: a deliberately slow client gets conflated captions; capture and journaling are provably unaffected
-- [ ] The Whisper model loads via ticket 05's registry; a missing model yields a legible not-ready error, never a crash
-- [ ] Finalized Meeting's Mirror now contains the real Transcript section; FTS search finds spoken words
-- [ ] WER on the bilingual fixture is computed and reported by the test run (number tracked, not gated)
+- [x] Fixture audio through the seam yields transcript rows (text, channel tag, start/end on the shared clock) via the delta journal (unique sequence, CAS fold at finalize)
+- [x] Duration-adaptive chunking per the catalog's envelope (natural-pause closes between 3s and 20s, 25s hard cap with carried context)
+- [x] A test client attaching mid-recording receives the Meeting snapshot + transcript-so-far, then live deltas, with stable word/segment ids and Partial→Final states
+- [x] The caption subscription is opt-in and lossy: a deliberately slow client gets conflated captions; capture and journaling are provably unaffected
+- [x] The Whisper model loads via ticket 05's registry; a missing model yields a legible not-ready error, never a crash
+- [x] Finalized Meeting's Mirror now contains the real Transcript section; FTS search finds spoken words
+- [x] WER on the bilingual fixture is computed and reported by the test run (number tracked, not gated)

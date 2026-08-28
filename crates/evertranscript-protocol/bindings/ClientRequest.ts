@@ -10,8 +10,10 @@ import type { MeetingStopParams } from "./MeetingStopParams";
 import type { ModelsFetchParams } from "./ModelsFetchParams";
 import type { ModelsStatusParams } from "./ModelsStatusParams";
 import type { StatusParams } from "./StatusParams";
+import type { TranscriptSubscribeParams } from "./TranscriptSubscribeParams";
+import type { TranscriptUnsubscribeParams } from "./TranscriptUnsubscribeParams";
 
 /**
  * Every request a Client may send the Core.
  */
-export type ClientRequest = { "method": "initialize", "params": InitializeParams } | { "method": "status", "params": StatusParams } | { "method": "meeting/start", "params": MeetingStartParams } | { "method": "meeting/stop", "params": MeetingStopParams } | { "method": "meeting/list", "params": MeetingListParams } | { "method": "meeting/get", "params": MeetingGetParams } | { "method": "meeting/retitle", "params": MeetingRetitleParams } | { "method": "meeting/delete", "params": MeetingDeleteParams } | { "method": "meeting/export", "params": MeetingGetParams } | { "method": "history/search", "params": HistorySearchParams } | { "method": "models/status", "params": ModelsStatusParams } | { "method": "models/fetch", "params": ModelsFetchParams };
+export type ClientRequest = { "method": "initialize", "params": InitializeParams } | { "method": "status", "params": StatusParams } | { "method": "meeting/start", "params": MeetingStartParams } | { "method": "meeting/stop", "params": MeetingStopParams } | { "method": "meeting/list", "params": MeetingListParams } | { "method": "meeting/get", "params": MeetingGetParams } | { "method": "meeting/retitle", "params": MeetingRetitleParams } | { "method": "meeting/delete", "params": MeetingDeleteParams } | { "method": "meeting/export", "params": MeetingGetParams } | { "method": "history/search", "params": HistorySearchParams } | { "method": "models/status", "params": ModelsStatusParams } | { "method": "models/fetch", "params": ModelsFetchParams } | { "method": "transcript/subscribe", "params": TranscriptSubscribeParams } | { "method": "transcript/unsubscribe", "params": TranscriptUnsubscribeParams };

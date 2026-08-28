@@ -36,9 +36,51 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "A new Transcript segment. Delivered only to subscribed connections,\nand delivered lossily: a Client that falls behind loses captions\nrather than slowing capture or being disconnected (ADR-0028).",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "transcript/segmentAdded"
+        },
+        "params": {
+          "$ref": "#/$defs/TranscriptSegmentAddedParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Some captions were dropped because this connection was too slow.\nSent so a Client can show a gap rather than silently missing words.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "transcript/captionsDropped"
+        },
+        "params": {
+          "$ref": "#/$defs/TranscriptCaptionsDroppedParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
+    "AudioChannel": {
+      "description": "Which capture leg a segment came from. The mic channel is where the\nOperator is (ADR-0029 as amended).",
+      "type": "string",
+      "enum": [
+        "mic",
+        "system"
+      ]
+    },
     "CoreState": {
       "description": "The Core's coarse, observable state.",
       "type": "string",
@@ -149,6 +191,80 @@
       "required": [
         "kind",
         "meetingId"
+      ]
+    },
+    "TranscriptCaptionsDroppedParams": {
+      "type": "object",
+      "properties": {
+        "dropped": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "meetingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "meetingId",
+        "dropped"
+      ]
+    },
+    "TranscriptSegment": {
+      "description": "One attributed span of the Transcript.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/AudioChannel"
+        },
+        "endMs": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "id": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "speakerId": {
+          "description": "Set by Diarization in M3. Until then the channel carries attribution.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "startMs": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "sequence",
+        "channel",
+        "startMs",
+        "endMs",
+        "text"
+      ]
+    },
+    "TranscriptSegmentAddedParams": {
+      "type": "object",
+      "properties": {
+        "meetingId": {
+          "type": "string"
+        },
+        "segment": {
+          "$ref": "#/$defs/TranscriptSegment"
+        }
+      },
+      "required": [
+        "meetingId",
+        "segment"
       ]
     }
   }

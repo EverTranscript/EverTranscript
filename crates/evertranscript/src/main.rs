@@ -19,6 +19,7 @@ use evertranscript_protocol::MeetingListResponse;
 use evertranscript_protocol::MeetingResponse;
 use evertranscript_protocol::ModelAvailability;
 use evertranscript_protocol::ModelsStatusResponse;
+use evertranscript_protocol::TranscriptSnapshotResponse;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
@@ -86,6 +87,8 @@ enum Command {
     /// Inspect and fetch the models the Core needs.
     #[command(subcommand)]
     Models(ModelsCommand),
+    /// Follow live captions from the Meeting in progress.
+    Captions,
 }
 
 #[derive(Subcommand)]
@@ -143,7 +146,74 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Export { id } => run_export(&id).await,
         Command::Models(ModelsCommand::Status { json }) => run_models_status(json).await,
         Command::Models(ModelsCommand::Fetch { key }) => run_models_fetch(key).await,
+        Command::Captions => run_captions().await,
     }
+}
+
+async fn run_captions() -> Result<()> {
+    let mut client = client().await?;
+    // Snapshot and subscription in one call, so nothing said between them is
+    // missed (ADR-0028).
+    let snapshot: TranscriptSnapshotResponse = client.request("transcript/subscribe", None).await?;
+
+    match &snapshot.meeting {
+        Some(meeting) => println!(
+            "following {} — Ctrl-C to stop\n",
+            meeting
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("meeting {}", &meeting.id[..8]))
+        ),
+        None => println!("nothing is recording; waiting for a Meeting to start\n"),
+    }
+    for segment in &snapshot.segments {
+        print_caption(segment);
+    }
+
+    while let Some(notification) = client.next_notification().await? {
+        match notification.method.as_str() {
+            "transcript/segmentAdded" => {
+                if let Some(segment) = notification
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("segment"))
+                    .and_then(|segment| {
+                        serde_json::from_value::<evertranscript_protocol::TranscriptSegment>(
+                            segment.clone(),
+                        )
+                        .ok()
+                    })
+                {
+                    print_caption(&segment);
+                }
+            }
+            "transcript/captionsDropped" => {
+                let dropped = notification
+                    .params
+                    .as_ref()
+                    .and_then(|params| params.get("dropped"))
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0);
+                eprintln!("… {dropped} captions dropped (this terminal fell behind)");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn print_caption(segment: &evertranscript_protocol::TranscriptSegment) {
+    let speaker = match segment.channel {
+        evertranscript_protocol::AudioChannel::Mic => "You",
+        evertranscript_protocol::AudioChannel::System => "Participants",
+    };
+    let seconds = segment.start_ms / 1000;
+    println!(
+        "[{:02}:{:02}] {speaker}: {}",
+        seconds / 60,
+        seconds % 60,
+        segment.text
+    );
 }
 
 async fn run_models_status(json: bool) -> Result<()> {

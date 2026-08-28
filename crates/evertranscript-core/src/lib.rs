@@ -5,6 +5,7 @@
 //! Electron Client, the CLI — is a Client of this crate over the protocol in
 //! `evertranscript-protocol`, never a second writer.
 
+pub mod asr;
 pub mod audio;
 pub mod client;
 pub mod mirror;

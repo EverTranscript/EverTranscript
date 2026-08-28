@@ -219,6 +219,22 @@ client_request_definitions! {
         params: ModelsFetchParams,
         response: ModelsStatusResponse,
     },
+    /// Subscribes to live captions and returns the transcript so far, in one
+    /// call.
+    ///
+    /// Snapshot and subscription together on purpose: fetching the
+    /// transcript and then subscribing leaves a window where a segment
+    /// completes between the two and is lost from the Client's view forever
+    /// (ADR-0028, snapshot-then-tail).
+    TranscriptSubscribe => "transcript/subscribe" {
+        params: TranscriptSubscribeParams,
+        response: TranscriptSnapshotResponse,
+    },
+    /// Stops caption delivery for this connection.
+    TranscriptUnsubscribe => "transcript/unsubscribe" {
+        params: TranscriptUnsubscribeParams,
+        response: TranscriptUnsubscribeResponse,
+    },
 }
 
 server_notification_definitions! {
@@ -230,6 +246,17 @@ server_notification_definitions! {
     /// rather than polling.
     MeetingChanged => "meeting/changed" {
         params: MeetingChangedParams,
+    },
+    /// A new Transcript segment. Delivered only to subscribed connections,
+    /// and delivered lossily: a Client that falls behind loses captions
+    /// rather than slowing capture or being disconnected (ADR-0028).
+    TranscriptSegmentAdded => "transcript/segmentAdded" {
+        params: TranscriptSegmentAddedParams,
+    },
+    /// Some captions were dropped because this connection was too slow.
+    /// Sent so a Client can show a gap rather than silently missing words.
+    TranscriptCaptionsDropped => "transcript/captionsDropped" {
+        params: TranscriptCaptionsDroppedParams,
     },
 }
 
@@ -575,6 +602,61 @@ pub enum MeetingChangeKind {
     Updated,
     Stopped,
     Deleted,
+}
+
+// ---------------------------------------------------------------- Transcript
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptSubscribeParams {
+    /// Which Meeting to follow. Omit for the one currently recording.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meeting_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptSnapshotResponse {
+    /// None when nothing is recording and no Meeting was named.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meeting: Option<Meeting>,
+    /// Everything transcribed so far. Live segments arrive as notifications
+    /// from the moment this response is produced.
+    pub segments: Vec<TranscriptSegment>,
+    pub subscribed: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptUnsubscribeParams {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptUnsubscribeResponse {
+    pub subscribed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptSegmentAddedParams {
+    pub meeting_id: String,
+    pub segment: TranscriptSegment,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptCaptionsDroppedParams {
+    pub meeting_id: String,
+    #[ts(type = "number")]
+    pub dropped: u32,
 }
 
 // -------------------------------------------------------------------- Models

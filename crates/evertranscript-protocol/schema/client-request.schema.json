@@ -206,6 +206,40 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "Subscribes to live captions and returns the transcript so far, in one\ncall.\n\nSnapshot and subscription together on purpose: fetching the\ntranscript and then subscribing leaves a window where a segment\ncompletes between the two and is lost from the Client's view forever\n(ADR-0028, snapshot-then-tail).",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "transcript/subscribe"
+        },
+        "params": {
+          "$ref": "#/$defs/TranscriptSubscribeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Stops caption delivery for this connection.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "transcript/unsubscribe"
+        },
+        "params": {
+          "$ref": "#/$defs/TranscriptUnsubscribeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -365,6 +399,21 @@
       "type": "object"
     },
     "StatusParams": {
+      "type": "object"
+    },
+    "TranscriptSubscribeParams": {
+      "type": "object",
+      "properties": {
+        "meetingId": {
+          "description": "Which Meeting to follow. Omit for the one currently recording.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "TranscriptUnsubscribeParams": {
       "type": "object"
     }
   }
