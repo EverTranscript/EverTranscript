@@ -272,6 +272,38 @@ impl CheckpointSink {
 }
 
 /// Concatenates a Meeting's checkpoints into one file without re-encoding.
+/// True once an MP4 carries the `moov` index that closing writes. A
+/// checkpoint interrupted mid-chunk has only its opening boxes, and no
+/// demuxer can read it — which is exactly what `kill -9` leaves behind.
+fn is_sealed(path: &Path) -> bool {
+    use std::io::Read;
+    use std::io::Seek;
+    use std::io::SeekFrom;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut header = [0u8; 8];
+    loop {
+        if file.read_exact(&mut header).is_err() {
+            return false;
+        }
+        if &header[4..8] == b"moov" {
+            return true;
+        }
+        // A declared size below the 8-byte header means either the
+        // to-end-of-file form or a 64-bit size, and neither appears before
+        // the index this is looking for.
+        let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
+        if size < 8 {
+            return false;
+        }
+        if file.seek(SeekFrom::Current(i64::from(size - 8))).is_err() {
+            return false;
+        }
+    }
+}
+
 async fn merge_checkpoints(
     checkpoint_dir: &Path,
     destination: &Path,
@@ -293,11 +325,9 @@ async fn merge_checkpoints(
 
     // A checkpoint that never sealed has no usable container; skipping it is
     // what makes recovery "lose at most the last chunk" rather than fail.
-    chunks.retain(|path| {
-        std::fs::metadata(path)
-            .map(|m| m.len() > 0)
-            .unwrap_or(false)
-    });
+    // Size is not the test: a killed encoder leaves a short but non-empty
+    // header, which passes a length check and then fails the demuxer.
+    chunks.retain(|path| is_sealed(path));
     if chunks.is_empty() {
         return Ok(None);
     }
