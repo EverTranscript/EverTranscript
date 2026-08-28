@@ -41,6 +41,22 @@ pub struct RecordingOutcome {
     pub segments: usize,
 }
 
+/// Everything a recording needs in order to caption itself.
+///
+/// The three arrived as separate arguments and always travelled together,
+/// because none of them means anything without the others: an engine with
+/// nowhere to send segments produces nothing anyone can read, and a script
+/// is a decision about text that is only taken if there is text. Together
+/// they are one question — is this Meeting being captioned? — and `Option`
+/// now asks it once instead of three times, which is what stops a recorder
+/// that never transcribes from having to name a script.
+pub struct Captions {
+    pub transcriber: Box<dyn crate::asr::Transcriber>,
+    pub segments: mpsc::Sender<TranscribedSegment>,
+    /// Which Han script Mandarin is written in (DECISIONS Q11).
+    pub script: evertranscript_protocol::ChineseScript,
+}
+
 /// A running recording.
 pub struct Recorder {
     stop: CancellationToken,
@@ -51,15 +67,13 @@ pub struct Recorder {
 impl Recorder {
     /// Starts recording into `audio_dir`, keyed by the Meeting's id8.
     ///
-    /// `transcriber` is optional: with no model downloaded the Meeting still
+    /// `captions` is optional: with no model downloaded the Meeting still
     /// records audio, it just has no live captions (ADR-0019).
     pub fn start(
         mut source: Box<dyn AudioSource>,
         audio_dir: PathBuf,
         meeting_key: String,
-        transcriber: Option<Box<dyn crate::asr::Transcriber>>,
-        segments: Option<mpsc::Sender<TranscribedSegment>>,
-        script: evertranscript_protocol::ChineseScript,
+        captions: Option<Captions>,
     ) -> Result<Self> {
         let clock = CaptureClock::start();
         let (events_tx, events_rx) = mpsc::channel::<CaptureEvent>(256);
@@ -76,8 +90,7 @@ impl Recorder {
             stop.clone(),
             finished_tx,
             meeting_key,
-            transcriber.map(|engine| TranscriptionPipeline::new(engine).in_script(script)),
-            segments,
+            captions,
         ));
 
         Ok(Self {
@@ -93,14 +106,7 @@ impl Recorder {
         audio_dir: PathBuf,
         meeting_key: String,
     ) -> Result<Self> {
-        Self::start(
-            source,
-            audio_dir,
-            meeting_key,
-            None,
-            None,
-            evertranscript_protocol::ChineseScript::default(),
-        )
+        Self::start(source, audio_dir, meeting_key, None)
     }
 
     pub fn clock(&self) -> &CaptureClock {
@@ -114,7 +120,6 @@ impl Recorder {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run(
     mut source: Box<dyn AudioSource>,
     mut events: mpsc::Receiver<CaptureEvent>,
@@ -122,8 +127,7 @@ async fn run(
     stop: CancellationToken,
     finished: oneshot::Sender<RecordingOutcome>,
     meeting_key: String,
-    transcription: Option<TranscriptionPipeline>,
-    segments_tx: Option<mpsc::Sender<TranscribedSegment>>,
+    captions: Option<Captions>,
 ) {
     let mut joiner = Joiner::new();
     let mut policy = ChurnPolicy::default();
@@ -136,7 +140,12 @@ async fn run(
     // start dropping frames — losing audio that was captured perfectly
     // well. ADR-0019 puts the recording first, and that is only true if
     // the recording never waits for the transcript.
-    let transcription = transcription.map(|pipeline| Transcription::spawn(pipeline, segments_tx));
+    let transcription = captions.map(|captions| {
+        Transcription::spawn(
+            TranscriptionPipeline::new(captions.transcriber).in_script(captions.script),
+            captions.segments,
+        )
+    });
 
     // Stopping is two steps, not one. Breaking out of the loop the moment
     // the Operator says stop would abandon whatever capture has already
@@ -269,7 +278,7 @@ struct Transcription {
 impl Transcription {
     fn spawn(
         mut pipeline: TranscriptionPipeline,
-        segments_tx: Option<mpsc::Sender<TranscribedSegment>>,
+        segments_tx: mpsc::Sender<TranscribedSegment>,
     ) -> Self {
         // Roughly a minute of blocks. Deep enough to ride out a slow
         // decode, bounded so a hopelessly slow machine loses captions
@@ -280,13 +289,9 @@ impl Transcription {
         let handle = std::thread::spawn(move || {
             let mut count = 0usize;
             let send = |segments: Vec<TranscribedSegment>, count: &mut usize| {
-                let Some(sender) = segments_tx.as_ref() else {
-                    *count += segments.len();
-                    return;
-                };
                 for segment in segments {
                     *count += 1;
-                    if sender.blocking_send(segment).is_err() {
+                    if segments_tx.blocking_send(segment).is_err() {
                         return;
                     }
                 }

@@ -418,17 +418,24 @@ impl Core {
         // Capture starts after the Meeting exists, so a recording can never
         // be running without a row to attach it to.
         let source = (self.source_factory.lock().await)();
-        let transcriber = self.open_transcriber().await;
         let script = self.settings.lock().await.chinese_script;
         let (segments_tx, segments_rx) = mpsc::channel(256);
+        // No engine means no captions at all, so the channel and the script
+        // go with it rather than being carried alongside a `None`.
+        let captions = self
+            .open_transcriber()
+            .await
+            .map(|transcriber| audio::recorder::Captions {
+                transcriber,
+                segments: segments_tx,
+                script,
+            });
 
         match audio::recorder::Recorder::start(
             source,
             self.audio_dir(),
             mirror::id8(&meeting.id),
-            transcriber,
-            Some(segments_tx),
-            script,
+            captions,
         ) {
             Ok(recorder) => {
                 *self.recorder.lock().await = Some(recorder);
