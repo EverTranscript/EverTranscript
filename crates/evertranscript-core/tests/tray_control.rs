@@ -17,6 +17,7 @@ use evertranscript_core::Core;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
 use evertranscript_core::tray::TrayController;
+use evertranscript_core::tray::TrayIndicator;
 use evertranscript_core::tray::TrayPhase;
 use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::CoreState;
@@ -106,7 +107,7 @@ async fn clicking_record_starts_a_real_meeting_and_clicking_again_stops_it() {
     );
     let view = controller.view();
     assert_eq!(view.action, "Stop Recording");
-    assert_eq!(view.indicator, "●");
+    assert_eq!(view.indicator, TrayIndicator::Recording);
 
     controller.activate();
     assert_eq!(controller.phase(), TrayPhase::Stopping);
@@ -173,7 +174,7 @@ async fn the_tray_follows_a_meeting_it_did_not_start() {
         TrayPhase::Recording,
         "a Meeting started elsewhere must reach the menu bar"
     );
-    assert_eq!(controller.view().indicator, "●");
+    assert_eq!(controller.view().indicator, TrayIndicator::Recording);
 
     core.stop_meeting().await.expect("stop");
     controller.refresh().await;

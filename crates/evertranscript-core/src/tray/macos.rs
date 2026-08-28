@@ -30,20 +30,24 @@ use objc2_app_kit::NSApplicationActivationPolicy;
 use objc2_app_kit::NSEvent;
 use objc2_app_kit::NSEventModifierFlags;
 use objc2_app_kit::NSEventType;
+use objc2_app_kit::NSImage;
 use objc2_app_kit::NSMenu;
 use objc2_app_kit::NSMenuItem;
 use objc2_app_kit::NSStatusBar;
 use objc2_app_kit::NSStatusItem;
 use objc2_app_kit::NSVariableStatusItemLength;
 use objc2_foundation::MainThreadMarker;
+use objc2_foundation::NSData;
 use objc2_foundation::NSObject;
 use objc2_foundation::NSPoint;
+use objc2_foundation::NSSize;
 use objc2_foundation::NSString;
 use objc2_foundation::NSTimer;
 use objc2_foundation::ns_string;
 use tracing::info;
 
 use super::TrayController;
+use super::TrayIndicator;
 use super::TrayView;
 use super::Unavailable;
 
@@ -53,12 +57,74 @@ use super::Unavailable;
 /// it is cheap and can be brisk enough to feel immediate.
 const REDRAW_SECONDS: f64 = 0.4;
 
+/// The point size of the menu bar glyph: the bar is 22 pt, the glyph 18.
+const GLYPH_POINTS: f64 = 18.0;
+
+/// The menu bar glyphs, generated from the mark by `brand/render.mjs`.
+///
+/// Embedded in the binary because the Core has no bundle to load resources
+/// from. Each is a multi-representation TIFF — the drawing at 18 px and at
+/// 36 px — from which `NSImage` picks the one for the screen's scale.
+const READY: &[u8] = include_bytes!("glyphs/ready.tiff");
+const RECORDING: &[u8] = include_bytes!("glyphs/recording.tiff");
+const BUSY: &[u8] = include_bytes!("glyphs/busy.tiff");
+const ATTENTION: &[u8] = include_bytes!("glyphs/attention.tiff");
+
+/// One decoded image per [`TrayIndicator`], made once and kept.
+struct Glyphs {
+    ready: Retained<NSImage>,
+    recording: Retained<NSImage>,
+    busy: Retained<NSImage>,
+    attention: Retained<NSImage>,
+}
+
+impl Glyphs {
+    fn decode() -> Result<Self, Unavailable> {
+        Ok(Self {
+            ready: template_image(READY, "ready")?,
+            recording: template_image(RECORDING, "recording")?,
+            busy: template_image(BUSY, "busy")?,
+            attention: template_image(ATTENTION, "attention")?,
+        })
+    }
+
+    fn image(&self, indicator: TrayIndicator) -> &NSImage {
+        match indicator {
+            TrayIndicator::Ready => &self.ready,
+            TrayIndicator::Recording => &self.recording,
+            TrayIndicator::Busy => &self.busy,
+            TrayIndicator::Attention => &self.attention,
+        }
+    }
+}
+
+/// Decodes an embedded glyph as a template image.
+///
+/// A template is black with alpha and nothing else: the menu bar draws it
+/// black on a light bar, white on a dark one, and dimmed when the item is
+/// inactive — the one way a status item looks native in every appearance.
+/// The bytes are compiled in, so a failure here is a build defect, not a
+/// condition to recover from; it is reported rather than unwrapped so the
+/// Core still serves headless.
+fn template_image(bytes: &[u8], name: &str) -> Result<Retained<NSImage>, Unavailable> {
+    let data = NSData::with_bytes(bytes);
+    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
+        return Err(Unavailable::Failed(format!(
+            "the {name} menu bar glyph did not decode"
+        )));
+    };
+    image.setTemplate(true);
+    image.setSize(NSSize::new(GLYPH_POINTS, GLYPH_POINTS));
+    Ok(image)
+}
+
 /// What the menu-bar objects and the controller need to reach each other.
 struct Ivars {
     controller: Arc<TrayController>,
     status_item: Retained<NSStatusItem>,
     action_item: Retained<NSMenuItem>,
     status_line: Retained<NSMenuItem>,
+    glyphs: Glyphs,
     /// The last view rendered, so an unchanged menu is left untouched.
     rendered: RefCell<Option<TrayView>>,
 }
@@ -115,7 +181,10 @@ impl Tray {
         }
         unsafe {
             if let Some(button) = ivars.status_item.button(MainThreadMarker::new_unchecked()) {
-                button.setTitle(&NSString::from_str(&view.indicator));
+                button.setImage(Some(ivars.glyphs.image(view.indicator)));
+                // The image is the whole indicator; a title beside it would
+                // widen the item for nothing.
+                button.setTitle(ns_string!(""));
             }
             ivars
                 .action_item
@@ -184,6 +253,7 @@ pub fn run(controller: Arc<TrayController>) -> Result<(), Unavailable> {
         ));
     }
 
+    let glyphs = Glyphs::decode()?;
     let bar = NSStatusBar::systemStatusBar();
     let status_item = bar.statusItemWithLength(NSVariableStatusItemLength);
     let menu = NSMenu::new(mtm);
@@ -199,6 +269,7 @@ pub fn run(controller: Arc<TrayController>) -> Result<(), Unavailable> {
             status_item: status_item.clone(),
             action_item: action_item.clone(),
             status_line: status_line.clone(),
+            glyphs,
             rendered: RefCell::new(None),
         });
         let this: Retained<Tray> = unsafe { msg_send![super(this), init] };
@@ -248,10 +319,43 @@ pub fn run(controller: Arc<TrayController>) -> Result<(), Unavailable> {
 
 #[cfg(test)]
 mod tests {
+    use super::GLYPH_POINTS;
+    use super::Glyphs;
+
     #[test]
     fn the_gui_session_check_answers_without_touching_appkit() {
         // The daemon's headless path depends on this being callable safely
         // on any machine, including one with no window server.
         let _ = super::has_gui_session();
+    }
+
+    #[test]
+    fn every_menu_bar_glyph_decodes_as_an_18_point_template() {
+        // Decoding needs ImageIO, not a window server, so this runs on the
+        // CI runner too. A glyph that failed here would take the tray down
+        // on every Mac.
+        let glyphs = Glyphs::decode().expect("the embedded glyphs decode");
+        for (name, image) in [
+            ("ready", &glyphs.ready),
+            ("recording", &glyphs.recording),
+            ("busy", &glyphs.busy),
+            ("attention", &glyphs.attention),
+        ] {
+            assert!(
+                image.isTemplate(),
+                "{name} must be a template, or the dark menu bar draws it black"
+            );
+            let size = image.size();
+            assert_eq!(
+                (size.width, size.height),
+                (GLYPH_POINTS, GLYPH_POINTS),
+                "{name}"
+            );
+            assert!(
+                image.representations().count() >= 2,
+                "{name} should carry a 1x and a 2x drawing, got {}",
+                image.representations().count()
+            );
+        }
     }
 }

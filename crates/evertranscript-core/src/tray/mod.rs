@@ -63,12 +63,31 @@ pub enum TrayPhase {
     Stopping,
 }
 
+/// The status item's own image — the always-visible indicator.
+///
+/// A picture rather than a word: the menu bar is shared real estate, and a
+/// recording indicator that takes up half of it is one the Operator turns
+/// off. Which drawing each variant is lives with the platform code, so the
+/// state machine stays testable and the artwork stays out of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrayIndicator {
+    /// The mark on its own: ready to record.
+    Ready,
+    /// The mark with a solid dot: recording.
+    Recording,
+    /// The mark dimmed: a transition is under way and a click would do
+    /// nothing.
+    Busy,
+    /// The mark with a hollow dot: something needs the Operator — a missing
+    /// model, an unacknowledged Briefing — and the menu says what.
+    Attention,
+}
+
 /// Everything the menu bar shows at one moment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrayView {
-    /// The status item's own title — the always-visible indicator. Short,
-    /// because it sits in the menu bar next to everything else.
-    pub indicator: String,
+    /// The status item's own image — the always-visible indicator.
+    pub indicator: TrayIndicator,
     /// The record/stop item's title.
     pub action: String,
     /// Whether that item can be clicked.
@@ -95,26 +114,23 @@ impl TrayPhase {
 
     fn view(self, detail: Option<&str>) -> TrayView {
         let (indicator, action, status) = match self {
-            // A dot rather than a word: the menu bar is shared real estate,
-            // and a recording indicator that takes up half of it is one the
-            // Operator turns off.
-            TrayPhase::Recording => ("●", "Stop Recording", "Recording"),
-            TrayPhase::Starting => ("○", "Starting…", "Starting the recording"),
-            TrayPhase::Stopping => ("○", "Stopping…", "Finishing the recording"),
-            TrayPhase::Idle => ("○", "Start Recording", "Ready"),
+            TrayPhase::Recording => (TrayIndicator::Recording, "Stop Recording", "Recording"),
+            TrayPhase::Starting => (TrayIndicator::Busy, "Starting…", "Starting the recording"),
+            TrayPhase::Stopping => (TrayIndicator::Busy, "Stopping…", "Finishing the recording"),
+            TrayPhase::Idle => (TrayIndicator::Ready, "Start Recording", "Ready"),
             TrayPhase::NotReady => (
-                "○",
+                TrayIndicator::Attention,
                 "Start Recording",
                 "No transcription model yet — this will record without captions",
             ),
             TrayPhase::NotPermitted => (
-                "○",
+                TrayIndicator::Attention,
                 "Start Recording",
                 "Blocked until the first-run briefing is acknowledged",
             ),
         };
         TrayView {
-            indicator: indicator.to_string(),
+            indicator,
             action: action.to_string(),
             action_enabled: self.is_actionable(),
             // A reported failure outranks the generic description: it is the
@@ -361,9 +377,28 @@ mod tests {
         assert_eq!(view.action, "Stop Recording");
         assert!(view.action_enabled);
         assert_eq!(
-            view.indicator, "●",
+            view.indicator,
+            TrayIndicator::Recording,
             "recording is visible without opening the menu"
         );
+    }
+
+    #[test]
+    fn the_indicator_alone_tells_the_operator_whether_to_open_the_menu() {
+        // Ready needs nothing; a transition shows as busy so a click is not
+        // invited; anything the Operator has to act on is flagged before
+        // the menu is opened.
+        assert_eq!(TrayPhase::Idle.view(None).indicator, TrayIndicator::Ready);
+        for phase in [TrayPhase::Starting, TrayPhase::Stopping] {
+            assert_eq!(phase.view(None).indicator, TrayIndicator::Busy, "{phase:?}");
+        }
+        for phase in [TrayPhase::NotReady, TrayPhase::NotPermitted] {
+            assert_eq!(
+                phase.view(None).indicator,
+                TrayIndicator::Attention,
+                "{phase:?} needs the Operator, and the bar should say so"
+            );
+        }
     }
 
     #[test]

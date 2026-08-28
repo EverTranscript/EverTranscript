@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- C: an open ring that exits at the bottom into a line. Starts at 4 o'clock, sweeps 300 degrees, leaves at 6 o'clock heading right. -->
+  <g fill="none" stroke="currentColor" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M164,142 A60,60 0 1 0 112,172 H208"/>
+  </g>
+</svg>

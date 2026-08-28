@@ -78,6 +78,7 @@ One Rust binary — the Core — running as a daemon with the codex-blueprint pr
 - M3: Diarization, Speakers, "You", Voiceprints (schema columns exist, unpopulated), correction hints, attribution in Mirrors beyond channel labels.
 - M4: Summary, Notes pane, the sidecar, keyring, the Knob/Fallback/Strict Mode, auto-applied transcript titles (M1 titles are `date+app` placeholder plus manual retitle), per-segment language voting.
 - M5: the full Briefing, linear onboarding, History-folder relocation UI, distribution (signing, notarization, installers, winget/Homebrew, updater), the floating mini-indicator, zh-CN rendering.
+  Distribution consumes the committed brand assets: `clients/electron/resources/` (icns/ico/png) and `brand/generated/` (per-platform icon sets, `EverTranscript.icon` for the macOS 26 layered icon) — regenerate with `pnpm -C brand render`, never by hand.
 - Ratified non-goals reaffirmed: in-app audio playback, external audio import, pre-roll buffering, telemetry.
 
 ## Further Notes

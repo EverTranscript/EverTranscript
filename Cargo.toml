@@ -71,7 +71,7 @@ version = "0.6"
 
 [workspace.dependencies.objc2-foundation]
 version = "0.3"
-features = ["NSString", "NSArray", "NSValue", "NSUUID", "NSDictionary", "NSTimer", "NSDate", "NSThread", "NSRunLoop"]
+features = ["NSString", "NSArray", "NSValue", "NSUUID", "NSDictionary", "NSTimer", "NSDate", "NSThread", "NSRunLoop", "NSData"]
 
 [workspace.dependencies.objc2-core-audio]
 version = "0.3"
@@ -98,6 +98,10 @@ features = [
     "NSButton",
     "NSEvent",
     "NSGraphicsContext",
+    # The menu bar glyph: a template NSImage decoded from bytes embedded in
+    # the binary, because the Core has no bundle to load resources from.
+    "NSImage",
+    "NSImageRep",
 ]
 
 # Used for one call: does this process have a window server to draw in?

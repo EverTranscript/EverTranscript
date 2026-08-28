@@ -15,6 +15,18 @@ import { delimiter, join } from "node:path";
 import { CoreClient } from "./core-client.js";
 
 /**
+ * The app icon, for the surfaces packaging does not cover yet.
+ *
+ * `resources/` sits beside `src/` and `dist/`, so from the compiled
+ * `dist/main/index.js` it is two levels up. electron-builder (M5) will bake
+ * the same files into the bundle; until then the Dock and the window frame
+ * would show Electron's own icon, which is not this app.
+ */
+const RESOURCES = join(__dirname, "../../resources");
+const ICON_PNG = join(RESOURCES, "icon.png");
+const ICON_ICO = join(RESOURCES, "icon.ico");
+
+/**
  * The in-flight or established connection.
  *
  * The *promise* is cached rather than the resolved client: the renderer
@@ -148,6 +160,9 @@ function createWindow(): void {
     width: 1100,
     height: 760,
     title: "EverTranscript",
+    // Read on Windows and Linux; macOS takes the Dock icon from the bundle,
+    // or from `app.dock.setIcon` below while there is no bundle.
+    icon: process.platform === "win32" ? ICON_ICO : ICON_PNG,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -188,6 +203,8 @@ function forgetClient(): void {
 }
 
 void app.whenReady().then(() => {
+  // An unpackaged Client has no bundle for the Dock to read an icon from.
+  if (!app.isPackaged && app.dock) app.dock.setIcon(ICON_PNG);
   createWindow();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

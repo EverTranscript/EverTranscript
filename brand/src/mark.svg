@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- B: a monoline lowercase e whose crossbar runs out to the right as a line. -->
+  <g fill="none" stroke="currentColor" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M48,128 H208"/>
+    <path d="M168,128 A60,60 0 1 0 154,166.6"/>
+  </g>
+</svg>

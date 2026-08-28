@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- A: three transcript lines; the first begins as a single-period wave that flattens into text. -->
+  <g fill="none" stroke="currentColor" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M48,64 C60,44 72,44 84,64 S108,84 120,64 H208"/>
+    <path d="M48,128 H160"/>
+    <path d="M48,192 H208"/>
+  </g>
+</svg>

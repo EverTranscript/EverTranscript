@@ -229,3 +229,43 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q15 — brand-identity/02-concepts-and-pick — gate-resolution
+
+**Question:** Which of the three candidate marks does EverTranscript ship?
+**Options considered:** A voice-line (three transcript lines, the first a wave) / B letterform e (a monoline e whose crossbar runs out as a line) / C loop-into-line (an open ring exiting into a line)
+**Chosen:** B — the letterform e.
+**Decided-by:** human
+**Justification:** The Operator picked B from the rendered contact sheet after all three were mocked into the Dock, both menu bars, and a browser tab (`brand/explorations/`, review page linked in the ticket). B was also the recommendation: the only candidate that stays itself at 18 pt — A collapses to three bars and borrows the ≡ menu glyph's meaning, C reads as the letter Q at every size rendered.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q16 — brand-identity/01-asset-pipeline — tradeoff
+
+**Question:** Are the generated icons committed, or rebuilt by CI from the masters?
+**Options considered:** commit `brand/generated/`, the Electron copies, and the tray TIFFs / rebuild everything in CI on each run / ship only masters and let each consumer render its own
+**Chosen:** Commit the generated binaries; `brand/render.mjs` stays the only way they change.
+**Decided-by:** agent
+**Justification:** The tray embeds its glyphs with `include_bytes!`, so the files must exist at `cargo build` time on every machine and CI leg — a render step before every Rust build would put Node in the Rust toolchain's path (both reference repos, anarlog and Meetily, commit their Tauri icon sets for the same reason). The cost, binary diffs, is bounded: the render is deterministic (vector-rasterized per size, no system fonts, byte-compare before write; re-running produces no diff), so a diff can only mean the masters or the script changed.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q17 — brand-identity/04-tray-and-electron-integration — deviation
+
+**Question:** The tray's always-visible indicator was the text "●"/"○". Replace it with what?
+**Options considered:** keep the Unicode dots / an SF Symbol (zero assets, but a stock drawing) / the mark itself as a template NSImage per state
+**Chosen:** The mark as a template image, in four states: Ready (mark), Recording (mark + solid dot), Busy (mark dimmed), Attention (mark + hollow dot, for NotReady and NotPermitted). `TrayView.indicator` became the `TrayIndicator` enum; the drawings are 18 pt multi-representation TIFFs embedded in the binary, since the Core has no bundle to load from.
+**Decided-by:** agent
+**Justification:** Ticket 09 left the dots as a placeholder, and both studied competitors identify themselves in the menu bar with their mark as a template (their tray is also a state indicator — the model followed here). Attention is a new visible state the dots could not express: NotReady/NotPermitted previously looked identical to Idle until the menu was opened. The enum keeps the artwork out of the tested state machine; a decode test pins that every embedded TIFF is a 2-rep 18 pt template, and the Windows CI leg is unaffected because the bytes live inside the cfg(macos) module (`cargo tree --target x86_64-pc-windows-msvc` shows no objc2).
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q18 — brand-identity/03-final-mark-and-outputs — gate-resolution
+
+**Question:** What palette and construction does the identity commit to?
+**Options considered:** petrol teal tile + paper glyph / charcoal ink tile (crowded: several dev tools) / coral-red tile (reads as an alert/recorder)
+**Chosen:** Petrol teal (#158580→#094F4C tile) with a paper (#F5F1E8) monoline glyph; ink #1F1D1B on light grounds; #E5484D reserved for the recording accent in UI and banned from the icon. Wordmark in Geist SemiBold (OFL), always shipped as outlines.
+**Decided-by:** human
+**Justification:** The Operator chose the teal direction from the option set before the concepts were drawn. Constraint honoured throughout: the mark may suggest nothing the guarantees forbid (ADR-0001/0020/0034 — no clouds, sync arrows, globes, padlocks, sparkles), and it must not collide with the three neighbours studied (Granola chartreuse, Anarlog cream, Meetily purple) or the Zoom/Teams blues beside it in a Dock.
+**Outcome:** applied
+**Ref:** (pending)

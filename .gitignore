@@ -74,6 +74,9 @@ personal/
 .DS_Store
 Thumbs.db
 Icon?
+# `Icon?` above is the macOS folder-icon file, but with core.ignorecase it also
+# swallows any directory named `icons`. Re-include those explicitly.
+!**/icons/
 .Spotlight-V100/
 
 # Unwanted package managers
