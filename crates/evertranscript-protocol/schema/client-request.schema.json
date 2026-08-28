@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ClientRequest",
+  "description": "Every request a Client may send the Core.",
+  "oneOf": [
+    {
+      "description": "Opens the connection. Must be the first request; every other request\nbefore it is refused with `NOT_INITIALIZED`.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "initialize"
+        },
+        "params": {
+          "$ref": "#/$defs/InitializeParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Liveness and identity of the running Core.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "status"
+        },
+        "params": {
+          "$ref": "#/$defs/StatusParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    }
+  ],
+  "$defs": {
+    "ClientCapabilities": {
+      "type": "object",
+      "properties": {
+        "experimentalApi": {
+          "description": "Opts the connection into methods marked experimental. Off by default,\nso a stable Client never sees an unstable surface.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "ClientInfo": {
+      "description": "Who is connecting. Recorded in Core logs; never leaves the machine.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version"
+      ]
+    },
+    "InitializeParams": {
+      "type": "object",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/ClientCapabilities",
+          "default": {
+            "experimentalApi": false
+          }
+        },
+        "clientInfo": {
+          "$ref": "#/$defs/ClientInfo"
+        }
+      },
+      "required": [
+        "clientInfo"
+      ]
+    },
+    "StatusParams": {
+      "type": "object"
+    }
+  }
+}

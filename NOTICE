@@ -1,0 +1,11 @@
+EverTranscript
+Copyright 2026 EverTranscript contributors
+
+This product includes software developed at OpenAI (https://openai.com/).
+Portions of the Core's protocol envelope, socket lifecycle, and framing are
+derived from the Codex project (https://github.com/openai/codex), Copyright
+OpenAI, licensed under the Apache License, Version 2.0.
+
+Each derived file carries an attribution header naming its upstream path and
+the pinned revision it was taken from. `PORTS.md` in this repository is the
+authoritative ledger of every such file.

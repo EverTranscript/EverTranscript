@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "JsonRpcMessage",
+  "description": "Any valid protocol object that can be decoded off the wire or encoded onto it.",
+  "anyOf": [
+    {
+      "$ref": "#/$defs/JsonRpcRequest"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcResponse"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcError"
+    },
+    {
+      "$ref": "#/$defs/JsonRpcNotification"
+    }
+  ],
+  "$defs": {
+    "JsonRpcError": {
+      "description": "A response indicating the request failed.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "$ref": "#/$defs/JsonRpcErrorBody"
+        },
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        }
+      },
+      "required": [
+        "id",
+        "error"
+      ]
+    },
+    "JsonRpcErrorBody": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "data": true,
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "JsonRpcNotification": {
+      "description": "A notification, which expects no response.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "method"
+      ]
+    },
+    "JsonRpcRequest": {
+      "description": "A request that expects a response.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": true
+      },
+      "required": [
+        "id",
+        "method"
+      ]
+    },
+    "JsonRpcResponse": {
+      "description": "A successful response to a request.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "result": true
+      },
+      "required": [
+        "id",
+        "result"
+      ]
+    },
+    "RequestId": {
+      "description": "Identifies a request so its response can be matched to it.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer",
+          "format": "int64"
+        }
+      ]
+    }
+  }
+}

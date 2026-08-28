@@ -1,0 +1,15 @@
+{
+  "name": "evertranscript-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=20"
+  }
+}

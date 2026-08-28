@@ -5,6 +5,13 @@ debug/
 *.pdb
 **/mutants.out*/
 
+# Generated: protocol bindings synced into the Client from the Rust crate
+# (the crate's own bindings/ and schema/ ARE committed — they are the
+# contract CI drift-checks).
+clients/electron/src/protocol/
+# Schema drift artifacts written by a failing fixture test
+*.schema.json.actual
+
 # deps
 # Node.js dependencies
 node_modules

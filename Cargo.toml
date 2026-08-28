@@ -1,0 +1,45 @@
+[workspace]
+members = [
+    "crates/evertranscript",
+    "crates/evertranscript-core",
+    "crates/evertranscript-protocol",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/EverTranscript/EverTranscript"
+rust-version = "1.90"
+
+[workspace.dependencies]
+evertranscript-core = { path = "crates/evertranscript-core" }
+evertranscript-protocol = { path = "crates/evertranscript-protocol" }
+
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "5"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "net",
+    "io-util",
+    "sync",
+    "time",
+    "fs",
+    "signal",
+] }
+tokio-util = "0.7"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+
+[profile.release]
+lto = "thin"
+strip = true

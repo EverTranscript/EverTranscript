@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Both platforms are a required gate from the first commit: v1 ships macOS
+  # and Windows together, and a milestone is not done until both pass
+  # (ADR-0025 as amended).
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      - name: Lints
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      # `cargo test` regenerates the TypeScript bindings and JSON schemas.
+      # If they differ from what is committed, the protocol changed without
+      # the Client's types changing with it — which is exactly the drift
+      # ADR-0028 wants caught at build time rather than at runtime.
+      - name: Protocol bindings and schemas are up to date
+        shell: bash
+        run: |
+          if ! git diff --exit-code -- crates/evertranscript-protocol/bindings crates/evertranscript-protocol/schema; then
+            echo "::error::Protocol bindings/schemas drifted. Run 'cargo test -p evertranscript-protocol' and commit the result."
+            exit 1
+          fi
+
+  client:
+    name: Electron Client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -C clients/electron typecheck
+
+      - name: Build
+        run: pnpm -C clients/electron build
+
+  attribution:
+    name: Ports ledger
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Every ported file carries an attribution header and appears in
+      # PORTS.md. This checks the cheap half — that files claiming to be
+      # ported are listed — so an unrecorded port fails review, not later.
+      - name: Every ported file is in the ledger
+        shell: bash
+        run: |
+          missing=0
+          while IFS= read -r file; do
+            base=$(basename "$file")
+            if ! grep -q "$base" PORTS.md; then
+              echo "::error file=$file::This file says it was PORTED but is not listed in PORTS.md"
+              missing=1
+            fi
+          done < <(grep -rl "^//! PORTED\|PORTED from" --include='*.rs' crates || true)
+          exit $missing

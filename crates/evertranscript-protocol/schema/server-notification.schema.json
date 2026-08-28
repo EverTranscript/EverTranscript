@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ServerNotification",
+  "description": "Everything the Core may push to an attached Client unprompted.",
+  "oneOf": [
+    {
+      "description": "The Core's coarse state changed (idle ↔ recording).",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "core/stateChanged"
+        },
+        "params": {
+          "$ref": "#/$defs/CoreStateChangedParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    }
+  ],
+  "$defs": {
+    "CoreState": {
+      "description": "The Core's coarse, observable state.",
+      "type": "string",
+      "enum": [
+        "idle",
+        "recording"
+      ]
+    },
+    "CoreStateChangedParams": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/CoreState"
+        }
+      },
+      "required": [
+        "state"
+      ]
+    }
+  }
+}

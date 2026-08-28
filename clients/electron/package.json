@@ -1,0 +1,31 @@
+{
+  "name": "@evertranscript/client",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "description": "The EverTranscript Electron Client — a thin surface over the Core protocol.",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "protocol:sync": "node scripts/sync-protocol.mjs",
+    "pretypecheck": "pnpm protocol:sync",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
+    "prebuild": "pnpm protocol:sync",
+    "build": "vite build && tsc -p tsconfig.main.json",
+    "predev": "pnpm protocol:sync",
+    "dev": "vite",
+    "start": "pnpm build && electron ."
+  },
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^38.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0"
+  }
+}

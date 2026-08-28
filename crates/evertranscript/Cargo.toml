@@ -1,0 +1,27 @@
+[package]
+name = "evertranscript"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "EverTranscript — a local-first meeting notetaker that never misses a meeting."
+
+[[bin]]
+name = "evertranscript"
+path = "src/main.rs"
+
+[dependencies]
+evertranscript-core.workspace = true
+evertranscript-protocol.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
