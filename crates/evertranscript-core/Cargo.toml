@@ -28,5 +28,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+evertranscript-fixtures = { path = "../evertranscript-fixtures" }
+hound = "3"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }

@@ -2,6 +2,7 @@
 members = [
     "crates/evertranscript",
     "crates/evertranscript-core",
+    "crates/evertranscript-fixtures",
     "crates/evertranscript-protocol",
 ]
 resolver = "2"

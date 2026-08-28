@@ -4,11 +4,11 @@
 
 **Blocked by:** 03 (the AudioSource seam must exist).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Fixture crate with at least two real meeting clips (one zh/en code-switching) at multiple sample rates, exposed as compile-time constants
-- [ ] Audio-similarity assertion library (RMS, peak, zero-crossing, spectral centroid, band energies — tolerances, not bit-exactness)
-- [ ] WER/CER computation available to tests (ASR quality numbers become a tracked deliverable)
-- [ ] Silence-heavy and noise-heavy canary fixtures for the hallucination suite (consumed by ticket 07)
-- [ ] RMS-preservation helper for resampling checks (consumed by ticket 08)
-- [ ] End-to-end: fixture → AudioSource → checkpointed AAC → finalized Meeting, green on both platforms in CI
+- [x] Fixture crate with at least two real meeting clips (one zh/en code-switching) at multiple sample rates, exposed as compile-time constants
+- [x] Audio-similarity assertion library (RMS, peak, zero-crossing, spectral centroid, band energies — tolerances, not bit-exactness)
+- [x] WER/CER computation available to tests (ASR quality numbers become a tracked deliverable)
+- [x] Silence-heavy and noise-heavy canary fixtures for the hallucination suite (consumed by ticket 07)
+- [x] RMS-preservation helper for resampling checks (consumed by ticket 08)
+- [x] End-to-end: fixture → AudioSource → checkpointed AAC → finalized Meeting, green on both platforms in CI

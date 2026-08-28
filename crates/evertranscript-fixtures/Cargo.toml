@@ -1,0 +1,12 @@
+[package]
+name = "evertranscript-fixtures"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Test fixtures and audio-quality assertions shared across the EverTranscript workspace."
+publish = false
+
+[dependencies]
+hound = "3"
