@@ -58,8 +58,12 @@ _Avoid_: current call
 ### Detection
 
 **Meeting Detection**:
-The product's single ambient sense: identifying an active meeting from application and microphone state. It reads state, never content.
+The ambient sense that identifies an active meeting from application and microphone state — and the only one that starts a recording. It reads state, never content.
 _Avoid_: auto-detect, watching, monitoring
+
+**Calendar Arming**:
+The second ambient sense, active only under a grant the Operator may skip: read from the local calendar store, never a cloud API. At a scheduled start it pre-arms Meeting Detection, names the Meeting from the event, and feeds the scheduled end into the auto-stop window. It arms and names; it never triggers a recording — the calendar knows when, only the microphone knows that.
+_Avoid_: calendar sync, calendar integration
 
 **Auto-Record**:
 The standing policy — on by default, revocable — that Meeting Detection starts and stops recording without a per-meeting act.
