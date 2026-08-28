@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
-use evertranscript_protocol::error_codes;
 use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::ClientNotification;
 use evertranscript_protocol::ClientRequest;
@@ -46,10 +45,11 @@ use evertranscript_protocol::TranscriptSegment;
 use evertranscript_protocol::TranscriptSegmentAddedParams;
 use evertranscript_protocol::TranscriptSnapshotResponse;
 use evertranscript_protocol::TranscriptUnsubscribeResponse;
-use tokio::sync::broadcast;
-use tokio::sync::mpsc;
+use evertranscript_protocol::error_codes;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::info;
@@ -62,8 +62,8 @@ use crate::mirror::MirrorWriter;
 use crate::models;
 use crate::paths;
 use crate::settings::Settings;
-use crate::store::meetings;
 use crate::store::Store;
+use crate::store::meetings;
 use crate::transport::ConnectionId;
 use crate::transport::TransportEvent;
 
@@ -546,10 +546,10 @@ impl Core {
         }
         if let Some(audio_path) = deleted.audio_path {
             let path = self.history_dir.join(&audio_path);
-            if let Err(error) = std::fs::remove_file(&path) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    warn!(path = %path.display(), %error, "could not remove the Meeting's audio");
-                }
+            if let Err(error) = std::fs::remove_file(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(path = %path.display(), %error, "could not remove the Meeting's audio");
             }
         }
         Ok(true)
@@ -660,8 +660,10 @@ impl Core {
     pub async fn fetch_models(&self, key: Option<&str>, cancel: CancellationToken) -> Result<()> {
         let downloader = models::Downloader::new(paths::models_dir())?;
         let entries: Vec<&'static models::registry::ModelEntry> = match key {
-            Some(key) => vec![models::registry::find(key)
-                .ok_or_else(|| anyhow::anyhow!("no model with key {key}"))?],
+            Some(key) => vec![
+                models::registry::find(key)
+                    .ok_or_else(|| anyhow::anyhow!("no model with key {key}"))?,
+            ],
             None => models::registry::required().collect(),
         };
 

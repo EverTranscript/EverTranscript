@@ -16,10 +16,10 @@ use std::sync::Arc;
 use anyhow::Context;
 use anyhow::Result;
 use rusqlite::Connection;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::sync::Mutex;
 use tokio::sync::Semaphore;
+use tokio::sync::mpsc;
+use tokio::sync::oneshot;
 
 /// How many concurrent readers. Reads are short; this is about never
 /// blocking a Client's query behind a write, not about throughput.

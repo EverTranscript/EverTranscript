@@ -9,11 +9,11 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use evertranscript_core::Core;
 use evertranscript_core::asr::Transcriber;
 use evertranscript_core::asr::Transcript;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
-use evertranscript_core::Core;
 use evertranscript_protocol::AudioChannel;
 
 /// Speech long enough to close chunks, ending mid-utterance with no trailing

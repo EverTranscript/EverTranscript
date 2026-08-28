@@ -257,9 +257,9 @@ impl EchoCanceller {
 
 #[cfg(test)]
 mod tests {
+    use evertranscript_fixtures::echo::Room;
     use evertranscript_fixtures::echo::echo_of;
     use evertranscript_fixtures::echo::erle_db;
-    use evertranscript_fixtures::echo::Room;
 
     use super::*;
 

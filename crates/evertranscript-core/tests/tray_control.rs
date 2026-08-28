@@ -13,11 +13,11 @@
 
 use std::sync::Arc;
 
+use evertranscript_core::Core;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
 use evertranscript_core::tray::TrayController;
 use evertranscript_core::tray::TrayPhase;
-use evertranscript_core::Core;
 use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::CoreState;
 use tokio_util::sync::CancellationToken;

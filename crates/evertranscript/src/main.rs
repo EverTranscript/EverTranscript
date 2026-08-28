@@ -240,10 +240,10 @@ async fn run(cli: Cli) -> Result<()> {
 /// leg on a machine that will record nothing — so this listens instead, and
 /// reports what arrived.
 async fn run_audio_check(seconds: u64) -> Result<()> {
-    use evertranscript_core::audio::live::LiveSource;
     use evertranscript_core::audio::AudioSource;
     use evertranscript_core::audio::CaptureClock;
     use evertranscript_core::audio::CaptureEvent;
+    use evertranscript_core::audio::live::LiveSource;
     use evertranscript_protocol::AudioChannel;
 
     println!("Listening for {seconds}s. Play some audio — a meeting, a video, anything.\n");
@@ -713,8 +713,8 @@ fn display_title(meeting: &Meeting) -> String {
 async fn wait_for_shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::signal;
         use tokio::signal::unix::SignalKind;
+        use tokio::signal::unix::signal;
         let mut terminate = signal(SignalKind::terminate())?;
         let mut interrupt = signal(SignalKind::interrupt())?;
         tokio::select! {

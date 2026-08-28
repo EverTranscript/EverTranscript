@@ -11,10 +11,10 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use evertranscript_core::client::CoreClient;
-use evertranscript_core::transport;
 use evertranscript_core::Core;
 use evertranscript_core::Server;
+use evertranscript_core::client::CoreClient;
+use evertranscript_core::transport;
 use evertranscript_protocol::HistorySearchResponse;
 use evertranscript_protocol::MeetingDeleteResponse;
 use evertranscript_protocol::MeetingDetailResponse;

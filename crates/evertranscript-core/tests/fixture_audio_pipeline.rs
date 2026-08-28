@@ -13,15 +13,15 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use evertranscript_core::Core;
+use evertranscript_core::audio::SAMPLE_RATE;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
 use evertranscript_core::audio::sink::ffmpeg_available;
-use evertranscript_core::audio::SAMPLE_RATE;
-use evertranscript_core::Core;
-use evertranscript_fixtures::similarity::Features;
-use evertranscript_fixtures::Fixture;
 use evertranscript_fixtures::BILINGUAL_MEETING;
 use evertranscript_fixtures::ENGLISH_MEETING;
+use evertranscript_fixtures::Fixture;
+use evertranscript_fixtures::similarity::Features;
 use evertranscript_protocol::AudioChannel;
 
 async fn skip_without_ffmpeg() -> bool {

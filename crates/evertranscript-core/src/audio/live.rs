@@ -22,11 +22,11 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use super::leg::LegEncoder;
-use super::system;
 use super::AudioSource;
 use super::CaptureClock;
 use super::CaptureEvent;
+use super::leg::LegEncoder;
+use super::system;
 
 /// Captures the microphone and, where the platform allows it, system audio.
 pub struct LiveSource {
@@ -194,13 +194,15 @@ impl AudioSource for LiveSource {
             (AudioChannel::System, system),
             (AudioChannel::Mic, microphone),
         ] {
-            if let Some(reason) = reason {
-                if events
-                    .try_send(CaptureEvent::Unavailable { channel, reason })
-                    .is_err()
-                {
-                    debug!("nobody is listening for capture events yet");
-                }
+            // Deliberately not a let-chain: sending is the point of this
+            // loop, and folding it into a condition would read as a test of
+            // something rather than the announcement it is.
+            let Some(reason) = reason else { continue };
+            if events
+                .try_send(CaptureEvent::Unavailable { channel, reason })
+                .is_err()
+            {
+                debug!("nobody is listening for capture events yet");
             }
         }
         Ok(())

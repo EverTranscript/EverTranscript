@@ -11,10 +11,10 @@ use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::Meeting;
 use evertranscript_protocol::SearchResult;
 use evertranscript_protocol::TranscriptSegment;
-use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::Row;
+use rusqlite::params;
 use uuid::Uuid;
 
 use super::now_rfc3339;

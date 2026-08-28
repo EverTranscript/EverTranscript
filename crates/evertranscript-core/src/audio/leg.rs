@@ -19,11 +19,11 @@
 use anyhow::Result;
 use evertranscript_protocol::AudioChannel;
 
-use super::dsp::StreamResampler;
 use super::AudioFrame;
 use super::CaptureClock;
 use super::CaptureOffset;
 use super::SAMPLE_RATE;
+use super::dsp::StreamResampler;
 
 /// Prepares one capture leg's audio for the joiner.
 pub struct LegEncoder {

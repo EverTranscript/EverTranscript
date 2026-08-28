@@ -9,13 +9,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use evertranscript_core::Core;
+use evertranscript_core::Server;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
 use evertranscript_core::audio::sink::ffmpeg_available;
 use evertranscript_core::client::CoreClient;
 use evertranscript_core::transport;
-use evertranscript_core::Core;
-use evertranscript_core::Server;
 use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::MeetingResponse;
 use serde_json::json;

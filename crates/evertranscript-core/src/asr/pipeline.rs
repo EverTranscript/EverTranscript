@@ -9,15 +9,15 @@
 use evertranscript_protocol::AudioChannel;
 use tracing::debug;
 
+use super::Transcriber;
 use super::vad::ChunkPolicy;
 use super::vad::Chunker;
 use super::vad::EnergyDetector;
 use super::whisper::WHISPER_RATE;
-use super::Transcriber;
+use crate::audio::SAMPLE_RATE;
 use crate::audio::aec;
 use crate::audio::dsp;
 use crate::audio::joiner::StereoBlock;
-use crate::audio::SAMPLE_RATE;
 
 /// One transcribed span, ready to become a row in the record.
 #[derive(Debug, Clone, PartialEq)]
@@ -132,15 +132,15 @@ impl TranscriptionPipeline {
     /// so the last sentence is not lost (story 5).
     pub fn flush(&mut self) -> Vec<TranscribedSegment> {
         let mut segments = Vec::new();
-        if let Some(chunk) = self.mic.flush() {
-            if let Some(segment) = self.transcribe(AudioChannel::Mic, chunk) {
-                segments.push(segment);
-            }
+        if let Some(chunk) = self.mic.flush()
+            && let Some(segment) = self.transcribe(AudioChannel::Mic, chunk)
+        {
+            segments.push(segment);
         }
-        if let Some(chunk) = self.system.flush() {
-            if let Some(segment) = self.transcribe(AudioChannel::System, chunk) {
-                segments.push(segment);
-            }
+        if let Some(chunk) = self.system.flush()
+            && let Some(segment) = self.transcribe(AudioChannel::System, chunk)
+        {
+            segments.push(segment);
         }
         segments.sort_by_key(|segment| segment.start_ms);
         segments

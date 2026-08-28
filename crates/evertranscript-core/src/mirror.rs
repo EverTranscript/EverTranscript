@@ -22,8 +22,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::warn;
 
-use crate::store::meetings;
 use crate::store::Store;
+use crate::store::meetings;
 
 /// How long to let writes settle before rebuilding. Long enough that a burst
 /// of transcript segments produces one rebuild, short enough to feel live.
@@ -282,14 +282,14 @@ impl MirrorWriter {
 
         // A retitle changes the filename; remove the name the Mirror used to
         // have so the folder never accumulates stale copies of one Meeting.
-        if let Some(previous) = meeting.mirror_filename.as_deref() {
-            if previous != next_filename {
-                let stale = self.history_dir.join(previous);
-                if let Err(error) = std::fs::remove_file(&stale) {
-                    if error.kind() != std::io::ErrorKind::NotFound {
-                        warn!(path = %stale.display(), %error, "could not remove the stale Mirror");
-                    }
-                }
+        if let Some(previous) = meeting.mirror_filename.as_deref()
+            && previous != next_filename
+        {
+            let stale = self.history_dir.join(previous);
+            if let Err(error) = std::fs::remove_file(&stale)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                warn!(path = %stale.display(), %error, "could not remove the stale Mirror");
             }
         }
 
@@ -320,10 +320,10 @@ impl MirrorWriter {
     /// Removes a Meeting's Mirror from disk.
     pub fn remove(&self, mirror_filename: &str) {
         let path = self.history_dir.join(mirror_filename);
-        if let Err(error) = std::fs::remove_file(&path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                warn!(path = %path.display(), %error, "could not remove the Mirror");
-            }
+        if let Err(error) = std::fs::remove_file(&path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            warn!(path = %path.display(), %error, "could not remove the Mirror");
         }
     }
 

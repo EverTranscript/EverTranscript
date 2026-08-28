@@ -16,13 +16,13 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
+use super::AudioSource;
+use super::CaptureClock;
+use super::CaptureEvent;
 use super::joiner::Joiner;
 use super::sink::CheckpointSink;
 use super::supervisor::Action;
 use super::supervisor::ChurnPolicy;
-use super::AudioSource;
-use super::CaptureClock;
-use super::CaptureEvent;
 use crate::asr::pipeline::TranscribedSegment;
 use crate::asr::pipeline::TranscriptionPipeline;
 

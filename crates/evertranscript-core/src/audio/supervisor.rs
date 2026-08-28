@@ -63,10 +63,10 @@ impl RestartTracker {
 
     /// Records a restart that counts, returning whether the leg may continue.
     fn record(&mut self, now: std::time::Instant) -> bool {
-        if let Some(last) = self.last_restart {
-            if now.duration_since(last) >= self.budget.reset_after {
-                self.attempts.clear();
-            }
+        if let Some(last) = self.last_restart
+            && now.duration_since(last) >= self.budget.reset_after
+        {
+            self.attempts.clear();
         }
         self.attempts
             .retain(|attempt| now.duration_since(*attempt) < self.budget.window);

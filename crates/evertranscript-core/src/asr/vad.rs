@@ -277,10 +277,10 @@ impl Chunker {
                 && chunk_ms >= self.policy.min_chunk_ms;
             let hit_the_cap = chunk_ms >= self.policy.max_chunk_ms;
 
-            if ended_on_a_pause || hit_the_cap {
-                if let Some(chunk) = self.close(hit_the_cap) {
-                    chunks.push(chunk);
-                }
+            if (ended_on_a_pause || hit_the_cap)
+                && let Some(chunk) = self.close(hit_the_cap)
+            {
+                chunks.push(chunk);
             }
         }
         chunks

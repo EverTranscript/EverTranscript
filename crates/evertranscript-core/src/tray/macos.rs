@@ -19,12 +19,12 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
+use objc2::AllocAnyThread;
+use objc2::DefinedClass;
 use objc2::define_class;
 use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::AllocAnyThread;
-use objc2::DefinedClass;
 use objc2_app_kit::NSApplication;
 use objc2_app_kit::NSApplicationActivationPolicy;
 use objc2_app_kit::NSEvent;
@@ -35,12 +35,12 @@ use objc2_app_kit::NSMenuItem;
 use objc2_app_kit::NSStatusBar;
 use objc2_app_kit::NSStatusItem;
 use objc2_app_kit::NSVariableStatusItemLength;
-use objc2_foundation::ns_string;
 use objc2_foundation::MainThreadMarker;
 use objc2_foundation::NSObject;
 use objc2_foundation::NSPoint;
 use objc2_foundation::NSString;
 use objc2_foundation::NSTimer;
+use objc2_foundation::ns_string;
 use tracing::info;
 
 use super::TrayController;

@@ -156,10 +156,10 @@ mod platform {
 
     impl Drop for Listener {
         fn drop(&mut self) {
-            if let Err(err) = std::fs::remove_file(&self.socket_path) {
-                if err.kind() != ErrorKind::NotFound {
-                    warn!(path = %self.socket_path.display(), %err, "failed to remove socket file");
-                }
+            if let Err(err) = std::fs::remove_file(&self.socket_path)
+                && err.kind() != ErrorKind::NotFound
+            {
+                warn!(path = %self.socket_path.display(), %err, "failed to remove socket file");
             }
         }
     }
@@ -336,10 +336,10 @@ mod platform {
     }
 }
 
+pub use platform::Listener;
 pub use platform::bind;
 pub use platform::connect;
 pub use platform::serve;
-pub use platform::Listener;
 
 /// Holds the startup lock for the lifetime of the process.
 ///

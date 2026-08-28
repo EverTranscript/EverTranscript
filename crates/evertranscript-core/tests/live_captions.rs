@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use evertranscript_core::Core;
+use evertranscript_core::Server;
 use evertranscript_core::asr::FakeTranscriber;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
 use evertranscript_core::client::CoreClient;
 use evertranscript_core::transport;
-use evertranscript_core::Core;
-use evertranscript_core::Server;
 use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::MeetingResponse;
 use evertranscript_protocol::TranscriptSnapshotResponse;
@@ -89,14 +89,13 @@ async fn collect_captions(client: &mut CoreClient, count: usize) -> Vec<String> 
         while texts.len() < count {
             match client.next_notification().await {
                 Ok(Some(notification)) if notification.method == "transcript/segmentAdded" => {
-                    if let Some(params) = notification.params {
-                        if let Some(text) = params
+                    if let Some(params) = notification.params
+                        && let Some(text) = params
                             .get("segment")
                             .and_then(|segment| segment.get("text"))
                             .and_then(|text| text.as_str())
-                        {
-                            texts.push(text.to_string());
-                        }
+                    {
+                        texts.push(text.to_string());
                     }
                 }
                 Ok(Some(_)) => continue,

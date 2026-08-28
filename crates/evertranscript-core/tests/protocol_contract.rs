@@ -10,12 +10,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use evertranscript_core::client::CoreClient;
-use evertranscript_core::transport;
 use evertranscript_core::Core;
 use evertranscript_core::Server;
-use evertranscript_protocol::error_codes;
+use evertranscript_core::client::CoreClient;
+use evertranscript_core::transport;
 use evertranscript_protocol::CoreState;
+use evertranscript_protocol::error_codes;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 

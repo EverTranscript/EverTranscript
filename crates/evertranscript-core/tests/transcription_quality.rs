@@ -13,17 +13,17 @@
 
 use std::path::PathBuf;
 
-use evertranscript_core::asr::whisper::Language;
-use evertranscript_core::asr::whisper::WhisperEngine;
-use evertranscript_core::asr::whisper::WHISPER_RATE;
 use evertranscript_core::asr::Transcriber;
-use evertranscript_fixtures::wer::character_error_rate;
-use evertranscript_fixtures::wer::word_error_rate;
-use evertranscript_fixtures::Fixture;
+use evertranscript_core::asr::whisper::Language;
+use evertranscript_core::asr::whisper::WHISPER_RATE;
+use evertranscript_core::asr::whisper::WhisperEngine;
 use evertranscript_fixtures::BILINGUAL_MEETING;
 use evertranscript_fixtures::ENGLISH_MEETING;
+use evertranscript_fixtures::Fixture;
 use evertranscript_fixtures::ROOM_NOISE;
 use evertranscript_fixtures::SILENCE;
+use evertranscript_fixtures::wer::character_error_rate;
+use evertranscript_fixtures::wer::word_error_rate;
 
 fn test_model() -> Option<PathBuf> {
     let path = PathBuf::from(std::env::var("EVERTRANSCRIPT_TEST_MODEL").ok()?);
@@ -114,9 +114,9 @@ fn silence_does_not_become_a_permanent_line_in_the_record() {
 #[test]
 fn the_pipeline_rejects_what_the_engine_invents_on_silence() {
     use evertranscript_core::asr::pipeline::TranscriptionPipeline;
-    use evertranscript_core::audio::joiner::StereoBlock;
     use evertranscript_core::audio::CaptureOffset;
     use evertranscript_core::audio::SAMPLE_RATE;
+    use evertranscript_core::audio::joiner::StereoBlock;
 
     let Some(model) = test_model() else {
         eprintln!("skipping: set EVERTRANSCRIPT_TEST_MODEL to run transcription tests");
@@ -147,9 +147,9 @@ fn the_pipeline_rejects_what_the_engine_invents_on_silence() {
 #[test]
 fn real_speech_survives_the_whole_pipeline_into_segments() {
     use evertranscript_core::asr::pipeline::TranscriptionPipeline;
-    use evertranscript_core::audio::joiner::StereoBlock;
     use evertranscript_core::audio::CaptureOffset;
     use evertranscript_core::audio::SAMPLE_RATE;
+    use evertranscript_core::audio::joiner::StereoBlock;
     use evertranscript_protocol::AudioChannel;
 
     let Some(model) = test_model() else {
@@ -214,11 +214,11 @@ fn real_speech_survives_the_whole_pipeline_into_segments() {
 #[test]
 fn a_speakerphone_does_not_credit_the_far_end_to_the_operator() {
     use evertranscript_core::asr::pipeline::TranscriptionPipeline;
-    use evertranscript_core::audio::joiner::StereoBlock;
     use evertranscript_core::audio::CaptureOffset;
     use evertranscript_core::audio::SAMPLE_RATE;
-    use evertranscript_fixtures::echo::echo_of;
+    use evertranscript_core::audio::joiner::StereoBlock;
     use evertranscript_fixtures::echo::Room;
+    use evertranscript_fixtures::echo::echo_of;
     use evertranscript_protocol::AudioChannel;
 
     let Some(model) = test_model() else {

@@ -19,9 +19,9 @@ use tracing::info;
 use tracing::warn;
 
 use super::SystemCapture;
-use crate::audio::leg::LegEncoder;
 use crate::audio::CaptureClock;
 use crate::audio::CaptureEvent;
+use crate::audio::leg::LegEncoder;
 
 /// cpal streams are `!Send`, so the stream lives on its own thread and is
 /// stopped by telling that thread to drop it — the same shape the

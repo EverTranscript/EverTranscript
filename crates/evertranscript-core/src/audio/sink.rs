@@ -23,8 +23,8 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use super::joiner::StereoBlock;
 use super::SAMPLE_RATE;
+use super::joiner::StereoBlock;
 
 /// How much audio each checkpoint holds. The upper bound on what a crash can
 /// cost, traded against one process spawn per interval.

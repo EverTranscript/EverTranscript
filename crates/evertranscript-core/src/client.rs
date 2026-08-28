@@ -5,9 +5,9 @@
 //! surfaced to the caller rather than dropped, so a caption stream and a
 //! command can share one connection.
 
-use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use evertranscript_protocol::ClientCapabilities;
 use evertranscript_protocol::ClientInfo;
 use evertranscript_protocol::InitializeParams;

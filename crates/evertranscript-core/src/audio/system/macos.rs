@@ -23,30 +23,16 @@
 //! failures arrive as an `OSStatus` from the create calls, and both are
 //! reported as an unavailable leg rather than as a broken recording.
 
-use std::ffi::c_void;
 use std::ffi::CStr;
+use std::ffi::c_void;
 use std::ptr::NonNull;
 
 use anyhow::Context;
 use anyhow::Result;
 use evertranscript_protocol::AudioChannel;
+use objc2::AnyThread;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::AnyThread;
-use objc2_core_audio::kAudioAggregateDeviceIsPrivateKey;
-use objc2_core_audio::kAudioAggregateDeviceIsStackedKey;
-use objc2_core_audio::kAudioAggregateDeviceNameKey;
-use objc2_core_audio::kAudioAggregateDeviceTapAutoStartKey;
-use objc2_core_audio::kAudioAggregateDeviceTapListKey;
-use objc2_core_audio::kAudioAggregateDeviceUIDKey;
-use objc2_core_audio::kAudioHardwarePropertyDefaultOutputDevice;
-use objc2_core_audio::kAudioObjectPropertyElementMain;
-use objc2_core_audio::kAudioObjectPropertyScopeGlobal;
-use objc2_core_audio::kAudioObjectSystemObject;
-use objc2_core_audio::kAudioSubTapDriftCompensationKey;
-use objc2_core_audio::kAudioSubTapUIDKey;
-use objc2_core_audio::kAudioTapPropertyFormat;
-use objc2_core_audio::kAudioTapPropertyUID;
 use objc2_core_audio::AudioDeviceCreateIOProcID;
 use objc2_core_audio::AudioDeviceDestroyIOProcID;
 use objc2_core_audio::AudioDeviceIOProcID;
@@ -61,6 +47,20 @@ use objc2_core_audio::AudioObjectID;
 use objc2_core_audio::AudioObjectPropertyAddress;
 use objc2_core_audio::CATapDescription;
 use objc2_core_audio::CATapMuteBehavior;
+use objc2_core_audio::kAudioAggregateDeviceIsPrivateKey;
+use objc2_core_audio::kAudioAggregateDeviceIsStackedKey;
+use objc2_core_audio::kAudioAggregateDeviceNameKey;
+use objc2_core_audio::kAudioAggregateDeviceTapAutoStartKey;
+use objc2_core_audio::kAudioAggregateDeviceTapListKey;
+use objc2_core_audio::kAudioAggregateDeviceUIDKey;
+use objc2_core_audio::kAudioHardwarePropertyDefaultOutputDevice;
+use objc2_core_audio::kAudioObjectPropertyElementMain;
+use objc2_core_audio::kAudioObjectPropertyScopeGlobal;
+use objc2_core_audio::kAudioObjectSystemObject;
+use objc2_core_audio::kAudioSubTapDriftCompensationKey;
+use objc2_core_audio::kAudioSubTapUIDKey;
+use objc2_core_audio::kAudioTapPropertyFormat;
+use objc2_core_audio::kAudioTapPropertyUID;
 use objc2_core_audio_types::AudioBufferList;
 use objc2_core_audio_types::AudioStreamBasicDescription;
 use objc2_core_audio_types::AudioTimeStamp;
@@ -76,9 +76,9 @@ use tracing::info;
 use tracing::warn;
 
 use super::SystemCapture;
-use crate::audio::leg::LegEncoder;
 use crate::audio::CaptureClock;
 use crate::audio::CaptureEvent;
+use crate::audio::leg::LegEncoder;
 
 /// Set when a format is planar (`kAudioFormatFlagIsNonInterleaved`).
 const NON_INTERLEAVED: u32 = 1 << 5;

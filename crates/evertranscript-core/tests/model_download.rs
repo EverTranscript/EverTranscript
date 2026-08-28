@@ -6,15 +6,15 @@
 //! a canned mock server makes hard.
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
+use evertranscript_core::models::Downloader;
+use evertranscript_core::models::ModelStatus;
 use evertranscript_core::models::registry::Integrity;
 use evertranscript_core::models::registry::ModelEntry;
 use evertranscript_core::models::registry::ModelPurpose;
-use evertranscript_core::models::Downloader;
-use evertranscript_core::models::ModelStatus;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;

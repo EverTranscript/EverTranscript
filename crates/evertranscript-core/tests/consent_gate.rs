@@ -10,9 +10,9 @@
 
 use std::sync::Arc;
 
+use evertranscript_core::Core;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::settings::Settings;
-use evertranscript_core::Core;
 use evertranscript_protocol::SettingsSetParams;
 
 async fn fresh_install() -> (Arc<Core>, tempfile::TempDir) {

@@ -74,16 +74,16 @@ impl LoudnessNormalizer {
         // Three seconds is the shortest window where integrated loudness
         // means anything; before that, leave the audio alone.
         let enough = self.measured >= self.rate as usize * 3;
-        if enough {
-            if let Ok(loudness) = self.meter.loudness_global() {
-                if loudness.is_finite() && loudness > -70.0 {
-                    let wanted = 10f64.powf((TARGET_LUFS - loudness) / 20.0) as f32;
-                    let wanted = wanted.clamp(1.0 / MAX_GAIN, MAX_GAIN);
-                    // Move a little at a time: a jump would be audible and
-                    // would change the level mid-sentence.
-                    self.gain += (wanted - self.gain) * 0.05;
-                }
-            }
+        if enough
+            && let Ok(loudness) = self.meter.loudness_global()
+            && loudness.is_finite()
+            && loudness > -70.0
+        {
+            let wanted = 10f64.powf((TARGET_LUFS - loudness) / 20.0) as f32;
+            let wanted = wanted.clamp(1.0 / MAX_GAIN, MAX_GAIN);
+            // Move a little at a time: a jump would be audible and
+            // would change the level mid-sentence.
+            self.gain += (wanted - self.gain) * 0.05;
         }
 
         for sample in samples.iter_mut() {
