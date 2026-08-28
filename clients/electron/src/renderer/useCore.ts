@@ -11,6 +11,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { JsonRpcNotification } from "@protocol/JsonRpcNotification";
 import type { Meeting } from "@protocol/Meeting";
+import type { SettingsResponse } from "@protocol/SettingsResponse";
+import type { SettingsSetParams } from "@protocol/SettingsSetParams";
+import type { WatchlistResponse } from "@protocol/WatchlistResponse";
 import type { MeetingDetailResponse } from "@protocol/MeetingDetailResponse";
 import type { MeetingListResponse } from "@protocol/MeetingListResponse";
 import type { MeetingResponse } from "@protocol/MeetingResponse";
@@ -176,4 +179,63 @@ export function useTranscript(meetingId: string | null, live: boolean) {
   }, [meetingId, live]);
 
   return { segments, dropped };
+}
+
+/**
+ * Settings and the Watchlist, together because they are one screen.
+ *
+ * Both are small and rarely change, so they are fetched on demand rather
+ * than polled: a settings panel that re-reads twice a second would be
+ * writing to the Core more often than the Operator does.
+ */
+export function useSettings() {
+  const [settings, setSettings] = useState<SettingsResponse | null>(null);
+  const [watchlist, setWatchlist] = useState<WatchlistResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [nextSettings, nextWatchlist] = await Promise.all([
+        window.evertranscript.request<SettingsResponse>("settings/get", {}),
+        window.evertranscript.request<WatchlistResponse>("watchlist/get", {}),
+      ]);
+      setSettings(nextSettings);
+      setWatchlist(nextWatchlist);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const update = useCallback(
+    async (change: Partial<SettingsSetParams>) => {
+      setSettings(
+        await window.evertranscript.request<SettingsResponse>("settings/set", change),
+      );
+    },
+    [],
+  );
+
+  const addWatched = useCallback(async (id: string, name?: string) => {
+    setWatchlist(
+      await window.evertranscript.request<WatchlistResponse>("watchlist/add", {
+        id,
+        name,
+      }),
+    );
+  }, []);
+
+  const removeWatched = useCallback(async (id: string) => {
+    setWatchlist(
+      await window.evertranscript.request<WatchlistResponse>("watchlist/remove", {
+        id,
+      }),
+    );
+  }, []);
+
+  return { settings, watchlist, error, update, addWatched, removeWatched };
 }

@@ -4,11 +4,12 @@ import type { Meeting } from "@protocol/Meeting";
 import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 
 import { isMessageKey, t } from "./i18n";
-import { useCore, useTranscript } from "./useCore";
+import { useCore, useSettings, useTranscript } from "./useCore";
 
 export function App(): React.JSX.Element {
   const core = useCore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showingSettings, setShowingSettings] = useState(false);
 
   const recording = useMemo(
     () => core.meetings.find((meeting) => !meeting.endedAt) ?? null,
@@ -39,9 +40,12 @@ export function App(): React.JSX.Element {
         onSelect={setSelectedId}
         onRecord={() => void core.startRecording()}
         onStop={() => void core.stopRecording()}
+        onSettings={() => setShowingSettings((open) => !open)}
       />
       <main className="flex h-full min-w-0 flex-col overflow-hidden">
-        {active ? (
+        {showingSettings ? (
+          <SettingsPanel onClose={() => setShowingSettings(false)} />
+        ) : active ? (
           <MeetingView
             meeting={active}
             live={isLive}
@@ -103,6 +107,7 @@ function Sidebar({
   onSelect,
   onRecord,
   onStop,
+  onSettings,
 }: {
   meetings: Meeting[];
   activeId: string | null;
@@ -110,11 +115,19 @@ function Sidebar({
   onSelect: (id: string) => void;
   onRecord: () => void;
   onStop: () => void;
+  onSettings: () => void;
 }): React.JSX.Element {
   return (
     <aside className="flex h-full flex-col border-r border-[--color-line] bg-[--color-surface-raised]">
       <header className="flex items-center justify-between border-b border-[--color-line] px-4 py-3">
-        <span className="text-sm font-semibold">{t("app.title")}</span>
+        <button
+          type="button"
+          onClick={onSettings}
+          title={t("settings.open")}
+          className="text-sm font-semibold hover:text-[--color-ink-muted]"
+        >
+          {t("app.title")}
+        </button>
         {recordingId ? (
           <button
             type="button"
@@ -355,4 +368,167 @@ function formatTimestamp(milliseconds: number): string {
   return hours > 0
     ? `${hours}:${pad(minutes)}:${pad(seconds)}`
     : `${pad(minutes)}:${pad(seconds)}`;
+}
+
+/**
+ * Settings: the single Auto-Record switch, and the Watchlist it governs.
+ *
+ * The Client had no settings surface until now, so this is also where the
+ * settings only the CLI could reach come to live — a settings screen that
+ * hides settings is worse than none.
+ */
+function SettingsPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const { settings, watchlist, error, update, addWatched, removeWatched } =
+    useSettings();
+  const [draft, setDraft] = useState("");
+
+  return (
+    <div className="flex h-full flex-col overflow-y-auto p-6">
+      <header className="mb-6 flex items-center justify-between">
+        <h1 className="text-lg font-semibold">{t("settings.title")}</h1>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+        >
+          {t("settings.close")}
+        </button>
+      </header>
+
+      {error ? (
+        <p className="mb-4 text-sm text-[--color-recording]">{error}</p>
+      ) : null}
+
+      <section className="mb-8">
+        <label className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-1"
+            checked={settings?.autoRecord ?? false}
+            onChange={(changed) =>
+              void update({ autoRecord: changed.target.checked })
+            }
+          />
+          <span>
+            <span className="block text-sm font-medium">
+              {t("settings.autoRecord")}
+            </span>
+            <span className="block text-xs text-[--color-ink-muted]">
+              {t("settings.autoRecord.hint")}
+            </span>
+          </span>
+        </label>
+      </section>
+
+      <section className="mb-8">
+        <span className="block text-sm font-medium">
+          {t("settings.chineseScript")}
+        </span>
+        <span className="mb-2 block text-xs text-[--color-ink-muted]">
+          {t("settings.chineseScript.hint")}
+        </span>
+        <select
+          value={settings?.chineseScript ?? "simplified"}
+          onChange={(changed) =>
+            void update({
+              chineseScript: changed.target.value as "simplified" | "traditional",
+            })
+          }
+          className="rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-sm"
+        >
+          <option value="simplified">
+            {t("settings.chineseScript.simplified")}
+          </option>
+          <option value="traditional">
+            {t("settings.chineseScript.traditional")}
+          </option>
+        </select>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-medium">{t("watchlist.title")}</h2>
+        <p className="mb-3 text-xs text-[--color-ink-muted]">
+          {t("watchlist.hint")}
+        </p>
+
+        {watchlist && watchlist.entries.length === 0 ? (
+          <p className="mb-3 text-xs text-[--color-recording]">
+            {t("watchlist.empty")}
+          </p>
+        ) : null}
+
+        <ul className="mb-4">
+          {watchlist?.entries.map((entry) => (
+            <li
+              key={entry.id}
+              className="flex items-center justify-between border-b border-[--color-line] py-2"
+            >
+              <span>
+                <span className="block text-sm">{entry.name}</span>
+                <span className="block font-mono text-xs text-[--color-ink-muted]">
+                  {entry.kind === "browserMeetings"
+                    ? t("watchlist.browserMeetings")
+                    : entry.id}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => void removeWatched(entry.id)}
+                className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+              >
+                {t("watchlist.remove")}
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <form
+          className="mb-4 flex gap-2"
+          onSubmit={(submitted) => {
+            submitted.preventDefault();
+            if (!draft.trim()) return;
+            void addWatched(draft.trim());
+            setDraft("");
+          }}
+        >
+          <input
+            value={draft}
+            onChange={(changed) => setDraft(changed.target.value)}
+            placeholder={t("watchlist.addPlaceholder")}
+            className="min-w-0 flex-1 rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-sm"
+          />
+          <button
+            type="submit"
+            className="rounded border border-[--color-line] px-3 py-1 text-sm hover:bg-[--color-surface-raised]"
+          >
+            {t("watchlist.add")}
+          </button>
+        </form>
+
+        {watchlist && watchlist.suggestions.length > 0 ? (
+          <>
+            <h3 className="text-xs font-medium text-[--color-ink-muted]">
+              {t("watchlist.suggested")}
+            </h3>
+            <ul>
+              {watchlist.suggestions.map((entry) => (
+                <li key={entry.id} className="flex items-center justify-between py-2">
+                  <span className="text-sm text-[--color-ink-muted]">
+                    {entry.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void addWatched(entry.id)}
+                    className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                  >
+                    {t("watchlist.add")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        ) : null}
+      </section>
+    </div>
+  );
 }
