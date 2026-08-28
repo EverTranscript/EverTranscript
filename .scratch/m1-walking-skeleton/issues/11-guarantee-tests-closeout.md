@@ -43,6 +43,11 @@ fixtures arrive as whole files in large blocks, live capture arrives as CoreAudi
 | Chinese, sentence 1 | 15 chars | **CER 100%** — decoded as English: "We'll discuss the third week's forecast" |
 | Chinese, overall | 36 chars | **CER 41.7%** |
 
+A third defect, found later while verifying the Client (ticket 10) and belonging with
+these rather than there: **segments consisting of a bare `.` reach the record.**
+`is_meaningless` only judges text above ten characters, so a punctuation-only decode is
+stored as though it were speech. Visible in `01a047ff` at 00:27, 00:50 and 00:55.
+
 The PRD's ASR-quality risk is **not** retired, but it is now diagnosed rather than guessed.
 The Chinese failure is not acoustic: the sentence the model transcribed in Chinese was
 character-perfect. It is (a) **language detection** — `previous_text` feeds the previous

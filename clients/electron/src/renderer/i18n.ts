@@ -12,6 +12,8 @@ const en = {
   "core.connecting": "Connecting to the Core…",
   "core.unreachable.title": "The Core isn't running",
   "core.unreachable.hint": "Start it with: evertranscript daemon",
+  "core.start.binaryMissing":
+    "EverTranscript could not find the Core to start it. Put `evertranscript` on your PATH, or set EVERTRANSCRIPT_BIN to it.",
   "core.retry": "Try again",
   "state.idle": "Idle",
   "state.recording": "Recording",
@@ -49,6 +51,8 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "core.connecting": "正在连接 Core…",
     "core.unreachable.title": "Core 未运行",
     "core.unreachable.hint": "请运行：evertranscript daemon",
+    "core.start.binaryMissing":
+      "EverTranscript 找不到 Core，无法启动它。请将 `evertranscript` 加入 PATH，或将 EVERTRANSCRIPT_BIN 指向它。",
     "core.retry": "重试",
     "state.idle": "空闲",
     "state.recording": "录制中",
@@ -85,4 +89,14 @@ function activeLocale(): string {
 
 export function t(key: MessageKey): string {
   return catalogs[activeLocale()]?.[key] ?? en[key];
+}
+
+/// Whether a string the Core sent is a catalog key rather than prose.
+///
+/// The Core reports a reason by key where it has one, so the sentence the
+/// Operator reads comes from here and not from whatever English the main
+/// process assembled. Everything else — an OS error, a socket path — is
+/// shown as it arrived.
+export function isMessageKey(value: string): value is MessageKey {
+  return Object.hasOwn(en, value);
 }

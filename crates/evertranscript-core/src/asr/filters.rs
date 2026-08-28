@@ -178,14 +178,22 @@ pub fn in_script(text: &str, script: ChineseScript) -> String {
 }
 
 /// Runs every filter, returning the text to store or `None` to discard it.
+///
+/// Judged in Simplified, stored in the Operator's script, and converted
+/// exactly once. The judging copy is thrown away rather than kept: going
+/// to Simplified and back is not the identity, because the return journey
+/// has to pick between variants that the outward one merged — 麵 and 麪
+/// both simplify to 面 — so a Traditional record built that way would be
+/// quietly altered, which ADR-0009 does not allow.
 pub fn clean(text: &str, script: ChineseScript) -> Option<String> {
-    // Settle the script before anything judges the text. The Chinese
-    // entries in `KNOWN_INVENTIONS` are written Simplified, so a
-    // Traditional decode of the same subtitle boilerplate used to walk
-    // straight past them — the filter was script-dependent by accident.
-    let normalized = hanconv::t2s(text);
-    let trimmed = normalized.trim();
-    if trimmed.is_empty() || is_meaningless(trimmed) || is_known_invention(trimmed) {
+    let trimmed = text.trim();
+    // A copy in one script, purely so the filters below are not
+    // script-dependent by accident: `KNOWN_INVENTIONS` writes its Chinese
+    // boilerplate Simplified, and a Traditional decode of the same subtitle
+    // spam used to walk straight past it.
+    let judged = hanconv::t2s(trimmed);
+    let judged = judged.as_str();
+    if trimmed.is_empty() || is_meaningless(judged) || is_known_invention(judged) {
         return None;
     }
 
@@ -195,7 +203,7 @@ pub fn clean(text: &str, script: ChineseScript) -> Option<String> {
     // decoder stuck on "we agreed" six times folds to a tidy "we agreed"
     // that scores as clean speech. The loop itself is the evidence that the
     // model was not reporting anything it heard, so it is what gets measured.
-    if repetition_ratio(trimmed) > MAX_REPETITION_RATIO {
+    if repetition_ratio(judged) > MAX_REPETITION_RATIO {
         return None;
     }
 
@@ -205,14 +213,14 @@ pub fn clean(text: &str, script: ChineseScript) -> Option<String> {
 
     // Re-check after collapsing: an invention repeated a few times only
     // looks like one once the loop is folded away.
-    if is_known_invention(&collapsed) {
+    if is_known_invention(&hanconv::t2s(&collapsed)) {
         return None;
     }
     let collapsed = collapsed.trim();
     if collapsed.is_empty() {
         return None;
     }
-    // Judged Simplified, stored as asked.
+    // The one conversion, applied to the text as it was decoded.
     Some(in_script(collapsed, script))
 }
 
@@ -269,6 +277,22 @@ mod tests {
             clean("发送邮件，理头发", ChineseScript::Traditional).as_deref(),
             Some("發送郵件，理頭髮")
         );
+    }
+
+    #[test]
+    fn traditional_input_survives_a_traditional_record_unaltered() {
+        // The record is immutable (ADR-0009), so text may be rewritten into
+        // the script the Operator asked for but must never be quietly
+        // altered on the way. Normalising to Simplified for judgement and
+        // then converting back did exactly that: 麵 became 麪 and 裡 became
+        // 裏, because the return journey has to pick a variant.
+        for original in ["一碗麵", "電腦裡面", "麵包與面子", "計畫在臺灣進行"] {
+            assert_eq!(
+                clean(original, ChineseScript::Traditional).as_deref(),
+                Some(original),
+                "Traditional text must reach a Traditional record untouched"
+            );
+        }
     }
 
     #[test]

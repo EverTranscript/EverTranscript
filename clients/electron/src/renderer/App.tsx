@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import type { Meeting } from "@protocol/Meeting";
 import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 
-import { t } from "./i18n";
+import { isMessageKey, t } from "./i18n";
 import { useCore, useTranscript } from "./useCore";
 
 export function App(): React.JSX.Element {
@@ -77,8 +77,12 @@ function CoreUnreachable({
         <p className="mt-2 text-sm text-[--color-ink-muted]">
           {t("core.unreachable.hint")}
         </p>
+        {/* The Core reports why by catalog key where it has one to give,
+            so the sentence the Operator reads is translated rather than
+            whatever English the main process happened to build. Anything
+            else — an OS error, a socket path — is shown as it came. */}
         <pre className="mt-4 overflow-x-auto rounded bg-[--color-surface-raised] p-3 text-left text-xs text-[--color-ink-muted]">
-          {message}
+          {isMessageKey(message) ? t(message) : message}
         </pre>
         <button
           type="button"

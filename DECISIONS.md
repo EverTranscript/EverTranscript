@@ -179,3 +179,19 @@ The same run settled two things the ticket records in full. The TCC prompt does 
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q12 — m1/11-guarantee-tests-closeout — gate-resolution
+
+**Question:** Q11 records `hanconv` as having "no dependencies of its own". A review of the diff found that untrue. Does the dependency still hold, now that its actual surface is known?
+
+**Options considered:** keep `hanconv` and state its real dependency surface / hand-write a conversion table to avoid the dependency entirely / drop the feature.
+
+**Chosen:** Keep it, and correct the record. `hanconv` pulls `ahash`, and under that `cfg-if`, `getrandom`, `libc`, `once_cell`, `zerocopy` and a `version_check` build dependency.
+
+**Decided-by:** agent
+
+**Justification:** The claim came from reading `cargo tree --depth 1`, which shows only the first level and hid everything below it — a measurement that answered a narrower question than the one being asked, which is the same mistake in miniature that Q3 made and Q9 corrected. The dependency still holds on its merits: what this product promises is that nothing leaves the machine (ADR-0002), and the added crates are hashing, RNG seeding and platform glue, with no HTTP, TLS or socket crate among them — the guarantee suite's zero-network test continues to pass. A hand-written table was the alternative and is worse: the conversion has to be phrase-aware to be correct at all, and a partial table improvised here is exactly the kind of untested claim this journal keeps recording the cost of. Q11's decision stands; only its parenthesis was wrong, and it stays as written because the journal is append-only.
+
+**Outcome:** applied
+
+**Ref:** (pending)

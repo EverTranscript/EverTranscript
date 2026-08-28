@@ -93,10 +93,16 @@ enum Command {
     Models(ModelsCommand),
     /// Follow live captions from the Meeting in progress.
     Captions,
-    /// Show this installation's settings.
+    /// Show this installation's settings, and change the ones that are
+    /// preferences rather than consent.
     Settings {
         #[arg(long)]
         json: bool,
+        /// Which Han script Mandarin is recorded in. Takes effect for the
+        /// next Meeting: the running one chose when it started, and a
+        /// transcript written two ways would be worse.
+        #[arg(long, value_parser = ["simplified", "traditional"])]
+        chinese_script: Option<String>,
     },
     /// Acknowledge the first-run briefing. Nothing is captured before this.
     Acknowledge,
@@ -225,7 +231,10 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Models(ModelsCommand::Status { json }) => run_models_status(json).await,
         Command::Models(ModelsCommand::Fetch { key }) => run_models_fetch(key).await,
         Command::Captions => run_captions().await,
-        Command::Settings { json } => run_settings(json).await,
+        Command::Settings {
+            json,
+            chinese_script,
+        } => run_settings(json, chinese_script).await,
         Command::Acknowledge => run_acknowledge().await,
         Command::AudioCheck { seconds } => run_audio_check(seconds).await,
         Command::Autostart { state } => run_autostart(&state).await,
@@ -257,14 +266,20 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
     // all of it silent" reads as a permission problem even when the
     // Operator simply had nothing playing — which is the same confusion the
     // Core's own refusal check used to make (DECISIONS Q9).
-    let mut heard_playback = false;
+    //
+    // `None` means this platform cannot say, and that is not the same as
+    // "nothing played": reading it as `false` would make every silent
+    // system leg on such a platform report the quiet-meeting wording, which
+    // is the confusion in the other direction.
+    let mut heard_playback: Option<bool> = None;
     if let Err(error) = &started {
         println!("Nothing can be recorded on this machine:\n  {error:#}");
     } else {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
         while std::time::Instant::now() < until {
-            heard_playback |=
-                evertranscript_core::audio::system::output_is_active().unwrap_or(false);
+            if let Some(active) = evertranscript_core::audio::system::output_is_active() {
+                heard_playback = Some(heard_playback.unwrap_or(false) || active);
+            }
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
         }
     }
@@ -295,6 +310,9 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
     }
 
     let mut usable = 0;
+    // A leg nothing was played into was never asked a question it could
+    // answer, so it is neither working nor broken.
+    let mut unchecked = 0;
     for (channel, name, (ms, peak)) in [
         (AudioChannel::Mic, "Microphone  ", mic),
         (AudioChannel::System, "System audio", system),
@@ -304,10 +322,11 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
         if ms > 0 && peak > 0.0 {
             usable += 1;
             println!("{name}  {ms} ms captured, peak level {peak:.3}");
-        } else if ms > 0 && channel == AudioChannel::System && !heard_playback {
+        } else if ms > 0 && channel == AudioChannel::System && heard_playback == Some(false) {
             // Nothing was played, so this leg was never asked a question it
             // could answer. Reporting "silent" here would send the Operator
             // to System Settings over nothing at all.
+            unchecked += 1;
             println!("{name}  {ms} ms captured, but nothing was playing");
             println!("              play some audio and run this again to check this leg");
         } else if ms > 0 {
@@ -321,17 +340,37 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
     }
 
     println!();
-    match usable {
-        2 => println!("Both legs work. Meetings will record in full."),
-        1 => println!("One leg works. Meetings will record, and be marked partial."),
-        _ => println!("No audio was captured. Meetings would record nothing."),
+    match (usable, unchecked) {
+        (2, _) => println!("Both legs work. Meetings will record in full."),
+        // Saying "one leg works" here would answer a question this run did
+        // not ask: nothing was played, so the other leg was never tested.
+        (1, 1) => println!(
+            "The microphone works. The other leg was not tested — play some audio and run this again."
+        ),
+        (1, _) => println!("One leg works. Meetings will record, and be marked partial."),
+        (0, 0) => println!("No audio was captured. Meetings would record nothing."),
+        _ => println!("Nothing could be tested — play some audio and run this again."),
     }
     Ok(())
 }
 
-async fn run_settings(json: bool) -> Result<()> {
+async fn run_settings(json: bool, chinese_script: Option<String>) -> Result<()> {
     let mut client = client().await?;
-    let settings: SettingsResponse = client.request("settings/get", None).await?;
+    let settings: SettingsResponse = match chinese_script {
+        Some(choice) => {
+            let script = match choice.as_str() {
+                "traditional" => ChineseScript::Traditional,
+                _ => ChineseScript::Simplified,
+            };
+            client
+                .request(
+                    "settings/set",
+                    Some(serde_json::json!({ "chineseScript": script })),
+                )
+                .await?
+        }
+        None => client.request("settings/get", None).await?,
+    };
     if json {
         println!("{}", serde_json::to_string_pretty(&settings)?);
         return Ok(());

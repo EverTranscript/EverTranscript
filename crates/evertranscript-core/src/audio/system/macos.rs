@@ -699,7 +699,13 @@ unsafe extern "C-unwind" fn io_proc(
 
     if let Some(frame) = frame {
         let duration_ms = frame.duration_ms();
-        let playing = context.output_is_running(duration_ms);
+        // Only while there is still something to decide. One real sample,
+        // or one reported reason, settles this permanently — and asking
+        // anyway would enumerate every audio process on the machine once a
+        // second for the rest of the meeting, which is the cost this
+        // function's own comment warns about.
+        let settled = context.heard_audio || context.reported_silence;
+        let playing = !settled && context.output_is_running(duration_ms);
         if let Some(reason) = note_level(context, &frame.samples, duration_ms, playing) {
             // Said once, and the leg stays attached. Ending it here would
             // make a wrong accusation unrecoverable for the rest of the

@@ -10,7 +10,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { app, BrowserWindow, ipcMain } from "electron";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import { CoreClient } from "./core-client.js";
 
@@ -38,18 +38,23 @@ let startFailure: string | null = null;
  * because knowing the name resolved to nothing is what lets this say so.
  * A checkout's own build is the last resort, for a Client run from source
  * before there is anything installed at all.
+ *
+ * Both platforms, because ADR-0025 makes Windows a gate rather than a
+ * follow-up: `PATH` is `;`-separated there and the file carries `.exe`, and
+ * searching by hand means neither is inherited from `spawn` any more.
  */
 function coreBinary(): string | null {
   const explicit = process.env.EVERTRANSCRIPT_BIN;
   if (explicit) return explicit;
-  for (const dir of (process.env.PATH ?? "").split(":")) {
+  const name = process.platform === "win32" ? "evertranscript.exe" : "evertranscript";
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
-    const candidate = join(dir, "evertranscript");
+    const candidate = join(dir, name);
     if (existsSync(candidate)) return candidate;
   }
   const repo = join(__dirname, "../../../..");
-  for (const built of ["target/release/evertranscript", "target/debug/evertranscript"]) {
-    const candidate = join(repo, built);
+  for (const profile of ["release", "debug"]) {
+    const candidate = join(repo, "target", profile, name);
     if (existsSync(candidate)) return candidate;
   }
   return null;
@@ -69,8 +74,10 @@ function startCore(): void {
   if (binary === null) {
     // Nothing was started, so a later attempt is not a duplicate.
     startAttempted = false;
-    startFailure =
-      "could not find the evertranscript binary — put it on PATH, or set EVERTRANSCRIPT_BIN to it";
+    // A catalog key, not a sentence: the renderer owns the wording, so
+    // the Operator reads it in their own language (ticket 10 — every
+    // user-facing string externalized).
+    startFailure = "core.start.binaryMissing";
     return;
   }
   try {
