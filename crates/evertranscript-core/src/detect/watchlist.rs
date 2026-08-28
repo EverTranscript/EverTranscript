@@ -366,6 +366,40 @@ mod tests {
     }
 
     #[test]
+    fn every_browser_in_the_matrix_attributes_its_helpers_to_itself() {
+        // ADR-0030's M2 test matrix is Chrome, Safari, Arc and Edge. Three
+        // of the four cannot be driven on this machine — Safari has no
+        // microphone grant and Arc and Edge are not installed — so the half
+        // that does not need them running is asserted here: a renderer
+        // belonging to any of them resolves to the browser, and the browser
+        // matches Browser Meetings. What is left for a live run is whether
+        // the platform reports them at all.
+        let list = Watchlist::shipped();
+        for (helper, browser) in [
+            ("com.google.Chrome.helper.Renderer", "com.google.Chrome"),
+            (
+                "com.microsoft.edgemac.helper.Renderer",
+                "com.microsoft.edgemac",
+            ),
+            (
+                "company.thebrowser.Browser.helper.Renderer",
+                "company.thebrowser.Browser",
+            ),
+            // Safari's content process is a separate bundle rather than a
+            // `.helper` suffix, so it is already responsible for itself and
+            // the rule must leave it alone.
+            ("com.apple.Safari", "com.apple.Safari"),
+        ] {
+            let responsible = responsible_app(helper);
+            assert_eq!(responsible, browser, "attributing {helper}");
+            assert!(
+                list.watches(&app(&responsible)),
+                "{browser} should match Browser Meetings"
+            );
+        }
+    }
+
+    #[test]
     fn a_chrome_renderer_holding_the_mic_is_chrome_in_a_meeting() {
         // The two pieces together, which is the fragile edge ADR-0030 named.
         let list = Watchlist::shipped();
