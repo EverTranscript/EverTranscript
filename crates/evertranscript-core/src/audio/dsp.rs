@@ -129,6 +129,15 @@ impl StreamResampler {
         })
     }
 
+    /// Input samples held back from earlier calls.
+    ///
+    /// Capture uses this to stamp a frame: the output covers audio starting
+    /// this many samples *before* the buffer just handed in, and a leg that
+    /// ignored the backlog would drift later by up to one chunk.
+    pub fn pending(&self) -> usize {
+        self.pending.len()
+    }
+
     /// Resamples what it can, holding the remainder for the next call so no
     /// sample is dropped at a buffer boundary.
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {

@@ -61,8 +61,8 @@ struct Encoder {
 }
 
 impl Encoder {
-    async fn spawn(path: &Path) -> Result<Self> {
-        let mut child = Command::new(ffmpeg_binary())
+    async fn spawn(path: &Path, ffmpeg: &str) -> Result<Self> {
+        let mut child = Command::new(ffmpeg)
             .args([
                 "-hide_banner",
                 "-loglevel",
@@ -93,10 +93,7 @@ impl Encoder {
             .kill_on_drop(true)
             .spawn()
             .with_context(|| {
-                format!(
-                    "starting {} — set {FFMPEG_ENV} if it is not on PATH",
-                    ffmpeg_binary()
-                )
+                format!("starting {ffmpeg} — set {FFMPEG_ENV} if it is not on PATH")
             })?;
         // Take stderr so a chatty encoder cannot fill its pipe and block.
         if let Some(stderr) = child.stderr.take() {
@@ -152,11 +149,23 @@ pub struct CheckpointSink {
     next_index: usize,
     total_samples: usize,
     disabled: bool,
+    /// Resolved once, here, rather than read from the environment at each
+    /// spawn. A process-global lookup is a shared mutable, and a test that
+    /// pointed it somewhere else would change what *other* recordings in the
+    /// same process encode with.
+    ffmpeg: String,
 }
 
 impl CheckpointSink {
     /// Creates a sink for `meeting_key` (the id8) under `audio_dir`.
     pub fn new(audio_dir: &Path, meeting_key: &str) -> Result<Self> {
+        Self::with_encoder(audio_dir, meeting_key, &ffmpeg_binary())
+    }
+
+    /// A sink that encodes with a named binary. Tests use this to stand up a
+    /// sink whose encoder cannot run, without touching the environment every
+    /// other recording reads.
+    pub fn with_encoder(audio_dir: &Path, meeting_key: &str, ffmpeg: &str) -> Result<Self> {
         let checkpoint_dir = checkpoint_dir(audio_dir, meeting_key);
         std::fs::create_dir_all(&checkpoint_dir)
             .with_context(|| format!("creating {}", checkpoint_dir.display()))?;
@@ -167,6 +176,7 @@ impl CheckpointSink {
             next_index: 0,
             total_samples: 0,
             disabled: false,
+            ffmpeg: ffmpeg.to_string(),
         })
     }
 
@@ -203,7 +213,7 @@ impl CheckpointSink {
     async fn write_inner(&mut self, block: &StereoBlock) -> Result<()> {
         if self.encoder.is_none() {
             let path = self.checkpoint_path(self.next_index);
-            self.encoder = Some(Encoder::spawn(&path).await?);
+            self.encoder = Some(Encoder::spawn(&path, &self.ffmpeg).await?);
             self.next_index += 1;
         }
         let encoder = self.encoder.as_mut().expect("just created");
@@ -219,19 +229,34 @@ impl CheckpointSink {
     }
 
     /// Seals the last checkpoint and merges everything into the final file.
+    ///
+    /// A checkpoint that will not seal is survivable on its own — the earlier
+    /// ones still merge into a recording missing only its tail, which is the
+    /// whole point of checkpointing. It stops being survivable when nothing
+    /// merges, and then the reason has to travel: a Meeting that captured
+    /// audio and produced no file must say why rather than looking like a
+    /// Meeting nobody spoke in.
     pub async fn finalize(mut self) -> Result<Option<PathBuf>> {
-        if let Some(encoder) = self.encoder.take() {
-            if let Err(error) = encoder.finish().await {
-                warn!(%error, "the last checkpoint did not seal cleanly");
-            }
+        let sealed = match self.encoder.take() {
+            Some(encoder) => encoder.finish().await.map(Some),
+            None => Ok(None),
+        };
+        if let Err(error) = &sealed {
+            warn!(%error, "the last checkpoint did not seal cleanly");
         }
-        let merged = merge_checkpoints(&self.checkpoint_dir, &self.final_path).await?;
-        if merged.is_some() {
-            if let Err(error) = std::fs::remove_dir_all(&self.checkpoint_dir) {
-                warn!(%error, "could not clean up the checkpoint directory");
+
+        let merged =
+            merge_checkpoints(&self.checkpoint_dir, &self.final_path, &self.ffmpeg).await?;
+        match (merged, sealed) {
+            (Some(path), _) => {
+                if let Err(error) = std::fs::remove_dir_all(&self.checkpoint_dir) {
+                    warn!(%error, "could not clean up the checkpoint directory");
+                }
+                Ok(Some(path))
             }
+            (None, Err(error)) => Err(error),
+            (None, Ok(_)) => Ok(None),
         }
-        Ok(merged)
     }
 }
 
@@ -247,7 +272,11 @@ impl CheckpointSink {
 }
 
 /// Concatenates a Meeting's checkpoints into one file without re-encoding.
-async fn merge_checkpoints(checkpoint_dir: &Path, destination: &Path) -> Result<Option<PathBuf>> {
+async fn merge_checkpoints(
+    checkpoint_dir: &Path,
+    destination: &Path,
+    ffmpeg: &str,
+) -> Result<Option<PathBuf>> {
     let mut chunks: Vec<PathBuf> = match std::fs::read_dir(checkpoint_dir) {
         Ok(entries) => entries
             .flatten()
@@ -285,7 +314,7 @@ async fn merge_checkpoints(checkpoint_dir: &Path, destination: &Path) -> Result<
         .join("\n");
     std::fs::write(&list_path, list)?;
 
-    let status = Command::new(ffmpeg_binary())
+    let status = Command::new(ffmpeg)
         .args([
             "-hide_banner",
             "-loglevel",
@@ -351,7 +380,7 @@ pub async fn recover_interrupted(audio_dir: &Path) -> Result<Vec<Recovery>> {
             })
             .unwrap_or(0);
 
-        match merge_checkpoints(&entry.path(), &destination).await {
+        match merge_checkpoints(&entry.path(), &destination, &ffmpeg_binary()).await {
             Ok(Some(path)) => {
                 let _ = std::fs::remove_dir_all(entry.path());
                 info!(
@@ -466,25 +495,13 @@ mod tests {
         // The Meeting must keep going when ffmpeg cannot run: the record is
         // the transcript, and audio is the bonus (ADR-0019).
         let dir = tempfile::tempdir().expect("tempdir");
-        temp_env_ffmpeg("definitely-not-a-real-binary-name");
-
-        let mut sink = CheckpointSink::new(dir.path(), "abcd1234").expect("sink");
+        let mut sink =
+            CheckpointSink::with_encoder(dir.path(), "abcd1234", "definitely-not-a-real-binary")
+                .expect("sink");
         sink.write(&tone(50)).await.expect("write must not fail");
         assert!(sink.is_disabled(), "the sink should disable itself");
         sink.write(&tone(50))
             .await
             .expect("further writes are no-ops");
-
-        restore_env_ffmpeg();
-    }
-
-    // The env var is process-global; these two helpers keep the one test
-    // that needs it from leaking into the others.
-    fn temp_env_ffmpeg(value: &str) {
-        unsafe { std::env::set_var(FFMPEG_ENV, value) };
-    }
-
-    fn restore_env_ffmpeg() {
-        unsafe { std::env::remove_var(FFMPEG_ENV) };
     }
 }

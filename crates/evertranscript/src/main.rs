@@ -97,6 +97,16 @@ enum Command {
     },
     /// Acknowledge the first-run briefing. Nothing is captured before this.
     Acknowledge,
+    /// Check that this machine can actually record, by recording.
+    ///
+    /// Runs without the Core, so it works before anything is installed.
+    AudioCheck {
+        /// Seconds to listen for. Longer is more conclusive: a refused
+        /// system-audio permission looks exactly like nobody talking until
+        /// enough audio has been played to prove otherwise.
+        #[arg(long, default_value_t = 20)]
+        seconds: u64,
+    },
     /// Turn launch-at-login on or off. Registration only: a running Core is
     /// left alone, and Quit is what stops it.
     Autostart {
@@ -163,8 +173,89 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Captions => run_captions().await,
         Command::Settings { json } => run_settings(json).await,
         Command::Acknowledge => run_acknowledge().await,
+        Command::AudioCheck { seconds } => run_audio_check(seconds).await,
         Command::Autostart { state } => run_autostart(&state).await,
     }
+}
+
+/// Captures for a few seconds and reports what each leg actually produced.
+///
+/// The preflight deliberately *records* instead of asking the OS whether it
+/// may. On macOS the two answers differ: a tap is granted whether or not the
+/// Operator has allowed audio recording, and a refused one delivers silence
+/// forever without ever failing. Asking would report a working system-audio
+/// leg on a machine that will record nothing — so this listens instead, and
+/// reports what arrived.
+async fn run_audio_check(seconds: u64) -> Result<()> {
+    use evertranscript_core::audio::live::LiveSource;
+    use evertranscript_core::audio::AudioSource;
+    use evertranscript_core::audio::CaptureClock;
+    use evertranscript_core::audio::CaptureEvent;
+    use evertranscript_protocol::AudioChannel;
+
+    println!("Listening for {seconds}s. Play some audio — a meeting, a video, anything.\n");
+    let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(4096);
+    let mut source = LiveSource::new();
+    let started = source.start(CaptureClock::start(), events_tx);
+
+    let mut unavailable: Vec<(AudioChannel, String)> = Vec::new();
+    if let Err(error) = &started {
+        println!("Nothing can be recorded on this machine:\n  {error:#}");
+    } else {
+        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+    }
+    source.stop();
+
+    // Two legs, so two counters; AudioChannel is a protocol type and not
+    // worth making map-keyable for this.
+    let (mut mic, mut system) = ((0u64, 0.0f32), (0u64, 0.0f32));
+    while let Ok(event) = events_rx.try_recv() {
+        match event {
+            CaptureEvent::Frame(frame) => {
+                let peak = frame
+                    .samples
+                    .iter()
+                    .fold(0.0f32, |max, sample| max.max(sample.abs()));
+                let entry = match frame.channel {
+                    AudioChannel::Mic => &mut mic,
+                    AudioChannel::System => &mut system,
+                };
+                entry.0 += frame.duration_ms();
+                entry.1 = entry.1.max(peak);
+            }
+            CaptureEvent::Unavailable { channel, reason } => unavailable.push((channel, reason)),
+            CaptureEvent::StreamFailed { channel, error } => unavailable.push((channel, error)),
+            CaptureEvent::DeviceChanged { .. } => {}
+        }
+    }
+
+    let mut usable = 0;
+    for (channel, name, (ms, peak)) in [
+        (AudioChannel::Mic, "Microphone  ", mic),
+        (AudioChannel::System, "System audio", system),
+    ] {
+        // Frames whose samples are all zero are the failure this whole check
+        // exists to catch, so they do not count as a working leg.
+        if ms > 0 && peak > 0.0 {
+            usable += 1;
+            println!("{name}  {ms} ms captured, peak level {peak:.3}");
+        } else if ms > 0 {
+            println!("{name}  {ms} ms captured, but all of it silent");
+        } else {
+            println!("{name}  nothing captured");
+        }
+        if let Some((_, reason)) = unavailable.iter().find(|(c, _)| *c == channel) {
+            println!("              {reason}");
+        }
+    }
+
+    println!();
+    match usable {
+        2 => println!("Both legs work. Meetings will record in full."),
+        1 => println!("One leg works. Meetings will record, and be marked partial."),
+        _ => println!("No audio was captured. Meetings would record nothing."),
+    }
+    Ok(())
 }
 
 async fn run_settings(json: bool) -> Result<()> {

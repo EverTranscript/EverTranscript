@@ -30,6 +30,13 @@ tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-core-audio.workspace = true
+objc2-core-audio-types.workspace = true
+objc2-core-foundation.workspace = true
+objc2-foundation.workspace = true
+
 [dev-dependencies]
 evertranscript-fixtures = { path = "../evertranscript-fixtures" }
 hound = "3"

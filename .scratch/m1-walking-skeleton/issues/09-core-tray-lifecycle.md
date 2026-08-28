@@ -17,6 +17,9 @@
 - [x] The acknowledgment gates all capture, enforced in the Core so no Client can route around it; verified live
       (a fresh install refuses to record and says how to fix it). `evertranscript acknowledge` is the M1
       stand-in for the Briefing.
-- [ ] **Not done.** Needs objc2 bindings to AVCaptureDevice authorization status; cpal currently triggers the
-      system prompt implicitly on first capture.
+- [x] `evertranscript audio-check` is the preflight: it runs without the Core, listens on both legs, and reports what
+      each actually produced. It deliberately *records* rather than asking the OS whether it may — on macOS the two
+      answers differ, since a tap is granted whether or not audio recording is allowed and a refused one is silent
+      but successful. Asking would report a working system-audio leg on a machine that will record nothing.
+      Requesting permission is still implicit: capture triggers the prompt, and no explicit request API is called.
 - [~] Autostart is implemented for both platforms; the tray is implemented for neither.

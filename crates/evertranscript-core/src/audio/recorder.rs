@@ -137,16 +137,36 @@ async fn run(
         }
     }
 
+    // Stopping is two steps, not one. Breaking out of the loop the moment
+    // the Operator says stop would abandon whatever capture has already
+    // handed over and not yet been written — the last fraction of a second
+    // of the meeting, which is to say the end of somebody's sentence. So a
+    // stop first silences the source, then consumes what is already in the
+    // queue, and only then finalizes.
+    let mut draining = false;
     loop {
-        let event = tokio::select! {
-            _ = stop.cancelled() => break,
-            event = events.recv() => match event {
-                Some(event) => event,
-                // Every source ended. The Meeting does not: it stops when
-                // the Operator (or Auto-Record) says so, not when hardware
-                // runs out.
-                None => break,
-            },
+        let event = if draining {
+            match events.try_recv() {
+                Ok(event) => event,
+                // Nothing left, and the source is stopped, so nothing more
+                // is coming.
+                Err(_) => break,
+            }
+        } else {
+            tokio::select! {
+                _ = stop.cancelled() => {
+                    source.stop();
+                    draining = true;
+                    continue;
+                }
+                event = events.recv() => match event {
+                    Some(event) => event,
+                    // Every source ended. The Meeting does not: it stops when
+                    // the Operator (or Auto-Record) says so, not when hardware
+                    // runs out.
+                    None => break,
+                },
+            }
         };
 
         match policy.decide(&event) {
@@ -201,9 +221,18 @@ async fn run(
         Ok(path) => path,
         Err(error) => {
             warn!(meeting = meeting_key, %error, "could not finalize the audio");
+            // Losing the audio is a degraded Meeting, not a failed one: the
+            // record is the transcript (ADR-0019). But it has to be *said*,
+            // or the Meeting is indistinguishable from one nobody spoke in.
+            degraded.push(format!("audio file: {error:#}"));
             None
         }
     };
+    if audio_path.is_none() && seconds > 0.0 && degraded.is_empty() {
+        degraded.push(format!(
+            "audio file: {seconds:.1}s was captured but no file was produced"
+        ));
+    }
 
     let _ = finished.send(RecordingOutcome {
         audio_path,
@@ -256,12 +285,55 @@ mod tests {
         delivered.await.expect("the script should finish");
         let outcome = recorder.finish().await;
 
-        let path = outcome.audio_path.expect("an audio file");
+        let path = outcome
+            .audio_path
+            .unwrap_or_else(|| panic!("an audio file (degraded {:?})", outcome.degraded));
         assert!(path.exists());
         assert!(outcome.degraded.is_empty(), "a clean run is not degraded");
         assert!(
             outcome.seconds > 0.3,
             "roughly the scripted length, got {}",
+            outcome.seconds
+        );
+    }
+
+    #[tokio::test]
+    async fn stopping_keeps_the_audio_that_capture_already_handed_over() {
+        // The end of a meeting is where people say what they agreed to. A
+        // stop that breaks out of the loop with frames still queued drops
+        // exactly that, and does it silently — the file is simply shorter
+        // than the meeting was. This scripts far more audio than the
+        // recorder can consume promptly, so anything abandoned shows up.
+        if skip_without_ffmpeg().await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut script = Vec::new();
+        for _ in 0..50 {
+            script.push(Step::audio(AudioChannel::Mic, 100, 0.4));
+            script.push(Step::audio(AudioChannel::System, 100, -0.4));
+        }
+        let (source, delivered) = FixtureSource::with_completion(script);
+        let recorder = Recorder::start_without_transcription(
+            Box::new(source),
+            dir.path().to_path_buf(),
+            "abcd1234".to_string(),
+        )
+        .expect("start");
+
+        // Stop the instant the script is delivered, which is the worst case:
+        // the queue is as full as it will ever be.
+        delivered.await.expect("the script should finish");
+        let outcome = recorder.finish().await;
+
+        assert!(
+            outcome.audio_path.is_some(),
+            "an audio file (degraded {:?})",
+            outcome.degraded
+        );
+        assert!(
+            outcome.seconds > 4.5,
+            "5s was captured, so roughly 5s must reach the file — got {}",
             outcome.seconds
         );
     }
@@ -288,14 +360,14 @@ mod tests {
         .expect("start");
 
         delivered.await.expect("the script should finish");
-        // The recorder consumes from a channel, so the last event may still
-        // be in flight for an instant after the sender finishes.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let outcome = recorder.finish().await;
 
         assert!(
             outcome.audio_path.is_some(),
-            "the microphone recording must survive losing system audio"
+            "the microphone recording must survive losing system audio \
+             (captured {}s, degraded {:?})",
+            outcome.seconds,
+            outcome.degraded
         );
         assert_eq!(outcome.degraded.len(), 1);
         assert!(outcome.degraded[0].contains("system audio"));
@@ -327,7 +399,6 @@ mod tests {
         .expect("start");
 
         delivered.await.expect("the script should finish");
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         let outcome = recorder.finish().await;
 
         assert!(outcome.audio_path.is_some(), "one file, not two");

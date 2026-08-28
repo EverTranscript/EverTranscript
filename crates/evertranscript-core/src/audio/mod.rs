@@ -16,10 +16,12 @@
 pub mod dsp;
 pub mod fixture;
 pub mod joiner;
+pub mod leg;
 pub mod live;
 pub mod recorder;
 pub mod sink;
 pub mod supervisor;
+pub mod system;
 
 use evertranscript_protocol::AudioChannel;
 

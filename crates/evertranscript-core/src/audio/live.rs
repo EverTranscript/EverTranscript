@@ -1,11 +1,15 @@
 //! Live capture from real hardware.
 //!
-//! The microphone leg is cpal on both platforms — the same binding anarlog
-//! and Meetily ship. The system-audio leg is where the platforms diverge
-//! (CoreAudio process taps on macOS, WASAPI loopback on Windows) and is not
-//! implemented yet; it reports itself unavailable, which the churn policy
-//! already handles as "record the microphone and say the audio is partial".
-//! That degradation is tested, so the gap is visible rather than silent.
+//! Two independent legs. The microphone is cpal on both platforms. System
+//! audio — the other participants — is a CoreAudio process tap on macOS and
+//! WASAPI loopback on Windows, both behind [`super::system`].
+//!
+//! The legs are deliberately not tied together. A machine with no output
+//! device, an Operator who has not granted audio-capture permission, or a
+//! macOS older than 14.4 all produce a Meeting that records the microphone
+//! and says its audio is partial. The reverse holds too: a missing
+//! microphone does not stop system audio. Losing half a conversation is bad;
+//! losing the meeting because half was unavailable would be worse.
 
 use anyhow::Context;
 use anyhow::Result;
@@ -18,16 +22,17 @@ use tracing::debug;
 use tracing::info;
 use tracing::warn;
 
-use super::AudioFrame;
+use super::leg::LegEncoder;
+use super::system;
 use super::AudioSource;
 use super::CaptureClock;
 use super::CaptureEvent;
-use super::CaptureOffset;
-use super::SAMPLE_RATE;
 
-/// Captures the default microphone, and reports system audio as unavailable.
+/// Captures the microphone and, where the platform allows it, system audio.
 pub struct LiveSource {
     stream: Option<Box<dyn StreamHandle>>,
+    system: Option<Box<dyn system::SystemCapture>>,
+    description: String,
 }
 
 /// cpal streams are not `Send`, so they live on their own thread and are
@@ -58,7 +63,11 @@ impl Default for LiveSource {
 
 impl LiveSource {
     pub fn new() -> Self {
-        Self { stream: None }
+        Self {
+            stream: None,
+            system: None,
+            description: "live".to_string(),
+        }
     }
 
     /// True when a default input device exists. Used to decide whether live
@@ -66,30 +75,23 @@ impl LiveSource {
     pub fn microphone_available() -> bool {
         cpal::default_host().default_input_device().is_some()
     }
-}
 
-impl AudioSource for LiveSource {
-    fn start(&mut self, clock: CaptureClock, events: mpsc::Sender<CaptureEvent>) -> Result<()> {
-        // System audio: the platform work (process taps / WASAPI loopback)
-        // is not done. Saying so once is better than pretending to capture
-        // silence — the joiner stops waiting on the leg and the Meeting is
-        // marked partial.
-        let unavailable = events.try_send(CaptureEvent::Unavailable {
-            channel: AudioChannel::System,
-            reason: system_audio_reason().to_string(),
-        });
-        if unavailable.is_err() {
-            debug!("nobody is listening for capture events yet");
-        }
-
+    /// Starts the microphone leg, returning the device's name.
+    fn start_microphone(
+        &mut self,
+        clock: CaptureClock,
+        events: mpsc::Sender<CaptureEvent>,
+    ) -> Result<String> {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
             .context("no default input device — is a microphone connected?")?;
         let name = device.name().unwrap_or_else(|_| "unknown".to_string());
+        // A device can exist and still be unusable: a machine with no built-in
+        // microphone reports one and then refuses to describe it.
         let config = device
             .default_input_config()
-            .context("the input device has no usable configuration")?;
+            .with_context(|| format!("the input device \"{name}\" has no usable configuration"))?;
         info!(device = %name, rate = config.sample_rate().0, channels = config.channels(), "microphone capture starting");
 
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -110,6 +112,88 @@ impl AudioSource for LiveSource {
             stop,
             handle: Some(handle),
         }));
+        Ok(name)
+    }
+
+    /// Whether system audio can be captured on this machine, and why not if
+    /// it cannot. Asks the platform rather than guessing from the OS version,
+    /// because the usual answer is an ungranted permission.
+    pub fn system_audio_available() -> std::result::Result<(), String> {
+        #[cfg(target_os = "macos")]
+        {
+            system::macos_available()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            system::windows_available()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            Err("system-audio capture is not implemented on this platform".to_string())
+        }
+    }
+}
+
+impl AudioSource for LiveSource {
+    fn start(&mut self, clock: CaptureClock, events: mpsc::Sender<CaptureEvent>) -> Result<()> {
+        // Both legs are attempted, and neither can veto the other. Starting
+        // system audio first only fixes the order of the log lines; what
+        // matters is that a failure below records the leg as unavailable and
+        // keeps going.
+        let system = match system::start(clock.clone(), events.clone()) {
+            Ok(capture) => {
+                info!(via = %capture.describe(), "system audio joined the recording");
+                self.system = Some(capture);
+                None
+            }
+            Err(error) => {
+                warn!(%error, "recording without system audio");
+                Some(format!("{error:#}"))
+            }
+        };
+
+        let microphone = match self.start_microphone(clock, events.clone()) {
+            Ok(name) => {
+                self.description = match &self.system {
+                    Some(capture) => format!("live ({name} + {})", capture.describe()),
+                    None => format!("live ({name}, microphone only)"),
+                };
+                None
+            }
+            Err(error) => {
+                warn!(%error, "recording without a microphone");
+                self.description = match &self.system {
+                    Some(capture) => format!("live ({}, system audio only)", capture.describe()),
+                    None => "live (nothing available)".to_string(),
+                };
+                Some(format!("{error:#}"))
+            }
+        };
+
+        // Nothing to record is the one case that is genuinely an error: a
+        // Meeting with no audio at all is not a degraded recording, it is
+        // the absence of one.
+        if let (Some(system), Some(microphone)) = (&system, &microphone) {
+            anyhow::bail!("no audio can be captured — microphone: {microphone}; system: {system}");
+        }
+
+        // Each missing leg is announced exactly once. The joiner waits on
+        // legs it has not been told about, so an unannounced leg would stall
+        // the recording; and retrying something the platform has refused is
+        // noise rather than resilience.
+        for (channel, reason) in [
+            (AudioChannel::System, system),
+            (AudioChannel::Mic, microphone),
+        ] {
+            if let Some(reason) = reason {
+                if events
+                    .try_send(CaptureEvent::Unavailable { channel, reason })
+                    .is_err()
+                {
+                    debug!("nobody is listening for capture events yet");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -117,25 +201,13 @@ impl AudioSource for LiveSource {
         if let Some(mut stream) = self.stream.take() {
             stream.stop();
         }
+        if let Some(mut capture) = self.system.take() {
+            capture.stop();
+        }
     }
 
     fn describe(&self) -> String {
-        "live (microphone)".to_string()
-    }
-}
-
-fn system_audio_reason() -> &'static str {
-    #[cfg(target_os = "macos")]
-    {
-        "system-audio capture (CoreAudio process taps) is not implemented yet"
-    }
-    #[cfg(target_os = "windows")]
-    {
-        "system-audio capture (WASAPI loopback) is not implemented yet"
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    {
-        "system-audio capture is not available on this platform"
+        self.description.clone()
     }
 }
 
@@ -146,44 +218,23 @@ fn run_microphone(
     events: mpsc::Sender<CaptureEvent>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<()> {
-    let input_channels = config.channels() as usize;
-    let input_rate = config.sample_rate().0;
+    let mut encoder = LegEncoder::new(
+        AudioChannel::Mic,
+        config.channels() as usize,
+        config.sample_rate().0,
+        clock,
+    )?;
     let error_events = events.clone();
 
     let data_callback = move |data: &[f32], _: &cpal::InputCallbackInfo| {
-        // Downmix to mono and resample to the capture rate. Naive
-        // nearest-sample resampling is a placeholder: ticket 08 replaces it
-        // with the persistent sinc resampler the DSP work needs.
-        let frames = data.len() / input_channels.max(1);
-        let mut mono = Vec::with_capacity(frames);
-        for frame in data.chunks_exact(input_channels.max(1)) {
-            mono.push(frame.iter().sum::<f32>() / input_channels as f32);
-        }
-        let samples = if input_rate == SAMPLE_RATE {
-            mono
-        } else {
-            resample_nearest(&mono, input_rate, SAMPLE_RATE)
-        };
-        if samples.is_empty() {
+        let Some(frame) = encoder.encode(data) else {
             return;
-        }
-
-        // The frame is stamped for where it *starts*, which is now minus its
-        // own duration: the samples in hand were captured before the
-        // callback ran, and stamping them at "now" would push the whole
-        // timeline late by one buffer.
-        let duration_ms = samples.len() as u64 * 1000 / SAMPLE_RATE as u64;
-        let offset = CaptureOffset(clock.now().millis().saturating_sub(duration_ms));
-
+        };
         // Never block the audio thread: a full queue means the consumer is
         // behind, and dropping a frame is far better than glitching capture.
         // The joiner turns the dropped span into silence, so the timeline
         // stays honest.
-        let _ = events.try_send(CaptureEvent::Frame(AudioFrame::new(
-            AudioChannel::Mic,
-            offset,
-            samples,
-        )));
+        let _ = events.try_send(CaptureEvent::Frame(frame));
     };
 
     let error_callback = move |error: cpal::StreamError| {
@@ -213,63 +264,104 @@ fn run_microphone(
     Ok(())
 }
 
-/// Nearest-sample resampling. Adequate to get bytes flowing; ticket 08
-/// replaces it with a persistent sinc resampler (per-chunk construction is a
-/// known source of amplitude drift).
-fn resample_nearest(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
-    if input.is_empty() || from_rate == 0 {
-        return Vec::new();
-    }
-    let out_len = (input.len() as u64 * to_rate as u64 / from_rate as u64) as usize;
-    (0..out_len)
-        .map(|index| {
-            let source = index as u64 * from_rate as u64 / to_rate as u64;
-            input[(source as usize).min(input.len() - 1)]
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn resampling_preserves_length_proportionally() {
-        let input = vec![0.5; 480]; // 10 ms at 48 kHz
-        let out = resample_nearest(&input, 48_000, 16_000);
-        assert_eq!(out.len(), 160, "10 ms at 16 kHz");
-        assert!(out.iter().all(|sample| *sample == 0.5));
-
-        let up = resample_nearest(&input, 24_000, 48_000);
-        assert_eq!(up.len(), 960);
-    }
-
-    #[test]
-    fn resampling_an_empty_buffer_is_not_a_panic() {
-        assert!(resample_nearest(&[], 48_000, 16_000).is_empty());
-        assert!(resample_nearest(&[1.0], 0, 16_000).is_empty());
+    fn asking_about_system_audio_answers_rather_than_panicking() {
+        // Whatever this machine's answer is, it must be a stated one: the
+        // preflight shows it to the Operator, and "unknown" is not a thing
+        // they can act on.
+        match LiveSource::system_audio_available() {
+            Ok(()) => {}
+            Err(reason) => assert!(
+                !reason.is_empty(),
+                "an unavailable leg must say why it is unavailable"
+            ),
+        }
     }
 
     #[tokio::test]
-    async fn a_live_source_reports_system_audio_as_unavailable() {
-        // The microphone half needs hardware and a TCC grant, so this test
-        // covers what is deterministic: the system leg announces itself
-        // unavailable, which is what keeps the recording from stalling on a
-        // leg that will never deliver.
+    async fn a_leg_that_cannot_start_is_announced_rather_than_left_silent() {
+        // The joiner waits on legs it has not been told about, so whichever
+        // leg is missing on this machine must be named before any frame
+        // arrives — otherwise the recording stalls on audio that never comes.
         let (events_tx, mut events_rx) = mpsc::channel(8);
         let mut source = LiveSource::new();
-        // Starting may fail without a microphone; the system-audio event is
-        // sent first either way.
-        let _ = source.start(CaptureClock::start(), events_tx);
+        let started = source.start(CaptureClock::start(), events_tx);
         source.stop();
 
-        let first = events_rx.try_recv().expect("an event");
-        match first {
-            CaptureEvent::Unavailable { channel, reason } => {
-                assert_eq!(channel, AudioChannel::System);
-                assert!(reason.contains("not implemented") || reason.contains("not available"));
+        let mut announced = Vec::new();
+        while let Ok(event) = events_rx.try_recv() {
+            if let CaptureEvent::Unavailable { channel, reason } = event {
+                assert!(!reason.is_empty(), "an unavailable leg must say why");
+                announced.push(channel);
             }
-            other => panic!("expected the system leg to report unavailable, got {other:?}"),
         }
+
+        match started {
+            Ok(()) => assert!(
+                announced.len() < 2,
+                "a source that started cannot have lost both legs"
+            ),
+            // Both legs down is the one honest failure: a Meeting with no
+            // audio at all is not a degraded recording, it is no recording.
+            Err(error) => {
+                let error = format!("{error:#}");
+                assert!(
+                    error.contains("microphone") && error.contains("system"),
+                    "failing to record must name both legs, got {error}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn one_leg_failing_does_not_take_the_other_down_with_it() {
+        // The whole point of independent legs. This machine has exactly one
+        // working leg, which makes it the case worth asserting: a recording
+        // still starts, and the missing half is reported rather than fatal.
+        let microphone = {
+            let (tx, _rx) = mpsc::channel(4);
+            let mut probe = LiveSource::new();
+            let started = probe.start_microphone(CaptureClock::start(), tx).is_ok();
+            probe.stop();
+            started
+        };
+        let system = LiveSource::system_audio_available().is_ok();
+        if !(microphone ^ system) {
+            // Both legs up or both down: nothing to prove here.
+            return;
+        }
+
+        let (events_tx, mut events_rx) = mpsc::channel(64);
+        let mut source = LiveSource::new();
+        source
+            .start(CaptureClock::start(), events_tx)
+            .expect("one working leg is enough to record");
+        let description = source.describe();
+        source.stop();
+
+        let mut unavailable = Vec::new();
+        while let Ok(event) = events_rx.try_recv() {
+            if let CaptureEvent::Unavailable { channel, .. } = event {
+                unavailable.push(channel);
+            }
+        }
+        let missing = if microphone {
+            AudioChannel::System
+        } else {
+            AudioChannel::Mic
+        };
+        assert_eq!(
+            unavailable,
+            vec![missing],
+            "exactly the missing leg should be reported unavailable"
+        );
+        assert!(
+            description.contains("only"),
+            "a half-deaf recording should say so, got {description:?}"
+        );
     }
 }

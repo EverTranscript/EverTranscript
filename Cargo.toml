@@ -57,6 +57,29 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 
+# System-audio capture on macOS: CoreAudio process taps (14.4+). Deliberately
+# *not* ScreenCaptureKit — that route would demand the Screen Recording
+# permission for audio we can take with the narrower one (ADR-0027), and the
+# guarantee suite fails the build if ScreenCaptureKit ever gets linked.
+[workspace.dependencies.objc2]
+version = "0.6"
+
+[workspace.dependencies.objc2-foundation]
+version = "0.3"
+features = ["NSString", "NSArray", "NSValue", "NSUUID", "NSDictionary"]
+
+[workspace.dependencies.objc2-core-audio]
+version = "0.3"
+features = ["objc2", "objc2-foundation", "objc2-core-audio-types", "AudioHardware"]
+
+[workspace.dependencies.objc2-core-audio-types]
+version = "0.3"
+features = ["CoreAudioBaseTypes"]
+
+[workspace.dependencies.objc2-core-foundation]
+version = "0.3"
+features = ["CFDictionary", "CFString", "CFNumber", "CFBase"]
+
 [profile.release]
 lto = "thin"
 strip = true
