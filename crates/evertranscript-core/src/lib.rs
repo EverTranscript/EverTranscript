@@ -88,16 +88,51 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
     let server_shutdown = shutdown.clone();
     let server_task = tokio::spawn(server.run(events_rx, server_shutdown));
 
+    // Meeting Detection runs beside the server, never inside it: a policy
+    // deciding what to record must not be able to make a Client's request
+    // wait, and a Core with no detector must still serve (ADR-0026).
+    let detection_task = detect_source().map(|source| {
+        tokio::spawn(detect::driver::run(
+            Arc::clone(&core),
+            source,
+            Box::new(detect::notify::SilentNotifier),
+            shutdown.clone(),
+        ))
+    });
+
     let serving = tokio::spawn(async move {
         transport::serve(listener, events_tx, shutdown).await;
         let _ = server_task.await;
         let _ = mirror_task.await;
+        if let Some(detection) = detection_task {
+            let _ = detection.await;
+        }
     });
 
     Ok(Daemon {
         core: Arc::clone(&core),
         serving,
     })
+}
+
+/// This platform's live detector, when it has one.
+///
+/// `None` is a supported answer: a Core on a platform without detection
+/// serves normally and records when asked, exactly as M1 did. Auto-Record is
+/// the thing that is missing, not the product.
+fn detect_source() -> Option<Box<dyn detect::DetectionSource>> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(Box::new(detect::macos::MacOsDetectionSource::new()))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        Some(Box::new(detect::windows::WindowsDetectionSource::new()))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        None
+    }
 }
 
 /// Brings the Core up and blocks until it stops.

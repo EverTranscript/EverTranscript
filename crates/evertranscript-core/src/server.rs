@@ -354,6 +354,16 @@ impl Core {
         self.watchlist().await
     }
 
+    /// The Watchlist as Meeting Detection needs it.
+    pub async fn watchlist_for_detection(&self) -> Result<crate::detect::watchlist::Watchlist> {
+        self.store.read(crate::store::watchlist::load).await
+    }
+
+    /// Whether a Meeting is being recorded right now.
+    pub async fn is_recording(&self) -> bool {
+        self.recorder.lock().await.is_some()
+    }
+
     /// True once the Operator has acknowledged the Briefing here.
     pub async fn briefing_acknowledged(&self) -> bool {
         self.settings.lock().await.briefing_acknowledged

@@ -117,13 +117,22 @@ impl Timeline {
         assert!(every_ms > 0, "a granularity of zero would never advance");
         let mut out: Vec<DetectionEvent> = Vec::new();
         let mut clock = DetectionInstant::ZERO;
-        for event in self.events {
+        for event in self.events.clone() {
             while clock.plus_millis(every_ms) <= event.at() {
                 clock = clock.plus_millis(every_ms);
                 out.push(DetectionEvent::Tick { at: clock });
             }
             clock = event.at();
             out.push(event);
+        }
+        // Fill the tail too. `wait(30_000)` at the end of a timeline reads
+        // as "and then half a minute passed", and a fragmented form that
+        // stopped at the last scripted event would silently drop it —
+        // leaving a continuity window that never expires because nothing
+        // ever asked again.
+        while clock.plus_millis(every_ms) <= self.now {
+            clock = clock.plus_millis(every_ms);
+            out.push(DetectionEvent::Tick { at: clock });
         }
         out
     }

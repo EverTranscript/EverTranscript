@@ -1,0 +1,151 @@
+//! Auto-Record, end to end through a real Core.
+//!
+//! The policy has its own tests and they are pure. This is the other half:
+//! that a scripted timeline actually produces a Meeting in the record, that
+//! the Operator's Stop wins over a live detector, and that the switch turns
+//! the whole thing off — through the Core, the store, and the driver, with
+//! nothing mocked but the two seams that exist to be mocked.
+
+#![cfg(unix)]
+
+use std::sync::Arc;
+
+use evertranscript_core::Core;
+use evertranscript_core::audio::fixture::FixtureSource;
+use evertranscript_core::audio::fixture::Step;
+use evertranscript_core::detect::DetectionSource;
+use evertranscript_core::detect::fixture::FixtureDetectionSource;
+use evertranscript_core::detect::fixture::Timeline;
+use evertranscript_core::detect::notify::SilentNotifier;
+use evertranscript_protocol::AudioChannel;
+use evertranscript_protocol::SettingsSetParams;
+use tokio_util::sync::CancellationToken;
+
+/// A Core whose capture is a script and whose detection is a timeline.
+async fn core_watching(
+    timeline: Vec<evertranscript_core::detect::DetectionEvent>,
+) -> (Arc<Core>, tempfile::TempDir, CancellationToken) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+    core.set_source_factory(Arc::new(|| {
+        Box::new(FixtureSource::new(vec![
+            Step::audio(AudioChannel::Mic, 400, 0.3),
+            Step::audio(AudioChannel::System, 400, -0.3),
+        ]))
+    }))
+    .await;
+
+    let shutdown = CancellationToken::new();
+    let source: Box<dyn DetectionSource> = Box::new(FixtureDetectionSource::new(timeline));
+    tokio::spawn(evertranscript_core::detect::driver::run(
+        Arc::clone(&core),
+        source,
+        Box::new(SilentNotifier),
+        shutdown.clone(),
+    ));
+    (core, dir, shutdown)
+}
+
+async fn settle() {
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+}
+
+#[tokio::test]
+async fn a_watchlist_app_taking_the_microphone_records_a_meeting() {
+    // The headline promise, made executable: nobody pressed Record.
+    let (core, _dir, shutdown) = core_watching(
+        Timeline::new()
+            .mic_held("us.zoom.xos")
+            .wait(600_000)
+            .mic_released("us.zoom.xos")
+            .wait(30_000)
+            .fragmented(5_000),
+    )
+    .await;
+    settle().await;
+    shutdown.cancel();
+
+    let meetings = core.list_meetings(10, 0).await.expect("list");
+    assert_eq!(meetings.len(), 1, "one meeting, one Meeting: {meetings:?}");
+    assert_eq!(
+        meetings[0].detected_app.as_deref(),
+        Some("us.zoom.xos"),
+        "the Meeting is attributed to what triggered it"
+    );
+    assert!(meetings[0].ended_at.is_some(), "and it stopped by itself");
+}
+
+#[tokio::test]
+async fn nothing_on_the_watchlist_means_nothing_recorded() {
+    // A hot microphone in a dictation app is not a meeting (ADR-0024).
+    let (core, _dir, shutdown) = core_watching(
+        Timeline::new()
+            .mic_held("com.superwhisper")
+            .wait(600_000)
+            .mic_released("com.superwhisper")
+            .wait(30_000)
+            .fragmented(5_000),
+    )
+    .await;
+    settle().await;
+    shutdown.cancel();
+
+    assert!(
+        core.list_meetings(10, 0).await.expect("list").is_empty(),
+        "dictation became a Meeting"
+    );
+}
+
+#[tokio::test]
+async fn the_auto_record_switch_turns_the_whole_thing_off() {
+    // Story 14: one legible act (ADR-0023).
+    let (core, _dir, shutdown) = core_watching(
+        Timeline::new()
+            .wait(2_000)
+            .mic_held("us.zoom.xos")
+            .wait(600_000)
+            .fragmented(5_000),
+    )
+    .await;
+    core.update_settings(SettingsSetParams {
+        auto_record: Some(false),
+        ..Default::default()
+    })
+    .await
+    .expect("settings");
+    settle().await;
+    shutdown.cancel();
+
+    assert!(
+        core.list_meetings(10, 0).await.expect("list").is_empty(),
+        "Auto-Record was off and something still recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_device_swap_produces_one_meeting_rather_than_two() {
+    // The expensive case, through the real Core rather than the state
+    // machine alone: eight seconds of silence is an AirPods swap.
+    let (core, _dir, shutdown) = core_watching(
+        Timeline::new()
+            .mic_held("us.zoom.xos")
+            .wait(120_000)
+            .mic_released("us.zoom.xos")
+            .wait(8_000)
+            .mic_held("us.zoom.xos")
+            .wait(120_000)
+            .mic_released("us.zoom.xos")
+            .wait(30_000)
+            .fragmented(2_000),
+    )
+    .await;
+    settle().await;
+    shutdown.cancel();
+
+    let meetings = core.list_meetings(10, 0).await.expect("list");
+    assert_eq!(
+        meetings.len(),
+        1,
+        "the swap split the Meeting: {meetings:?}"
+    );
+}
