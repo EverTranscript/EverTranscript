@@ -276,7 +276,8 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
                 entry.0 += frame.duration_ms();
                 entry.1 = entry.1.max(peak);
             }
-            CaptureEvent::Unavailable { channel, reason } => unavailable.push((channel, reason)),
+            CaptureEvent::Unavailable { channel, reason }
+            | CaptureEvent::Degraded { channel, reason } => unavailable.push((channel, reason)),
             CaptureEvent::StreamFailed { channel, error } => unavailable.push((channel, error)),
             CaptureEvent::DeviceChanged { .. } => {}
         }

@@ -103,6 +103,11 @@ pub enum Action {
         channel: AudioChannel,
         reason: String,
     },
+    /// Record why this leg is not useful, but leave it running.
+    NoteLeg {
+        channel: AudioChannel,
+        reason: String,
+    },
 }
 
 /// Decides what happens to each capture leg.
@@ -174,6 +179,20 @@ impl ChurnPolicy {
                 // support is noise, and the Meeting is fine without it.
                 debug!(?channel, reason, "capture leg unavailable on this machine");
                 Action::EndLeg {
+                    channel: *channel,
+                    reason: reason.clone(),
+                }
+            }
+
+            CaptureEvent::Degraded { channel, reason } => {
+                // Not ended, on purpose. The leg is still delivering, and a
+                // diagnosis this Core cannot be certain of must not be able
+                // to cost the rest of the meeting's audio.
+                debug!(
+                    ?channel,
+                    reason, "capture leg is degraded but still attached"
+                );
+                Action::NoteLeg {
                     channel: *channel,
                     reason: reason.clone(),
                 }
@@ -277,6 +296,28 @@ mod tests {
             ),
             "the legs must have independent budgets"
         );
+    }
+
+    #[test]
+    fn a_degraded_leg_is_noted_but_never_ended() {
+        // The distinction this enum exists to draw. A refused system-audio
+        // permission is a diagnosis the Core infers rather than reads, and
+        // it has been wrong before (DECISIONS Q9): a meeting that simply
+        // opened quietly was told its audio was incomplete. Ending the leg
+        // on that made the mistake cost the rest of the meeting, so a
+        // degraded leg is recorded and left running.
+        let mut policy = ChurnPolicy::default();
+        let action = policy.decide(&CaptureEvent::Degraded {
+            channel: AudioChannel::System,
+            reason: "arrives as silence".to_string(),
+        });
+        match action {
+            Action::NoteLeg { channel, reason } => {
+                assert_eq!(channel, AudioChannel::System);
+                assert!(reason.contains("silence"));
+            }
+            other => panic!("a degraded leg must be noted, not ended, got {other:?}"),
+        }
     }
 
     #[test]

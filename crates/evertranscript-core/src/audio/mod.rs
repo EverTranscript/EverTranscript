@@ -137,6 +137,15 @@ pub enum CaptureEvent {
         channel: AudioChannel,
         reason: String,
     },
+    /// This leg is delivering, but what it delivers is not usable, and here
+    /// is why. Distinct from `Unavailable` because the leg is still
+    /// attached: the reason reaches the record without the leg being ended,
+    /// so a wrong diagnosis costs a sentence rather than the rest of the
+    /// meeting's audio (DECISIONS Q9).
+    Degraded {
+        channel: AudioChannel,
+        reason: String,
+    },
 }
 
 /// The seam every test drives (PRD Testing Decisions).

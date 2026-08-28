@@ -46,6 +46,11 @@ pub enum Step {
         channel: AudioChannel,
         reason: String,
     },
+    /// This leg is delivering something unusable, but is still attached.
+    Degraded {
+        channel: AudioChannel,
+        reason: String,
+    },
 }
 
 impl Step {
@@ -57,6 +62,13 @@ impl Step {
         Self::Fail {
             channel,
             error: error.to_string(),
+        }
+    }
+
+    pub fn degraded(channel: AudioChannel, reason: &str) -> Self {
+        Self::Degraded {
+            channel,
+            reason: reason.to_string(),
         }
     }
 }
@@ -160,6 +172,9 @@ impl FixtureSource {
                 }
                 Step::Unavailable { channel, reason } => {
                     events.push(CaptureEvent::Unavailable { channel, reason })
+                }
+                Step::Degraded { channel, reason } => {
+                    events.push(CaptureEvent::Degraded { channel, reason })
                 }
             }
         }

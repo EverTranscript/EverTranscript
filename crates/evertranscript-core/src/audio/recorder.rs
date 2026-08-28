@@ -174,6 +174,13 @@ async fn run(
                 joiner.finish_leg(channel);
                 degraded.push(format!("{}: {reason}", channel_name(channel)));
             }
+            Action::NoteLeg { channel, reason } => {
+                info!(
+                    ?channel,
+                    reason, "capture leg is degraded; it stays attached"
+                );
+                degraded.push(format!("{}: {reason}", channel_name(channel)));
+            }
         }
 
         if let CaptureEvent::Frame(frame) = &event {
@@ -336,6 +343,53 @@ mod tests {
         }
         eprintln!("skipping: ffmpeg is not available on this machine");
         true
+    }
+
+    #[tokio::test]
+    async fn a_degraded_leg_keeps_recording_after_it_is_noted() {
+        // Q9's whole point. The refusal note is a diagnosis the Core infers,
+        // and it has been wrong: a meeting that merely opened quietly was
+        // told its system audio was missing. Ending the leg on that made a
+        // wrong sentence cost every remaining minute of the far end, so the
+        // note must not stop the audio behind it.
+        if skip_without_ffmpeg().await {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (source, delivered) = FixtureSource::with_completion(vec![
+            Step::audio(AudioChannel::System, 200, 0.0),
+            Step::degraded(AudioChannel::System, "arrives as silence"),
+            // Everything below here would be lost if the note ended the leg.
+            Step::audio(AudioChannel::System, 400, -0.4),
+            Step::audio(AudioChannel::Mic, 600, 0.4),
+        ]);
+        let recorder = Recorder::start_without_transcription(
+            Box::new(source),
+            dir.path().to_path_buf(),
+            "degraded1".to_string(),
+        )
+        .expect("start");
+
+        delivered.await.expect("the script should finish");
+        let outcome = recorder.finish().await;
+
+        assert!(
+            outcome
+                .degraded
+                .iter()
+                .any(|note| note.contains("arrives as silence")),
+            "the reason must reach the record, got {:?}",
+            outcome.degraded
+        );
+        assert!(
+            outcome.seconds >= 0.5,
+            "audio after the note must still be recorded, got {:.2}s",
+            outcome.seconds
+        );
+        assert!(
+            outcome.audio_path.is_some_and(|path| path.exists()),
+            "a degraded leg still produces a file"
+        );
     }
 
     #[tokio::test]
