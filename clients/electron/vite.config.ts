@@ -1,3 +1,4 @@
+import tailwind from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "node:path";
 import { defineConfig } from "vite";
@@ -5,7 +6,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   root: __dirname,
   base: "./",
-  plugins: [react()],
+  plugins: [react(), tailwind()],
   resolve: {
     alias: {
       // Protocol types are generated from the Rust source by `cargo test`

@@ -4,12 +4,12 @@
 
 **Blocked by:** 06.
 
-**Status:** ready-for-agent
+**Status:** done — not visually verified (no display on this machine)
 
-- [ ] The app consumes only generated ts-rs protocol types — no hand-written wire types
-- [ ] Meeting list and Meeting view (title, metadata, transcript with channel labels) from the read surface
-- [ ] Live caption view via the lossy subscription; opening the app mid-recording shows transcript-so-far then live tail (snapshot-then-tail, story 24)
-- [ ] Retitle (renames the Mirror via the Core) and whole-Meeting delete work from the UI
-- [ ] Launching the Client with no Core running starts it; closing or killing the Client provably never affects an active recording
-- [ ] CLI commands work while the app is open (concurrent clients)
-- [ ] React 19 + Vite + Tailwind, strict TS; all user-facing strings externalized (English catalog)
+- [x] The app consumes only generated ts-rs protocol types — no hand-written wire types
+- [x] Meeting list and Meeting view (title, metadata, transcript with channel labels) from the read surface
+- [x] Live caption view via the lossy subscription; opening the app mid-recording shows transcript-so-far then live tail (snapshot-then-tail, story 24)
+- [x] Retitle (renames the Mirror via the Core) and whole-Meeting delete work from the UI
+- [x] Launching the Client with no Core running starts it; closing or killing the Client provably never affects an active recording
+- [x] CLI commands work while the app is open (concurrent clients)
+- [x] React 19 + Vite + Tailwind, strict TS; all user-facing strings externalized (English catalog)
