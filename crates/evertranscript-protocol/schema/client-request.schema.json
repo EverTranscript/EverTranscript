@@ -274,6 +274,57 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "What Meeting Detection watches on this machine, and what it offers.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "watchlist/get"
+        },
+        "params": {
+          "$ref": "#/$defs/WatchlistGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Adds an app to the Watchlist. Membership is the per-app switch\n(ADR-0030): there is no enable flag to set afterwards.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "watchlist/add"
+        },
+        "params": {
+          "$ref": "#/$defs/WatchlistAddParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Removes an app from the Watchlist.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "watchlist/remove"
+        },
+        "params": {
+          "$ref": "#/$defs/WatchlistRemoveParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -504,6 +555,63 @@
     },
     "TranscriptUnsubscribeParams": {
       "type": "object"
+    },
+    "WatchlistAddParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WatchlistKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "description": "Omitted for a suggested entry, whose name the Core already knows.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "WatchlistGetParams": {
+      "type": "object"
+    },
+    "WatchlistKind": {
+      "description": "What a Watchlist row matches.",
+      "oneOf": [
+        {
+          "description": "One application, by bundle id or executable name.",
+          "type": "string",
+          "const": "process"
+        },
+        {
+          "description": "Any browser holding a hot microphone — one row rather than a row per\nsite, so Google Meet and the web variants of the desktop apps are\ncovered without knowing any URLs (ADR-0030).",
+          "type": "string",
+          "const": "browserMeetings"
+        }
+      ]
+    },
+    "WatchlistRemoveParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
     }
   }
 }

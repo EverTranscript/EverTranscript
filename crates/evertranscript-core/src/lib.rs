@@ -9,6 +9,7 @@ pub mod asr;
 pub mod audio;
 pub mod autostart;
 pub mod client;
+pub mod detect;
 pub mod mirror;
 pub mod models;
 pub mod paths;

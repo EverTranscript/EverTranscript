@@ -45,6 +45,9 @@ use evertranscript_protocol::TranscriptSegment;
 use evertranscript_protocol::TranscriptSegmentAddedParams;
 use evertranscript_protocol::TranscriptSnapshotResponse;
 use evertranscript_protocol::TranscriptUnsubscribeResponse;
+use evertranscript_protocol::WatchlistAddParams;
+use evertranscript_protocol::WatchlistKind;
+use evertranscript_protocol::WatchlistResponse;
 use evertranscript_protocol::error_codes;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -301,6 +304,54 @@ impl Core {
             settings.save_to(&self.settings_path)?;
         }
         Ok(self.settings().await)
+    }
+
+    // ------------------------------------------------------------ Watchlist
+
+    /// What Meeting Detection watches here, and what it offers.
+    pub async fn watchlist(&self) -> Result<WatchlistResponse> {
+        let list = self.store.read(crate::store::watchlist::load).await?;
+        Ok(describe_watchlist(&list))
+    }
+
+    /// Adds an app. Membership is the per-app switch (ADR-0030), so this is
+    /// the whole of "enable an app" — there is no flag to set afterwards.
+    pub async fn watchlist_add(&self, params: WatchlistAddParams) -> Result<WatchlistResponse> {
+        // A suggested entry carries its own name and kind, so a Client can
+        // promote one by id alone rather than restating what the Core knows.
+        let suggested = crate::detect::watchlist::suggested_entries()
+            .into_iter()
+            .find(|entry| entry.id == params.id);
+        let entry = crate::detect::watchlist::WatchlistEntry {
+            id: params.id.clone(),
+            name: params
+                .name
+                .clone()
+                .or_else(|| suggested.as_ref().map(|entry| entry.name.clone()))
+                .unwrap_or_else(|| params.id.clone()),
+            kind: match params.kind {
+                Some(WatchlistKind::BrowserMeetings) => {
+                    crate::detect::watchlist::EntryKind::BrowserMeetings
+                }
+                Some(WatchlistKind::Process) => crate::detect::watchlist::EntryKind::Process,
+                None => suggested
+                    .as_ref()
+                    .map(|entry| entry.kind)
+                    .unwrap_or(crate::detect::watchlist::EntryKind::Process),
+            },
+        };
+        self.store
+            .write(move |connection| crate::store::watchlist::add(connection, &entry))
+            .await?;
+        self.watchlist().await
+    }
+
+    pub async fn watchlist_remove(&self, id: &str) -> Result<WatchlistResponse> {
+        let id = id.to_string();
+        self.store
+            .write(move |connection| crate::store::watchlist::remove(connection, &id))
+            .await?;
+        self.watchlist().await
     }
 
     /// True once the Operator has acknowledged the Briefing here.
@@ -1092,6 +1143,18 @@ impl Server {
                 self.core.update_settings(params).await?,
             )?),
 
+            ClientRequest::WatchlistGet(_) => {
+                Ok(serde_json::to_value(self.core.watchlist().await?)?)
+            }
+
+            ClientRequest::WatchlistAdd(params) => Ok(serde_json::to_value(
+                self.core.watchlist_add(params).await?,
+            )?),
+
+            ClientRequest::WatchlistRemove(params) => Ok(serde_json::to_value(
+                self.core.watchlist_remove(&params.id).await?,
+            )?),
+
             ClientRequest::TranscriptUnsubscribe(_) => {
                 if let Some(connection) = self.connections.get_mut(&connection_id) {
                     connection.captions = false;
@@ -1232,5 +1295,27 @@ impl Server {
             CoreStateChangedParams { state },
         ))
         .await;
+    }
+}
+
+/// The Watchlist as a Client sees it.
+fn describe_watchlist(list: &crate::detect::watchlist::Watchlist) -> WatchlistResponse {
+    fn row(
+        entry: &crate::detect::watchlist::WatchlistEntry,
+    ) -> evertranscript_protocol::WatchlistEntry {
+        evertranscript_protocol::WatchlistEntry {
+            id: entry.id.clone(),
+            name: entry.name.clone(),
+            kind: match entry.kind {
+                crate::detect::watchlist::EntryKind::Process => WatchlistKind::Process,
+                crate::detect::watchlist::EntryKind::BrowserMeetings => {
+                    WatchlistKind::BrowserMeetings
+                }
+            },
+        }
+    }
+    WatchlistResponse {
+        entries: list.entries().iter().map(row).collect(),
+        suggestions: list.suggestions().iter().map(row).collect(),
     }
 }

@@ -246,6 +246,22 @@ client_request_definitions! {
         params: SettingsSetParams,
         response: SettingsResponse,
     },
+    /// What Meeting Detection watches on this machine, and what it offers.
+    WatchlistGet => "watchlist/get" {
+        params: WatchlistGetParams,
+        response: WatchlistResponse,
+    },
+    /// Adds an app to the Watchlist. Membership is the per-app switch
+    /// (ADR-0030): there is no enable flag to set afterwards.
+    WatchlistAdd => "watchlist/add" {
+        params: WatchlistAddParams,
+        response: WatchlistResponse,
+    },
+    /// Removes an app from the Watchlist.
+    WatchlistRemove => "watchlist/remove" {
+        params: WatchlistRemoveParams,
+        response: WatchlistResponse,
+    },
 }
 
 server_notification_definitions! {
@@ -689,6 +705,68 @@ pub struct SettingsResponse {
     /// True when the setting and the actual registration disagree — for
     /// example after the Operator deleted the plist themselves.
     pub launch_at_login_registered: bool,
+}
+
+// ----------------------------------------------------------------- Watchlist
+
+/// What a Watchlist row matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum WatchlistKind {
+    /// One application, by bundle id or executable name.
+    Process,
+    /// Any browser holding a hot microphone — one row rather than a row per
+    /// site, so Google Meet and the web variants of the desktop apps are
+    /// covered without knowing any URLs (ADR-0030).
+    BrowserMeetings,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WatchlistEntry {
+    pub id: String,
+    pub name: String,
+    pub kind: WatchlistKind,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WatchlistGetParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WatchlistAddParams {
+    pub id: String,
+    /// Omitted for a suggested entry, whose name the Core already knows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<WatchlistKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WatchlistRemoveParams {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct WatchlistResponse {
+    /// What is watched, in a stable order.
+    pub entries: Vec<WatchlistEntry>,
+    /// Known call apps offered but not watched — WeChat ships here rather
+    /// than on the list, because default-recording personal calls is the
+    /// posture ADR-0030 declined.
+    pub suggestions: Vec<WatchlistEntry>,
 }
 
 // ---------------------------------------------------------------- Transcript

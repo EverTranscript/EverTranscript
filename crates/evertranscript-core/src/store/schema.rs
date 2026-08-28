@@ -108,6 +108,28 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE meetings ADD COLUMN audio_notes TEXT;
     "#,
+    // 5 — the Watchlist: what Meeting Detection watches on this machine
+    // (ADR-0024, ADR-0030). In the machine store rather than the History
+    // folder, like settings: the list describes this installation, and
+    // copying History to a new machine must not carry it.
+    //
+    // The shipped defaults are seeded here rather than defaulted in code, so
+    // that an empty table means the Operator removed everything and gets
+    // exactly that — not a silent restoration of the defaults on next start.
+    r#"
+    CREATE TABLE watchlist (
+        id    TEXT PRIMARY KEY NOT NULL,
+        name  TEXT NOT NULL,
+        kind  TEXT NOT NULL CHECK (kind IN ('process', 'browserMeetings'))
+    ) STRICT;
+
+    INSERT INTO watchlist (id, name, kind) VALUES
+        ('us.zoom.xos',                'Zoom',            'process'),
+        ('com.microsoft.teams2',       'Microsoft Teams', 'process'),
+        ('com.tencent.meeting',        'VooV Meeting',    'process'),
+        ('com.tencent.tencentmeeting', '腾讯会议',         'process'),
+        ('browser-meetings',           'Browser Meetings','browserMeetings');
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.

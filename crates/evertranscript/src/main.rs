@@ -24,6 +24,8 @@ use evertranscript_protocol::ModelAvailability;
 use evertranscript_protocol::ModelsStatusResponse;
 use evertranscript_protocol::SettingsResponse;
 use evertranscript_protocol::TranscriptSnapshotResponse;
+use evertranscript_protocol::WatchlistKind;
+use evertranscript_protocol::WatchlistResponse;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
@@ -91,6 +93,9 @@ enum Command {
     /// Inspect and fetch the models the Core needs.
     #[command(subcommand)]
     Models(ModelsCommand),
+    /// See and edit what Meeting Detection watches.
+    #[command(subcommand)]
+    Watchlist(WatchlistCommand),
     /// Follow live captions from the Meeting in progress.
     Captions,
     /// Show this installation's settings, and change the ones that are
@@ -122,6 +127,27 @@ enum Command {
         #[arg(value_parser = ["on", "off"])]
         state: String,
     },
+}
+
+#[derive(Subcommand)]
+enum WatchlistCommand {
+    /// Show what is watched, and what is offered.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Watch an app. Membership is the switch: there is nothing to enable
+    /// afterwards.
+    Add {
+        /// Bundle id on macOS, executable name on Windows.
+        id: String,
+        /// What to call it. Defaults to the id, or to the suggested entry's
+        /// own name when promoting one.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Stop watching an app.
+    Remove { id: String },
 }
 
 #[derive(Subcommand)]
@@ -230,6 +256,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Export { id } => run_export(&id).await,
         Command::Models(ModelsCommand::Status { json }) => run_models_status(json).await,
         Command::Models(ModelsCommand::Fetch { key }) => run_models_fetch(key).await,
+        Command::Watchlist(watchlist) => run_watchlist(watchlist).await,
         Command::Captions => run_captions().await,
         Command::Settings {
             json,
@@ -857,4 +884,47 @@ fn init_tracing() {
         .with_env_filter(filter)
         .with_target(false)
         .init();
+}
+
+async fn run_watchlist(command: WatchlistCommand) -> Result<()> {
+    let mut client = client().await?;
+    let response: WatchlistResponse = match command {
+        WatchlistCommand::List { .. } => client.request("watchlist/get", None).await?,
+        WatchlistCommand::Add { ref id, ref name } => {
+            client
+                .request(
+                    "watchlist/add",
+                    Some(serde_json::json!({ "id": id, "name": name })),
+                )
+                .await?
+        }
+        WatchlistCommand::Remove { ref id } => {
+            client
+                .request("watchlist/remove", Some(serde_json::json!({ "id": id })))
+                .await?
+        }
+    };
+
+    if matches!(command, WatchlistCommand::List { json: true }) {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+
+    if response.entries.is_empty() {
+        println!("Nothing is watched. Meeting Detection will not start a recording.");
+    }
+    for entry in &response.entries {
+        let kind = match entry.kind {
+            WatchlistKind::BrowserMeetings => "any browser in a call",
+            WatchlistKind::Process => entry.id.as_str(),
+        };
+        println!("  {:<20} {kind}", entry.name);
+    }
+    if !response.suggestions.is_empty() {
+        println!("\nSuggested — add with `evertranscript watchlist add <id>`:");
+        for entry in &response.suggestions {
+            println!("  {:<20} {}", entry.name, entry.id);
+        }
+    }
+    Ok(())
 }
