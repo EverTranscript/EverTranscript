@@ -37,6 +37,7 @@ impl Transcriber for SpeaksMandarin {
             text: self.text.to_string(),
             confidence: 0.9,
             decode_time: std::time::Duration::from_millis(1),
+            language: Some("zh".to_string()),
         })
     }
 

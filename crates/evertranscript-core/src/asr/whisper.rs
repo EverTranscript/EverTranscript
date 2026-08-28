@@ -209,9 +209,14 @@ impl Transcriber for WhisperEngine {
         // number carries both signals.
         let confidence = confidence * (1.0 - worst_no_speech).clamp(0.0, 1.0);
         let elapsed = started.elapsed();
+        // Acoustic, and so unaffected by the prompt: this stays right when
+        // the words do not, which is what the pipeline uses it for.
+        let language =
+            whisper_rs::get_lang_str(state.full_lang_id_from_state()).map(str::to_string);
         debug!(
             chars = text.len(),
             confidence,
+            language = language.as_deref().unwrap_or("?"),
             elapsed_ms = elapsed.as_millis() as u64,
             audio_ms = samples.len() as u64 * 1000 / WHISPER_RATE as u64,
             "transcribed a chunk"
@@ -221,6 +226,7 @@ impl Transcriber for WhisperEngine {
             text: text.trim().to_string(),
             confidence,
             decode_time: elapsed,
+            language,
         })
     }
 

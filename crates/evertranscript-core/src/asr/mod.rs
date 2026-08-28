@@ -20,6 +20,13 @@ pub struct Transcript {
     /// discarded.
     pub confidence: f32,
     pub decode_time: std::time::Duration,
+    /// The language the engine decided this audio was in, when it can say.
+    ///
+    /// Kept because it stays *correct* even when the decode does not: a
+    /// chunk of Mandarin prompted with English text is still reported as
+    /// `zh` while the words come back English, which is what makes that
+    /// mistake recognisable without decoding anything twice to find it.
+    pub language: Option<String>,
 }
 
 impl Transcript {
@@ -47,6 +54,9 @@ pub trait Transcriber: Send {
 #[derive(Default)]
 pub struct FakeTranscriber {
     pub responses: std::collections::VecDeque<String>,
+    /// The language to report per response, so a language switch can be
+    /// scripted without a model.
+    pub languages: std::collections::VecDeque<Option<String>>,
     /// Every call's `previous`, so tests can assert rolling context is wired.
     pub prompts_seen: Vec<Option<String>>,
 }
@@ -55,6 +65,20 @@ impl FakeTranscriber {
     pub fn with(responses: impl IntoIterator<Item = &'static str>) -> Self {
         Self {
             responses: responses.into_iter().map(str::to_string).collect(),
+            languages: std::collections::VecDeque::new(),
+            prompts_seen: Vec::new(),
+        }
+    }
+
+    /// Responses paired with the language the engine would report for each.
+    pub fn speaking(responses: impl IntoIterator<Item = (&'static str, &'static str)>) -> Self {
+        let (responses, languages) = responses
+            .into_iter()
+            .map(|(text, language)| (text.to_string(), Some(language.to_string())))
+            .unzip();
+        Self {
+            responses,
+            languages,
             prompts_seen: Vec::new(),
         }
     }
@@ -67,6 +91,7 @@ impl Transcriber for FakeTranscriber {
             text: self.responses.pop_front().unwrap_or_default(),
             confidence: 0.9,
             decode_time: std::time::Duration::from_millis(1),
+            language: self.languages.pop_front().flatten(),
         })
     }
 

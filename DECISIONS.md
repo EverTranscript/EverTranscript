@@ -195,3 +195,37 @@ The same run settled two things the ticket records in full. The TCC prompt does 
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q13 — m1/11-guarantee-tests-closeout — deviation
+
+**Question:** The dogfood run measured the first sentence after a language switch decoded into the wrong language, at CER 100%. The rolling prompt was the suspect, but whisper's language detection runs on the audio and should not be affected by it. What is actually happening, and what should be done about it?
+
+**Options considered:** drop the rolling prompt entirely / detect the language acoustically before every decode and prompt only in the matching language / decode with the prompt and ask again without it when the engine reports a different language than the prompt was in / leave it and record the finding.
+
+**Chosen:** Decode with the prompt, and decode again without it when the language the engine reports disagrees with the language the prompt was in. The prompt also becomes per-channel.
+
+**Decided-by:** agent
+
+**Justification:** Measured before choosing, against the real model, because the mechanism was genuinely unknown. The same Mandarin audio decodes as `我们今天开会讨论第三季度的预算...` with no prompt and as "We will discuss the third year's plan..." with an English one — so the prompt is the cause beyond doubt. The useful part is what does *not* break: the engine reported `zh` in both cases. Detection is acoustic and stays correct while the words do not, which turns an invisible corruption into a disagreement the pipeline can see, with no extra work to find it. That ruled out pre-detection on cost: `pcm_to_mel` plus `lang_detect` measured 1173 ms against a 2469 ms decode, about 47% added to every chunk, where asking again costs one decode only at a switch — and switches are rare. Dropping the prompt entirely would have fixed the bias by discarding the thing it was for, which is a name or piece of jargon keeping its spelling across a meeting; that benefit is real within a language run and is kept. Verified end to end: the sentence that measured CER 100% now measures 0.0%, the retry fires exactly once for the one switch in the recording, and the log shows `prompted_in="en" heard="zh"`.
+
+Separately and with no measurement needed, `previous_text` was a single field used for both capture legs, so the Operator's words steered the far end's decode and the far end's steered theirs. The two legs are different people — that separation is the whole attribution model in M1 — so each now keeps its own.
+
+**Outcome:** applied
+
+**Ref:** (pending)
+
+## Q14 — m1/11-guarantee-tests-closeout — gate-resolution
+
+**Question:** Decodes consisting of a single `.` were being stored as speech. `is_meaningless` judges only text longer than ten characters, so nothing caught them. What is the right test?
+
+**Options considered:** lower the length threshold / reject anything shorter than some minimum / reject text with no linguistic content at all, whatever its length.
+
+**Chosen:** Reject text containing no alphanumeric character. Length is not consulted.
+
+**Decided-by:** agent
+
+**Justification:** A length rule cannot express this without doing damage: "Yes", "好" and "да" are whole turns in a meeting, and any threshold high enough to catch "." discards them. Content is the property actually being tested, and `char::is_alphanumeric` draws the line where it belongs — true for Han, kana, hangul, Cyrillic and digits, false for punctuation in both Latin and CJK, which was checked against each of those cases rather than assumed. The record is immutable (ADR-0009), so a stored "." is permanent and uncorrectable, which is what makes a filter that only judges long text the wrong shape for the problem.
+
+**Outcome:** applied
+
+**Ref:** (pending)

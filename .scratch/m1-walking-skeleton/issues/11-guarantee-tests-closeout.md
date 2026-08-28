@@ -48,6 +48,38 @@ these rather than there: **segments consisting of a bare `.` reach the record.**
 `is_meaningless` only judges text above ten characters, so a punctuation-only decode is
 stored as though it were speech. Visible in `01a047ff` at 00:27, 00:50 and 00:55.
 
+### Both are fixed (DECISIONS Q13, Q14)
+
+**The language switch.** The mechanism was measured before anything was changed, because
+whisper detects language from the audio and should not have been susceptible to a text
+prompt at all. It is: the same Mandarin audio decodes correctly with no prompt and as
+*"We will discuss the third year's plan…"* with an English one. What survives is the
+engine's own language report — `zh` in **both** cases — so the corruption is visible
+without decoding anything twice to find it. The pipeline now decodes again, prompt-free,
+when the reported language disagrees with the language the prompt was in.
+
+Pre-detecting instead was measured and rejected: `pcm_to_mel` plus `lang_detect` costs
+1173 ms against a 2469 ms decode, ~47% on **every** chunk, where the retry costs one
+decode only at a switch.
+
+A second defect surfaced while reading that path, needing no measurement: `previous_text`
+was one field shared by both capture legs, so the Operator's words steered the far end's
+decode and vice versa — against the channel separation that is M1's whole attribution
+model. Each leg now keeps its own.
+
+| | dogfood run | after |
+|---|---|---|
+| Chinese, first sentence after the switch | **CER 100%** | **CER 0.0%** |
+
+Confirmed in the log for the recording that produced it:
+`the rolling prompt was in another language; decoding again without it prompted_in="en"
+heard="zh"` — fired exactly once, for the one switch in the meeting.
+
+**The bare `.`** is rejected by content rather than by length: text with no alphanumeric
+character is not speech. Checked against the cases that matter rather than assumed —
+`.`, `。`, `—` carry no content, while `Yes`, `好`, `はい`, `네`, `да` and `3` all do, so
+a short real answer still reaches the record.
+
 The PRD's ASR-quality risk is **not** retired, but it is now diagnosed rather than guessed.
 The Chinese failure is not acoustic: the sentence the model transcribed in Chinese was
 character-perfect. It is (a) **language detection** — `previous_text` feeds the previous

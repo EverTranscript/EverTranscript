@@ -83,6 +83,16 @@ pub fn is_meaningless(text: &str) -> bool {
     if trimmed.is_empty() {
         return true;
     }
+    // Nothing anyone said. A decode of "." is what a model returns for a
+    // pause it was asked to transcribe, and it reached the record because
+    // the length rule below only judges text over ten characters — this one
+    // is one. The test is content rather than length, so it cannot mistake a
+    // short answer for an empty one: `is_alphanumeric` is true for Han,
+    // kana, hangul and Cyrillic, so "好", "はい" and "да" are all speech
+    // while "。" and "—" are not.
+    if !trimmed.chars().any(char::is_alphanumeric) {
+        return true;
+    }
     let distinct: std::collections::HashSet<char> = trimmed
         .chars()
         .filter(|character| !character.is_whitespace())
@@ -291,6 +301,29 @@ mod tests {
                 clean(original, ChineseScript::Traditional).as_deref(),
                 Some(original),
                 "Traditional text must reach a Traditional record untouched"
+            );
+        }
+    }
+
+    #[test]
+    fn punctuation_alone_is_not_speech() {
+        // Found in the dogfood record (01a047ff, at 00:27, 00:50 and 00:55):
+        // a bare "." stored as though someone had said it. The length rule
+        // could not catch it, because it only judges text over ten
+        // characters and this is one.
+        for quiet in [".", "..", "...", "。", "?", "!", " . ", "—", "，。"] {
+            assert_eq!(clean(quiet, SIMPLIFIED), None, "{quiet:?} is not speech");
+        }
+    }
+
+    #[test]
+    fn a_short_real_utterance_is_still_speech() {
+        // The other half of the same rule: "no content" must not become "too
+        // short". Every one of these is a whole turn in a meeting.
+        for said in ["Yes", "No.", "好", "是的", "はい", "네", "да", "3"] {
+            assert!(
+                clean(said, SIMPLIFIED).is_some(),
+                "{said:?} is a real thing to say"
             );
         }
     }

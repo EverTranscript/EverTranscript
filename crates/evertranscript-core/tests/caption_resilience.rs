@@ -41,6 +41,7 @@ impl Transcriber for CountingTranscriber {
             text: self.text.to_string(),
             confidence: 0.9,
             decode_time: std::time::Duration::from_millis(1),
+            language: None,
         })
     }
 

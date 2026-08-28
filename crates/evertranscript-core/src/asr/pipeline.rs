@@ -40,8 +40,12 @@ pub struct TranscriptionPipeline {
     mic: Chunker,
     system: Chunker,
     transcriber: Box<dyn Transcriber>,
-    /// Last accepted text, fed forward as whisper's rolling prompt.
-    previous_text: Option<String>,
+    /// What each leg's last accepted chunk left behind. One per channel,
+    /// because they are different people: sharing it let the Operator's
+    /// words steer the far end's decode and the far end's steer theirs,
+    /// which is the opposite of the separation this file exists to keep.
+    mic_context: Context,
+    system_context: Context,
     /// Stateful resamplers, one per leg for the life of the Meeting.
     /// Rebuilding them per block loses the filter state at every boundary —
     /// the 173%-amplitude bug the DSP tests guard against.
@@ -71,7 +75,8 @@ impl TranscriptionPipeline {
             mic: Chunker::new(WHISPER_RATE, policy, Box::new(EnergyDetector::new())),
             system: Chunker::new(WHISPER_RATE, policy, Box::new(EnergyDetector::new())),
             transcriber,
-            previous_text: None,
+            mic_context: Context::default(),
+            system_context: Context::default(),
             mic_resampler: dsp::StreamResampler::new(SAMPLE_RATE, WHISPER_RATE).ok(),
             system_resampler: dsp::StreamResampler::new(SAMPLE_RATE, WHISPER_RATE).ok(),
             mic_loudness: dsp::LoudnessNormalizer::new(WHISPER_RATE).ok(),
@@ -164,18 +169,29 @@ impl TranscriptionPipeline {
         channel: AudioChannel,
         chunk: super::vad::SpeechChunk,
     ) -> Option<TranscribedSegment> {
-        let result = match self
-            .transcriber
-            .transcribe(&chunk.samples, self.previous_text.as_deref())
-        {
-            Ok(result) => result,
-            Err(error) => {
-                // A failed decode costs one caption; it must not stop
-                // capture or the Meeting (ADR-0029 as amended).
-                debug!(%error, "a chunk failed to transcribe");
-                return None;
-            }
+        let (previous, prompted_in) = {
+            let context = self.context(channel);
+            (context.text.clone(), context.language.clone())
         };
+
+        let mut result = self.decode(&chunk.samples, previous.as_deref())?;
+
+        // A prompt in the wrong language does not merely fail to help: it
+        // drags the decode into its own language and the words come back
+        // translated, which measured as CER 100% on the first sentence
+        // after a switch. What makes it recoverable is that the engine
+        // still reports the language it *heard*, so prompt and audio
+        // disagreeing is the evidence — and the only cure is to ask again
+        // without it. Paid once per switch, not once per chunk.
+        if let (Some(prompted_in), Some(heard)) = (prompted_in, result.language.as_deref())
+            && prompted_in != heard
+        {
+            debug!(
+                prompted_in,
+                heard, "the rolling prompt was in another language; decoding again without it"
+            );
+            result = self.decode(&chunk.samples, None)?;
+        }
 
         let text = super::filters::clean(&result.text, self.script)?;
         if result.confidence < MIN_CONFIDENCE {
@@ -186,7 +202,10 @@ impl TranscriptionPipeline {
             return None;
         }
 
-        self.previous_text = Some(text.clone());
+        let language = result.language.clone();
+        let context = self.context(channel);
+        context.text = Some(text.clone());
+        context.language = language;
         Some(TranscribedSegment {
             channel,
             start_ms: chunk.start_ms,
@@ -195,6 +214,37 @@ impl TranscriptionPipeline {
             confidence: result.confidence,
         })
     }
+
+    /// One decode, or `None` with the reason logged. A failed decode costs
+    /// one caption; it must not stop capture or the Meeting (ADR-0029 as
+    /// amended).
+    fn decode(&mut self, samples: &[f32], previous: Option<&str>) -> Option<super::Transcript> {
+        match self.transcriber.transcribe(samples, previous) {
+            Ok(result) => Some(result),
+            Err(error) => {
+                debug!(%error, "a chunk failed to transcribe");
+                None
+            }
+        }
+    }
+
+    fn context(&mut self, channel: AudioChannel) -> &mut Context {
+        match channel {
+            AudioChannel::Mic => &mut self.mic_context,
+            AudioChannel::System => &mut self.system_context,
+        }
+    }
+}
+
+/// What one leg's last accepted chunk left behind.
+#[derive(Default)]
+struct Context {
+    /// Fed forward as whisper's rolling prompt, so a name or a piece of
+    /// jargon transcribed once keeps its spelling through the meeting.
+    text: Option<String>,
+    /// The language that text was spoken in, so the prompt can be withdrawn
+    /// when the speaker changes language rather than corrupting the decode.
+    language: Option<String>,
 }
 
 /// Splits an interleaved stereo block into its two mono channels.
@@ -243,6 +293,131 @@ mod tests {
             offset: CaptureOffset::ZERO,
             samples,
         }
+    }
+
+    /// Answers with a scripted (text, language) pair and remembers every
+    /// prompt it was handed, so a language switch can be driven without a
+    /// model and the prompt itself can be asserted on.
+    struct Recording {
+        answers: std::collections::VecDeque<(&'static str, &'static str)>,
+        prompts: std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    }
+
+    impl Recording {
+        fn new(
+            answers: impl IntoIterator<Item = (&'static str, &'static str)>,
+        ) -> (Self, std::sync::Arc<std::sync::Mutex<Vec<Option<String>>>>) {
+            let prompts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let recorder = Self {
+                answers: answers.into_iter().collect(),
+                prompts: std::sync::Arc::clone(&prompts),
+            };
+            (recorder, prompts)
+        }
+    }
+
+    impl Transcriber for Recording {
+        fn transcribe(
+            &mut self,
+            _samples: &[f32],
+            previous: Option<&str>,
+        ) -> anyhow::Result<crate::asr::Transcript> {
+            self.prompts
+                .lock()
+                .expect("prompts")
+                .push(previous.map(str::to_string));
+            let (text, language) = self.answers.pop_front().unwrap_or(("", "en"));
+            Ok(crate::asr::Transcript {
+                text: text.to_string(),
+                confidence: 0.9,
+                decode_time: std::time::Duration::from_millis(1),
+                language: Some(language.to_string()),
+            })
+        }
+
+        fn describe(&self) -> String {
+            "recording".to_string()
+        }
+    }
+
+    /// Speech on one leg, then a pause long enough to close the chunk.
+    fn utterance(
+        pipeline: &mut TranscriptionPipeline,
+        mic: f32,
+        system: f32,
+    ) -> Vec<TranscribedSegment> {
+        let mut segments = pipeline.push(&block(mic, system, 4_000));
+        segments.extend(pipeline.push(&block(0.0, 0.0, 1_500)));
+        segments
+    }
+
+    #[test]
+    fn one_leg_never_steers_the_other() {
+        // The legs are different people (ADR-0029 as amended). A single
+        // rolling prompt let the Operator's words prime the far end's decode
+        // and the far end's prime theirs, which is the mixing the channel
+        // split exists to prevent.
+        let (transcriber, prompts) =
+            Recording::new([("the operator speaks", "en"), ("the far end speaks", "en")]);
+        let mut pipeline = TranscriptionPipeline::new(Box::new(transcriber));
+
+        utterance(&mut pipeline, 0.3, 0.0);
+        utterance(&mut pipeline, 0.0, 0.3);
+
+        let prompts = prompts.lock().expect("prompts");
+        assert_eq!(prompts.len(), 2, "one decode per leg, got {prompts:?}");
+        assert_eq!(prompts[0], None, "the first thing said has no prompt");
+        assert_eq!(
+            prompts[1], None,
+            "the far end must not be primed with what the Operator said, got {:?}",
+            prompts[1]
+        );
+    }
+
+    #[test]
+    fn a_prompt_in_another_language_is_withdrawn_and_the_chunk_decoded_again() {
+        // Measured at CER 100% on the first sentence after a switch: an
+        // English prompt drags a Mandarin chunk into English, while the
+        // engine still reports what it heard. The disagreement is the
+        // evidence, and the cure is to ask again with no prompt.
+        let (transcriber, prompts) = Recording::new([
+            ("the council met on Tuesday", "en"),
+            ("We will discuss the third year's plan", "zh"),
+            ("我们今天开会讨论第三季度的预算", "zh"),
+        ]);
+        let mut pipeline = TranscriptionPipeline::new(Box::new(transcriber));
+
+        utterance(&mut pipeline, 0.3, 0.0);
+        let switched = utterance(&mut pipeline, 0.3, 0.0);
+
+        let prompts = prompts.lock().expect("prompts");
+        assert_eq!(
+            prompts.len(),
+            3,
+            "the switched chunk must be decoded twice, got {prompts:?}"
+        );
+        assert_eq!(prompts[1].as_deref(), Some("the council met on Tuesday"));
+        assert_eq!(prompts[2], None, "the retry carries no prompt");
+        assert!(
+            switched.iter().any(|segment| segment.text.contains("预算")),
+            "the record keeps the prompt-free decode, got {switched:?}"
+        );
+    }
+
+    #[test]
+    fn a_prompt_in_the_same_language_is_kept() {
+        // The other half: within one language the prompt is what keeps a
+        // name spelled the same way all meeting, so it must survive.
+        let (transcriber, prompts) =
+            Recording::new([("Aoife joined the call", "en"), ("Aoife agreed", "en")]);
+        let mut pipeline = TranscriptionPipeline::new(Box::new(transcriber));
+
+        utterance(&mut pipeline, 0.3, 0.0);
+        utterance(&mut pipeline, 0.3, 0.0);
+
+        let prompts = prompts.lock().expect("prompts");
+        assert_eq!(prompts.len(), 2, "no retry when nothing changed language");
+        assert_eq!(prompts[1].as_deref(), Some("Aoife joined the call"));
     }
 
     #[test]
