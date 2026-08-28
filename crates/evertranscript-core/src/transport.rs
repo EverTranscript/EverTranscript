@@ -29,6 +29,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+// Both call sites live in the unix listener; Windows uses a named pipe
+// and never needs it.
+#[cfg(unix)]
 use tracing::warn;
 
 /// Outbound queue depth per connection. A Client that falls this far behind

@@ -16,6 +16,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 use std::time::Instant;
 
+#[cfg(target_os = "macos")]
 use tracing::debug;
 
 use super::CalendarEvent;
