@@ -39,7 +39,7 @@ async fn core_watching(
     let source: Box<dyn DetectionSource> = Box::new(FixtureDetectionSource::new(timeline));
     tokio::spawn(evertranscript_core::detect::driver::run(
         Arc::clone(&core),
-        source,
+        vec![source],
         Box::new(SilentNotifier),
         shutdown.clone(),
     ));
@@ -147,5 +147,52 @@ async fn a_device_swap_produces_one_meeting_rather_than_two() {
         meetings.len(),
         1,
         "the swap split the Meeting: {meetings:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_calendar_armed_meeting_is_named_from_the_event() {
+    // ADR-0036's title chain: the calendar names the Meeting at its birth,
+    // instead of it being "zoom, 10:02" until a Summary renames it. And the
+    // arming itself records nothing — only the microphone does that.
+    let (core, _dir, shutdown) = core_watching(
+        Timeline::new()
+            .calendar_started("evt-1", "Quarterly review", 1_800_000)
+            .wait(20_000)
+            .mic_held("us.zoom.xos")
+            .wait(600_000)
+            .mic_released("us.zoom.xos")
+            .wait(30_000)
+            .fragmented(5_000),
+    )
+    .await;
+    settle().await;
+    shutdown.cancel();
+
+    let meetings = core.list_meetings(10, 0).await.expect("list");
+    assert_eq!(meetings.len(), 1, "one meeting: {meetings:?}");
+    assert_eq!(
+        meetings[0].title.as_deref(),
+        Some("Quarterly review"),
+        "the Meeting should carry the event's title"
+    );
+}
+
+#[tokio::test]
+async fn an_armed_meeting_alone_records_nothing() {
+    // The calendar knows when; only the microphone knows that.
+    let (core, _dir, shutdown) = core_watching(
+        Timeline::new()
+            .calendar_started("evt-1", "Quarterly review", 1_800_000)
+            .wait(600_000)
+            .fragmented(5_000),
+    )
+    .await;
+    settle().await;
+    shutdown.cancel();
+
+    assert!(
+        core.list_meetings(10, 0).await.expect("list").is_empty(),
+        "the calendar started a recording, which it must never do"
     );
 }

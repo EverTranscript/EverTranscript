@@ -18,6 +18,7 @@
 //!    the wall clock itself cannot be tested without waiting. Every decision
 //!    here is a function of the timeline it was given (ADR-0023 as amended).
 
+pub mod calendar;
 pub mod driver;
 pub mod fixture;
 #[cfg(target_os = "macos")]

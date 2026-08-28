@@ -107,11 +107,19 @@ fn the_binary_knows_no_cloud_transcription_or_calendar_endpoint() {
 
 #[test]
 #[cfg(target_os = "macos")]
-fn the_binary_links_no_screen_capture_or_calendar_framework() {
-    // ADR-0027 removed Screen Recording from the sanctioned permission set,
-    // and ADR-0036's calendar access is M2. Linking either framework now
-    // would put its usage prompt in front of Operators for a feature that
-    // does not exist.
+fn the_binary_links_no_screen_capture_or_location_framework() {
+    // ADR-0027 removed Screen Recording from the sanctioned permission set.
+    // EventKit joined in M2 under ADR-0036 and is now expected; everything
+    // it dragged in with it is not.
+    //
+    // This test earned its place the moment the calendar landed. Adding
+    // `objc2-event-kit` with its default features linked **MapKit and
+    // CoreLocation** — a location framework, in a product whose entire
+    // claim is that it processes no input it was not handed. Nothing in the
+    // code referenced either one; they arrived through a default feature
+    // set, which is exactly the kind of thing no one reads a diff for.
+    // `default-features = false` removed them, and this assertion is what
+    // keeps them gone.
     let output = Command::new("otool")
         .args(["-L"])
         .arg(binary())
@@ -119,10 +127,10 @@ fn the_binary_links_no_screen_capture_or_calendar_framework() {
         .expect("running otool");
     let linked = String::from_utf8_lossy(&output.stdout);
 
-    for framework in ["ScreenCaptureKit", "EventKit", "Contacts"] {
+    for framework in ["ScreenCaptureKit", "Contacts", "MapKit", "CoreLocation"] {
         assert!(
             !linked.contains(framework),
-            "M1 must not link {framework}:\n{linked}"
+            "nothing sanctions linking {framework}:\n{linked}"
         );
     }
     // And it does link what it legitimately needs for the microphone.

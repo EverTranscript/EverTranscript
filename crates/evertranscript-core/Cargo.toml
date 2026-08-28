@@ -48,6 +48,20 @@ objc2-core-graphics.workspace = true
 objc2-core-audio-types.workspace = true
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
+# Calendar arming (ADR-0036), and nothing else. `default-features = false`
+# is load-bearing rather than tidy: the default set pulls MapKit and
+# CoreLocation, and a product whose whole claim is that it processes no
+# input it was not handed must not link a location framework. The guarantee
+# suite is what noticed.
+objc2-event-kit = { version = "0.3.2", default-features = false, features = [
+    "EKEventStore",
+    "EKEvent",
+    "EKCalendarItem",
+    "EKTypes",
+    "EKObject",
+    "EKCalendar",
+    "EKParticipant",
+] }
 
 [dev-dependencies]
 evertranscript-fixtures = { path = "../evertranscript-fixtures" }

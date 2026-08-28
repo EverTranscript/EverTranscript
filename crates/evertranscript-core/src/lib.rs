@@ -91,10 +91,11 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
     // Meeting Detection runs beside the server, never inside it: a policy
     // deciding what to record must not be able to make a Client's request
     // wait, and a Core with no detector must still serve (ADR-0026).
-    let detection_task = detect_source().map(|source| {
+    let senses = detect_sources();
+    let detection_task = (!senses.is_empty()).then(|| {
         tokio::spawn(detect::driver::run(
             Arc::clone(&core),
-            source,
+            senses,
             Box::new(detect::notify::SilentNotifier),
             shutdown.clone(),
         ))
@@ -120,18 +121,23 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
 /// `None` is a supported answer: a Core on a platform without detection
 /// serves normally and records when asked, exactly as M1 did. Auto-Record is
 /// the thing that is missing, not the product.
-fn detect_source() -> Option<Box<dyn detect::DetectionSource>> {
+fn detect_sources() -> Vec<Box<dyn detect::DetectionSource>> {
     #[cfg(target_os = "macos")]
-    {
-        Some(Box::new(detect::macos::MacOsDetectionSource::new()))
-    }
+    let machine: Box<dyn detect::DetectionSource> =
+        Box::new(detect::macos::MacOsDetectionSource::new());
     #[cfg(target_os = "windows")]
+    let machine: Box<dyn detect::DetectionSource> =
+        Box::new(detect::windows::WindowsDetectionSource::new());
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     {
-        Some(Box::new(detect::windows::WindowsDetectionSource::new()))
+        // Arms and names; never triggers (ADR-0036). Starting the calendar
+        // without a grant is a no-op rather than an error.
+        vec![machine, Box::new(detect::calendar::CalendarSource::new())]
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
-        None
+        Vec::new()
     }
 }
 

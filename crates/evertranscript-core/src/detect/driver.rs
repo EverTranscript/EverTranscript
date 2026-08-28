@@ -28,7 +28,7 @@ const CHANNEL_CAPACITY: usize = 256;
 /// Drives Auto-Record until shutdown.
 pub async fn run(
     core: Arc<Core>,
-    mut source: Box<dyn DetectionSource>,
+    sources: Vec<Box<dyn DetectionSource>>,
     notifier: Box<dyn Notifier>,
     shutdown: CancellationToken,
 ) {
@@ -41,12 +41,28 @@ pub async fn run(
     };
     let mut policy = AutoRecord::new(watchlist);
 
+    // Several senses, one stream (ADR-0036). The policy is written against
+    // a timeline and does not care how many things are producing it.
     let (events_tx, mut events_rx) = mpsc::channel::<DetectionEvent>(CHANNEL_CAPACITY);
-    if let Err(error) = source.start(events_tx) {
-        warn!(%error, source = source.describe(), "detection could not start");
+    let mut sources = sources;
+    let mut running = Vec::new();
+    for mut source in sources.drain(..) {
+        match source.start(events_tx.clone()) {
+            Ok(()) => {
+                info!(source = source.describe(), "watching");
+                running.push(source);
+            }
+            // One sense failing must not take the others with it: a machine
+            // with no calendar grant still detects meetings.
+            Err(error) => warn!(%error, source = source.describe(), "this sense could not start"),
+        }
+    }
+    if running.is_empty() {
+        warn!("nothing is watching; Auto-Record is not running");
         return;
     }
-    info!(source = source.describe(), "Meeting Detection is watching");
+    // The loop below owns the only live sender once the sources have theirs.
+    drop(events_tx);
 
     // What the policy believed last time round, so a Meeting that vanished
     // between events can be recognised as the Operator's own Stop.
@@ -83,7 +99,9 @@ pub async fn run(
         policy_thought_recording = policy.is_recording();
     }
 
-    source.stop();
+    for source in running.iter_mut() {
+        source.stop();
+    }
     info!("Meeting Detection stopped");
 }
 
