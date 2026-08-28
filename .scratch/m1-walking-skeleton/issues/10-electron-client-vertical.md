@@ -4,7 +4,7 @@
 
 **Blocked by:** 06.
 
-**Status:** done — not visually verified (no display on this machine)
+**Status:** done — not visually verified (no reachable GUI session on this machine)
 
 - [x] The app consumes only generated ts-rs protocol types — no hand-written wire types
 - [x] Meeting list and Meeting view (title, metadata, transcript with channel labels) from the read surface

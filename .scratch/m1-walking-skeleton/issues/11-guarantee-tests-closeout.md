@@ -11,6 +11,9 @@
 - [x] Zero-network test: with models present, a full record→stop→Mirror cycle produces no network traffic on either platform
 - [x] Consolidated crash suite green: kill mid-recording, kill mid-stop, incomplete-copy detection, journal fold on restart
 - [x] Protocol schema fixtures frozen (additive-only from here per ADR-0028); CI green on macOS and Windows as a required gate
-- [ ] **Not done: needs a human at a machine with a microphone.** This environment has no usable input
-      device and no way to grant the TCC prompt, so every path below the AudioSource seam is proven with
-      fixture audio instead. Recording one real meeting is the remaining step to call M1 done.
+- [ ] **Not done: needs a human at a machine with a microphone.** This one has no input device at all
+      (`system_profiler` lists none) and no audio-recording grant, so every path below the AudioSource seam is
+      proven with fixture audio instead. What is no longer guesswork is *why*: `evertranscript audio-check`
+      listens on both legs and reports what each actually produced, so whoever does the dogfood run can
+      confirm their permissions took before recording anything. On this machine it reports both legs
+      correctly, including the refused system-audio grant.

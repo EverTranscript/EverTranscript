@@ -6,11 +6,17 @@
 
 **Status:** partly done — the tray UI itself is not built
 
-- [ ] **Not done.** A tray needs the macOS main-thread event loop, which restructures how the daemon starts,
-      and it cannot be verified on this headless machine. The state it would display is all available over
-      the protocol (`status`, `core/stateChanged`, `models/status`), so the tray is presentation over an
-      interface that already exists.
+- [ ] **Not done, and deliberately not built blind.** A tray needs the macOS main-thread event loop, which
+      restructures how the daemon starts — the most load-bearing path there is — in exchange for a control
+      nobody here can see. This machine has no reachable GUI session: `screencapture` fails with "could not
+      create image from display", so neither the icon nor a menu click could be verified, and "it compiles"
+      is not evidence that a menu bar item works. Everything it would display is already on the protocol
+      (`status`, `core/stateChanged`, `models/status`, and now a Meeting's `audioNotes`), so this is
+      presentation over a finished interface and is the right work for someone at a screen. No bundle is
+      needed — a bare binary can take an accessory activation policy — so packaging is not the blocker.
 - [~] The not-ready signal exists and is correct (`models/status` reports `ready`); nothing renders it yet.
+      What a recording *lost* now renders in three places that do exist: the Mirror, `evertranscript show`,
+      and the Electron client, carried on the Meeting as `audioNotes`.
 - [x] Launch-at-login is a protocol method and `evertranscript autostart on|off`, registration-only (a LaunchAgent
       plist on macOS, the Run key on Windows), leaving a running Core alone. Quit-from-tray awaits the tray;
       SIGTERM stops the Core today.
