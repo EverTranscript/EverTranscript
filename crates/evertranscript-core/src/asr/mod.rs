@@ -4,6 +4,7 @@
 //! (ADR-0002). There is no cloud path here to disable, because none exists —
 //! that absence is the Closed Boundary, not a setting.
 
+pub mod filters;
 pub mod pipeline;
 pub mod vad;
 pub mod whisper;

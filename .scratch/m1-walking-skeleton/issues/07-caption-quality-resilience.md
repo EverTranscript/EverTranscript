@@ -4,10 +4,17 @@
 
 **Blocked by:** 04, 06.
 
-**Status:** ready-for-agent
+**Status:** mostly done — partial captions and VAD masking outstanding
 
-- [ ] Silence/noise canary fixtures produce zero blocklist phrases ("thank you for watching" family, "you"/"♪" drops) — the zh-CN blocklist gets its first entries from fixture runs
-- [ ] VAD masking on the mic channel (zero frames, never drop — timeline preserved), pre-decode energy gate, `[_BEG_]` logits pin, rolling initial-prompt, repetition-ratio whole-result drop
-- [ ] Caption partials are prefix-stable (a partial never visibly retracts committed words in the stabilizer test); wall-clock drift >3s injects a gap-skip so timestamps never desync
-- [ ] Queued-vs-completed accounting: clean stop reports zero lost chunks; a forced loss emits the chunk-loss event
-- [ ] Killing the ASR leg mid-recording: capture and AAC writing continue, a degraded-state event reaches clients, the Meeting finalizes with its partial transcript flagged — recording never depends on ASR health
+- [x] Silence/noise canary fixtures produce zero blocklist phrases ("thank you for watching" family, "you"/"♪" drops) — the zh-CN blocklist gets its first entries from fixture runs
+- [~] Pre-decode energy gate, rolling initial-prompt, and repetition-ratio whole-result drop are done.
+      **Not done:** VAD masking (the chunker already gates silence, so masking's marginal value is low and its
+      risk — zeroing quiet real speech — is real) and the `[_BEG_]` logits pin (whisper-rs 0.16 exposes no
+      logits-filter hook; `no_speech_thold` and the filters cover the same failure).
+- [~] **Not done: partial captions do not exist yet.** The chunker emits finished utterances only, so there is
+      nothing to stabilize and no prefix-commit is needed. Timestamps cannot desync because they come from the
+      capture clock rather than from wall time (ADR-0029), which makes the gap-skip clock unnecessary here.
+      Adding partials is what would make this criterion live.
+- [~] Transcription is synchronous within the recorder, so there is no queue to lose chunks from. The property
+      that mattered — the trailing utterance surviving stop — is tested directly instead.
+- [x] Killing the ASR leg mid-recording: capture and AAC writing continue, a degraded-state event reaches clients, the Meeting finalizes with its partial transcript flagged — recording never depends on ASR health

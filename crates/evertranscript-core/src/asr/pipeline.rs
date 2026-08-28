@@ -27,29 +27,6 @@ pub struct TranscribedSegment {
     pub confidence: f32,
 }
 
-/// Text whisper produces when handed silence.
-///
-/// These are not transcription errors to be tolerated — they are inventions,
-/// and our record is immutable, so one that slips through is in the
-/// Operator's History permanently. Ticket 07 extends this list from fixture
-/// runs, including its Chinese equivalents.
-const HALLUCINATIONS: &[&str] = &[
-    "thank you",
-    "thank you.",
-    "thanks for watching",
-    "thank you for watching",
-    "thank you for watching!",
-    "you",
-    "you.",
-    "bye",
-    "bye.",
-    "♪",
-    "(music)",
-    "[music]",
-    "[silence]",
-    "[blank_audio]",
-];
-
 /// Below this average token probability, text is treated as invention
 /// rather than speech.
 const MIN_CONFIDENCE: f32 = 0.25;
@@ -142,7 +119,7 @@ impl TranscriptionPipeline {
             }
         };
 
-        let text = clean(&result.text)?;
+        let text = super::filters::clean(&result.text)?;
         if result.confidence < MIN_CONFIDENCE {
             debug!(
                 confidence = result.confidence,
@@ -160,24 +137,6 @@ impl TranscriptionPipeline {
             confidence: result.confidence,
         })
     }
-}
-
-/// Rejects text that is empty or a known invention.
-fn clean(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    let normalized = trimmed.to_lowercase();
-    let normalized = normalized.trim_matches(|c: char| c.is_whitespace() || c == '.' || c == '!');
-    if HALLUCINATIONS
-        .iter()
-        .any(|phrase| normalized == phrase.trim_matches(|c: char| c == '.' || c == '!'))
-    {
-        debug!(text = trimmed, "dropping a known hallucination");
-        return None;
-    }
-    Some(trimmed.to_string())
 }
 
 /// Splits an interleaved stereo block into its two mono channels.
