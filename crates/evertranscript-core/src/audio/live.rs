@@ -44,13 +44,41 @@ trait StreamHandle: Send {
 struct ThreadStream {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     handle: Option<std::thread::JoinHandle<()>>,
+    /// Disconnects when the capture thread exits. Nothing is ever sent on
+    /// it — the thread owning the sender is the signal.
+    done: std::sync::mpsc::Receiver<()>,
 }
+
+/// How long a stop waits for the capture thread before abandoning it.
+///
+/// Sized for a *healthy* teardown, which is milliseconds against a 20 ms
+/// poll, and deliberately not for the pathological case: a thread parked
+/// inside `AudioOutputUnitStart` does not come back, so a longer wait buys
+/// nothing and is paid by the Operator on every stop that hits it.
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_millis(2_000);
 
 impl StreamHandle for ThreadStream {
     fn stop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        // Never an unbounded join. `AudioOutputUnitStart` can block
+        // indefinitely when the default input device changes underneath it
+        // — plugging in AirPods mid-meeting is enough — and the thread is
+        // then stuck before the loop that would see the stop flag. Joining
+        // it there deadlocks stop, and with it the whole Core: even
+        // `status` stops answering, and only SIGKILL recovers.
+        match self.done.recv_timeout(STOP_GRACE) {
+            // The sender went with the thread: it is finished, so this
+            // join returns at once.
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = handle.join();
+            }
+            _ => warn!(
+                "the microphone thread did not stop within {STOP_GRACE:?}; \
+                 abandoning it so the Meeting can still be finalized"
+            ),
         }
     }
 }
@@ -105,12 +133,16 @@ impl LiveSource {
 
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let thread_stop = std::sync::Arc::clone(&stop);
+        let (done_tx, done) = std::sync::mpsc::channel::<()>();
 
         // cpal's Stream is !Send, so it is created and dropped on one
         // dedicated thread rather than moved into the async runtime.
         let handle = std::thread::Builder::new()
             .name("evertranscript-mic".to_string())
             .spawn(move || {
+                // Held for the thread's lifetime; dropping it on the way
+                // out is what tells `stop` the teardown finished.
+                let _done = done_tx;
                 if let Err(error) = run_microphone(device, config, clock, events, thread_stop) {
                     warn!(%error, "microphone capture ended");
                 }
@@ -120,6 +152,7 @@ impl LiveSource {
         self.stream = Some(Box::new(ThreadStream {
             stop,
             handle: Some(handle),
+            done,
         }));
         Ok(name)
     }
@@ -278,6 +311,42 @@ fn run_microphone(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The deadlock this closes: a capture thread stuck inside
+    /// `AudioOutputUnitStart` never reaches the loop that reads the stop
+    /// flag, and an unbounded join on it wedged the entire Core — stop
+    /// never returned, `status` stopped answering, and only SIGKILL got
+    /// the machine back.
+    #[test]
+    fn a_capture_thread_that_never_notices_the_flag_does_not_hang_the_stop() {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (done_tx, done) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _done = done_tx;
+            // Stuck the way CoreAudio gets stuck: never looks at the flag.
+            std::thread::sleep(std::time::Duration::from_secs(120));
+        });
+
+        let mut stream = ThreadStream {
+            stop: std::sync::Arc::clone(&stop),
+            handle: Some(handle),
+            done,
+        };
+
+        let started = std::time::Instant::now();
+        stream.stop();
+        let waited = started.elapsed();
+
+        assert!(
+            waited < STOP_GRACE * 2,
+            "stop waited {waited:?} on a thread that never exits; it must give \
+             up after about {STOP_GRACE:?} rather than block forever"
+        );
+        assert!(
+            stop.load(std::sync::atomic::Ordering::Relaxed),
+            "the thread must still have been asked to stop"
+        );
+    }
 
     #[test]
     fn asking_about_system_audio_answers_rather_than_panicking() {
