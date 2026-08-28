@@ -104,6 +104,12 @@ pub struct Core {
     /// Where settings are stored. Overridable so tests never touch the real
     /// machine's acknowledgment state.
     settings_path: std::path::PathBuf,
+    /// Where transcription models live. Overridable for the same reason as
+    /// `settings_path`: read from the machine, a test's result depends on
+    /// whether whoever ran the app here happened to fetch a model, and a
+    /// suite that is fast and silent on one laptop runs real inference on
+    /// the next.
+    models_dir: std::path::PathBuf,
 }
 
 /// Produces a transcription engine for a new Meeting.
@@ -168,7 +174,7 @@ fn live_source_factory() -> SourceFactory {
 impl Core {
     /// Creates the Core and its History layout.
     pub fn new() -> Result<Arc<Self>> {
-        Self::with_history_dir(paths::history_dir())
+        Self::with_paths_and_models(paths::history_dir(), Settings::path(), paths::models_dir())
     }
 
     /// Same, against an explicit History folder. Tests use this so they never
@@ -194,10 +200,23 @@ impl Core {
     }
 
     /// Same, with an explicit settings file. Tests use this so they never
-    /// read or write the real machine's acknowledgment state.
+    /// read or write the real machine's acknowledgment state — nor load its
+    /// models: this scopes them under the History folder, so a Core built
+    /// here finds no model unless the test put one there.
     pub fn with_paths(
         history_dir: std::path::PathBuf,
         settings_path: std::path::PathBuf,
+    ) -> Result<Arc<Self>> {
+        let models_dir = history_dir.join(paths::DATA_DIR_NAME).join("models");
+        Self::with_paths_and_models(history_dir, settings_path, models_dir)
+    }
+
+    /// Every path stated outright. Production names the real three; tests
+    /// name temporary ones.
+    pub fn with_paths_and_models(
+        history_dir: std::path::PathBuf,
+        settings_path: std::path::PathBuf,
+        models_dir: std::path::PathBuf,
     ) -> Result<Arc<Self>> {
         let incomplete_copy = paths::detect_incomplete_copy(&history_dir).then(|| {
             format!(
@@ -233,6 +252,7 @@ impl Core {
             transcriber_factory: Mutex::new(None),
             settings: Mutex::new(Settings::load_from(&settings_path)),
             settings_path,
+            models_dir,
         }))
     }
 
@@ -615,7 +635,7 @@ impl Core {
         if let Some(factory) = self.transcriber_factory.lock().await.as_ref() {
             return factory();
         }
-        let downloader = models::Downloader::new(paths::models_dir()).ok()?;
+        let downloader = models::Downloader::new(self.models_dir.clone()).ok()?;
         let entry = &models::registry::WHISPER_DEFAULT;
         let models::ModelStatus::Ready { path } = downloader.status(entry) else {
             warn!(
@@ -644,7 +664,7 @@ impl Core {
 
     /// What is on disk and what is still needed. Never touches the network.
     pub fn models_status(&self) -> Result<ModelsStatusResponse> {
-        let downloader = models::Downloader::new(paths::models_dir())?;
+        let downloader = models::Downloader::new(self.models_dir.clone())?;
         let models: Vec<ModelState> = models::registry::ALL
             .iter()
             .map(|entry| describe_model(&downloader, entry))
@@ -658,7 +678,7 @@ impl Core {
     /// Downloads what is missing. A corrupted file is removed first so the
     /// fetch starts from a clean slate rather than trying to resume garbage.
     pub async fn fetch_models(&self, key: Option<&str>, cancel: CancellationToken) -> Result<()> {
-        let downloader = models::Downloader::new(paths::models_dir())?;
+        let downloader = models::Downloader::new(self.models_dir.clone())?;
         let entries: Vec<&'static models::registry::ModelEntry> = match key {
             Some(key) => vec![
                 models::registry::find(key)
