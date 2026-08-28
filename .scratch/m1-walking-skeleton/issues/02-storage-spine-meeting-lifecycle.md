@@ -4,12 +4,12 @@
 
 **Blocked by:** 01 (scaffold + wire tier).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] One writer thread owns the sole connection; a small read-only pool serves queries; STRICT tables, CHECK-validated enums, UUIDv7 ids
-- [ ] `record start` → Meeting exists; `record stop` → Meeting finalized and Mirror written; delta-journal tables in place (populated by ticket 06)
-- [ ] Mirror composed per ADR-0005 as amended: frontmatter (id, date, app, duration, speakers, audio path) → Title → Summary ("None yet") → Notes ("None yet") → Transcript
-- [ ] Filenames `YYYY-MM-DD-<app>-<id8>.md`; retitle renames via the dirty-queue and GCs the stale name by id8; regeneration is atomic (temp + rename)
-- [ ] Dirty-queue outbox with generation acks + startup reconciliation drives all Mirror writes
-- [ ] History folder auto-created at `~/Documents/EverTranscript` (Windows: `Documents\EverTranscript`) with hidden `.data/` (dot + Windows hidden attribute); Mirrors-without-`.data` reported as an incomplete copy with recovery guidance
-- [ ] Whole-Meeting delete removes rows, Mirror, and audio in one act; `search` returns FTS matches; `export` prints the Mirror markdown to stdout
+- [x] One writer thread owns the sole connection; a small read-only pool serves queries; STRICT tables, CHECK-validated enums, UUIDv7 ids
+- [x] `record start` → Meeting exists; `record stop` → Meeting finalized and Mirror written; delta-journal tables in place (populated by ticket 06)
+- [x] Mirror composed per ADR-0005 as amended: frontmatter (id, date, app, duration, speakers, audio path) → Title → Summary ("None yet") → Notes ("None yet") → Transcript
+- [x] Filenames `YYYY-MM-DD-<app>-<id8>.md`; retitle renames via the dirty-queue and GCs the stale name by id8; regeneration is atomic (temp + rename)
+- [x] Dirty-queue outbox with generation acks + startup reconciliation drives all Mirror writes
+- [x] History folder auto-created at `~/Documents/EverTranscript` (Windows: `Documents\EverTranscript`) with hidden `.data/` (dot + Windows hidden attribute); Mirrors-without-`.data` reported as an incomplete copy with recovery guidance
+- [x] Whole-Meeting delete removes rows, Mirror, and audio in one act; `search` returns FTS matches; `export` prints the Mirror markdown to stdout

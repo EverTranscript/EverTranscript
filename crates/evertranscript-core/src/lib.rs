@@ -6,8 +6,10 @@
 //! `evertranscript-protocol`, never a second writer.
 
 pub mod client;
+pub mod mirror;
 pub mod paths;
 pub mod server;
+pub mod store;
 pub mod transport;
 
 pub use server::Core;
@@ -37,11 +39,20 @@ pub async fn run_daemon(shutdown: CancellationToken) -> anyhow::Result<()> {
     let core = Core::new()?;
     let (events_tx, events_rx) = mpsc::channel(transport::CHANNEL_CAPACITY);
 
+    // The Mirror projection runs alongside the server, not inside it: a slow
+    // disk must never make a Client's request wait.
+    let mirror_task = tokio::spawn(
+        core.mirror()
+            .clone()
+            .run(core.mirror_wake(), shutdown.clone()),
+    );
+
     let server = Server::new(Arc::clone(&core));
     let server_shutdown = shutdown.clone();
     let server_task = tokio::spawn(server.run(events_rx, server_shutdown));
 
     transport::serve(listener, events_tx, shutdown).await;
     let _ = server_task.await;
+    let _ = mirror_task.await;
     Ok(())
 }

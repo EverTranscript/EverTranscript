@@ -115,6 +115,13 @@ macro_rules! server_notification_definitions {
         )*
     ) => {
         /// Everything the Core may push to an attached Client unprompted.
+        //
+        // Variants differ in size (a Meeting is far bigger than a state
+        // enum), but a notification exists only long enough to be turned
+        // into a wire value and is never stored, so boxing every variant
+        // would trade an allocation per notification for stack bytes that
+        // are already gone by the next line.
+        #[allow(clippy::large_enum_variant)]
         #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
         #[serde(tag = "method", content = "params", rename_all = "camelCase")]
         #[ts(export)]
@@ -159,12 +166,60 @@ client_request_definitions! {
         params: StatusParams,
         response: StatusResponse,
     },
+    /// Starts recording. In M1 this is the Operator's explicit act; from M2
+    /// Auto-Record calls the same path.
+    MeetingStart => "meeting/start" {
+        params: MeetingStartParams,
+        response: MeetingResponse,
+    },
+    /// Stops the Meeting in progress and persists it.
+    MeetingStop => "meeting/stop" {
+        params: MeetingStopParams,
+        response: MeetingResponse,
+    },
+    /// Most recent Meetings first.
+    MeetingList => "meeting/list" {
+        params: MeetingListParams,
+        response: MeetingListResponse,
+    },
+    /// One Meeting with its Transcript.
+    MeetingGet => "meeting/get" {
+        params: MeetingGetParams,
+        response: MeetingDetailResponse,
+    },
+    /// Renames a Meeting. The Mirror follows, and the old filename is
+    /// garbage-collected by its id8 (ADR-0035).
+    MeetingRetitle => "meeting/retitle" {
+        params: MeetingRetitleParams,
+        response: MeetingResponse,
+    },
+    /// Removes a Meeting entirely — rows, Mirror, and audio. The only
+    /// destructive operation on the record besides Voiceprint deletion.
+    MeetingDelete => "meeting/delete" {
+        params: MeetingDeleteParams,
+        response: MeetingDeleteResponse,
+    },
+    /// The Meeting's Mirror markdown, exactly as written to disk.
+    MeetingExport => "meeting/export" {
+        params: MeetingGetParams,
+        response: MeetingExportResponse,
+    },
+    /// Full-text search across History.
+    HistorySearch => "history/search" {
+        params: HistorySearchParams,
+        response: HistorySearchResponse,
+    },
 }
 
 server_notification_definitions! {
     /// The Core's coarse state changed (idle ↔ recording).
     CoreStateChanged => "core/stateChanged" {
         params: CoreStateChangedParams,
+    },
+    /// A Meeting was created, updated, or removed. Clients refresh from it
+    /// rather than polling.
+    MeetingChanged => "meeting/changed" {
+        params: MeetingChangedParams,
     },
 }
 
@@ -303,6 +358,227 @@ pub struct CoreStateChangedParams {
     pub state: CoreState,
 }
 
+// ------------------------------------------------------------------ Meetings
+
+/// One recorded session: the unit of storage, retrieval, and summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Meeting {
+    /// UUIDv7. Its first 8 hex characters appear in the Mirror's filename
+    /// and are the stable handle outside references should key on.
+    pub id: String,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub ended_at: Option<String>,
+    /// None until titled. Clients render the fallback rather than inventing
+    /// a title, so "untitled" never becomes a stored string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// The app detection attributed this Meeting to; the Mirror's slug
+    /// before a Title exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detected_app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub duration_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mirror_filename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub audio_path: Option<String>,
+}
+
+/// One attributed span of the Transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptSegment {
+    pub id: String,
+    #[ts(type = "number")]
+    pub sequence: i64,
+    pub channel: AudioChannel,
+    #[ts(type = "number")]
+    pub start_ms: i64,
+    #[ts(type = "number")]
+    pub end_ms: i64,
+    pub text: String,
+    /// Set by Diarization in M3. Until then the channel carries attribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub speaker_id: Option<String>,
+}
+
+/// Which capture leg a segment came from. The mic channel is where the
+/// Operator is (ADR-0029 as amended).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AudioChannel {
+    Mic,
+    System,
+}
+
+impl AudioChannel {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mic => "mic",
+            Self::System => "system",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "mic" => Some(Self::Mic),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingStartParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detected_app: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingStopParams {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingResponse {
+    pub meeting: Meeting,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingListParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingListResponse {
+    pub meetings: Vec<Meeting>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingGetParams {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingDetailResponse {
+    pub meeting: Meeting,
+    pub segments: Vec<TranscriptSegment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingRetitleParams {
+    pub id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingDeleteParams {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingDeleteResponse {
+    pub deleted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingExportResponse {
+    pub markdown: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub mirror_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HistorySearchParams {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HistorySearchResponse {
+    pub results: Vec<SearchResult>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SearchResult {
+    pub meeting: Meeting,
+    /// The matching text with the hit in context.
+    pub snippet: String,
+}
+
+/// What happened to a Meeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum MeetingChangeKind {
+    Started,
+    Updated,
+    Stopped,
+    Deleted,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingChangedParams {
+    pub kind: MeetingChangeKind,
+    pub meeting_id: String,
+    /// Absent for a deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meeting: Option<Meeting>,
+}
+
 /// Convenience: the id type re-exported for clients building requests.
 pub type ClientRequestId = RequestId;
 
@@ -311,17 +587,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_method_decodes_from_its_own_name() {
+    fn every_method_in_the_table_is_wired_to_a_params_type() {
+        // A method is either decodable from empty params (all fields
+        // defaulted) or rejects them as invalid. What it must never do is
+        // come back unknown — that would mean the table names a method the
+        // decoder cannot reach.
         for method in ClientRequest::METHODS {
-            let decoded = ClientRequest::from_wire(method, None);
-            // `initialize` requires params; everything else must accept none.
-            if *method == "initialize" {
-                assert!(matches!(decoded, Err(DecodeError::InvalidParams { .. })));
-            } else {
-                let request =
-                    decoded.unwrap_or_else(|e| panic!("{method} rejected empty params: {e}"));
-                assert_eq!(&request.method(), method);
+            match ClientRequest::from_wire(method, None) {
+                Ok(request) => assert_eq!(&request.method(), method),
+                Err(DecodeError::InvalidParams { method: named, .. }) => {
+                    assert_eq!(&named, method)
+                }
+                Err(DecodeError::UnknownMethod(unknown)) => {
+                    panic!("{unknown} is in METHODS but the decoder does not know it")
+                }
             }
+        }
+    }
+
+    #[test]
+    fn every_method_declares_a_response_type() {
+        assert_eq!(
+            ClientRequest::RESPONSE_TYPES.len(),
+            ClientRequest::METHODS.len()
+        );
+        for (method, response) in ClientRequest::RESPONSE_TYPES {
+            assert!(
+                !response.is_empty(),
+                "{method} must declare a response type"
+            );
         }
     }
 

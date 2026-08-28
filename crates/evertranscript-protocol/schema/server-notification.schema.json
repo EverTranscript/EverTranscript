@@ -19,6 +19,23 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "A Meeting was created, updated, or removed. Clients refresh from it\nrather than polling.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/changed"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingChangedParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -39,6 +56,99 @@
       },
       "required": [
         "state"
+      ]
+    },
+    "Meeting": {
+      "description": "One recorded session: the unit of storage, retrieval, and summary.",
+      "type": "object",
+      "properties": {
+        "audioPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detectedApp": {
+          "description": "The app detection attributed this Meeting to; the Mirror's slug\nbefore a Title exists.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "endedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "UUIDv7. Its first 8 hex characters appear in the Mirror's filename\nand are the stable handle outside references should key on.",
+          "type": "string"
+        },
+        "mirrorFilename": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "startedAt": {
+          "type": "string"
+        },
+        "title": {
+          "description": "None until titled. Clients render the fallback rather than inventing\na title, so \"untitled\" never becomes a stored string.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "startedAt"
+      ]
+    },
+    "MeetingChangeKind": {
+      "description": "What happened to a Meeting.",
+      "type": "string",
+      "enum": [
+        "started",
+        "updated",
+        "stopped",
+        "deleted"
+      ]
+    },
+    "MeetingChangedParams": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/MeetingChangeKind"
+        },
+        "meeting": {
+          "description": "Absent for a deletion.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Meeting"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "meetingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "meetingId"
       ]
     }
   }

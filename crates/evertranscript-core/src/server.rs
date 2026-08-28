@@ -10,30 +10,51 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use anyhow::Result;
 use evertranscript_protocol::error_codes;
+use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::ClientNotification;
 use evertranscript_protocol::ClientRequest;
 use evertranscript_protocol::CoreState;
 use evertranscript_protocol::CoreStateChangedParams;
+use evertranscript_protocol::HistorySearchResponse;
 use evertranscript_protocol::InitializeParams;
 use evertranscript_protocol::InitializeResponse;
 use evertranscript_protocol::JsonRpcError;
 use evertranscript_protocol::JsonRpcMessage;
 use evertranscript_protocol::JsonRpcResponse;
+use evertranscript_protocol::Meeting;
+use evertranscript_protocol::MeetingChangeKind;
+use evertranscript_protocol::MeetingChangedParams;
+use evertranscript_protocol::MeetingDeleteResponse;
+use evertranscript_protocol::MeetingDetailResponse;
+use evertranscript_protocol::MeetingExportResponse;
+use evertranscript_protocol::MeetingListResponse;
+use evertranscript_protocol::MeetingResponse;
 use evertranscript_protocol::RequestId;
 use evertranscript_protocol::ServerCapabilities;
 use evertranscript_protocol::ServerInfo;
 use evertranscript_protocol::ServerNotification;
 use evertranscript_protocol::StatusResponse;
+use evertranscript_protocol::TranscriptSegment;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use tracing::warn;
 
+use crate::mirror;
+use crate::mirror::MirrorWriter;
 use crate::paths;
+use crate::store::meetings;
+use crate::store::Store;
 use crate::transport::ConnectionId;
 use crate::transport::TransportEvent;
+
+/// The default page size for `meeting/list`.
+const DEFAULT_LIST_LIMIT: u32 = 50;
+const DEFAULT_SEARCH_LIMIT: u32 = 25;
 
 /// The Core's own state, independent of any Client.
 pub struct Core {
@@ -45,21 +66,20 @@ pub struct Core {
     /// erase the only evidence that the Operator's copy was partial, and
     /// they would never learn their audio and Voiceprints were left behind.
     incomplete_copy: Option<String>,
+    store: Store,
+    mirror: MirrorWriter,
+    mirror_wake: Arc<Notify>,
 }
 
 impl Core {
     /// Creates the Core and its History layout.
-    ///
-    /// A folder holding Mirrors but no machine store is reported rather than
-    /// silently re-created: the Operator believes they copied their History,
-    /// and a fresh empty store would look like data loss (ADR-0035).
-    pub fn new() -> anyhow::Result<Arc<Self>> {
+    pub fn new() -> Result<Arc<Self>> {
         Self::with_history_dir(paths::history_dir())
     }
 
     /// Same, against an explicit History folder. Tests use this so they never
     /// depend on process-global paths.
-    pub fn with_history_dir(history_dir: std::path::PathBuf) -> anyhow::Result<Arc<Self>> {
+    pub fn with_history_dir(history_dir: std::path::PathBuf) -> Result<Arc<Self>> {
         let incomplete_copy = paths::detect_incomplete_copy(&history_dir).then(|| {
             format!(
                 "{} holds Mirrors but no machine store — this looks like an incomplete copy, \
@@ -72,16 +92,39 @@ impl Core {
         if let Some(warning) = &incomplete_copy {
             warn!("{warning}");
         }
+
+        let store = Store::open(
+            &history_dir
+                .join(paths::DATA_DIR_NAME)
+                .join("EverTranscript.db"),
+        )?;
+        let mirror = MirrorWriter::new(store.clone(), history_dir.clone());
+
         Ok(Arc::new(Self {
             started_at: Instant::now(),
             history_dir,
             state: Mutex::new(CoreState::Idle),
             incomplete_copy,
+            store,
+            mirror,
+            mirror_wake: Arc::new(Notify::new()),
         }))
     }
 
     pub fn history_dir(&self) -> &std::path::Path {
         &self.history_dir
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.store
+    }
+
+    pub fn mirror(&self) -> &MirrorWriter {
+        &self.mirror
+    }
+
+    pub fn mirror_wake(&self) -> Arc<Notify> {
+        Arc::clone(&self.mirror_wake)
     }
 
     pub fn uptime_seconds(&self) -> u64 {
@@ -105,6 +148,165 @@ impl Core {
             history_dir: self.history_dir.display().to_string(),
             incomplete_copy_warning: self.incomplete_copy.clone(),
         }
+    }
+
+    // ------------------------------------------------------------ Meetings
+
+    /// Starts a Meeting. Refuses if one is already running: a Meeting runs
+    /// record-start to record-stop, and two at once would make "the Meeting
+    /// in progress" ambiguous for every other caller.
+    pub async fn start_meeting(
+        &self,
+        title: Option<String>,
+        detected_app: Option<String>,
+    ) -> Result<Meeting> {
+        let meeting = self
+            .store
+            .write(move |connection| {
+                if let Some(running) = meetings::active(connection)? {
+                    anyhow::bail!(
+                        "a Meeting is already recording (started {})",
+                        running.started_at
+                    );
+                }
+                meetings::start(connection, title.as_deref(), detected_app.as_deref())
+            })
+            .await?;
+        self.set_state(CoreState::Recording).await;
+        self.wake_mirror();
+        Ok(meeting)
+    }
+
+    /// Stops the Meeting in progress and persists it (story 5).
+    pub async fn stop_meeting(&self) -> Result<Meeting> {
+        let meeting = self
+            .store
+            .write(|connection| {
+                let Some(running) = meetings::active(connection)? else {
+                    anyhow::bail!("no Meeting is recording");
+                };
+                meetings::stop(connection, &running.id)
+            })
+            .await?;
+        self.set_state(CoreState::Idle).await;
+        self.wake_mirror();
+        // Persisting means the Mirror exists too, not just the rows.
+        self.mirror.rebuild_pending().await?;
+        Ok(meeting)
+    }
+
+    pub async fn list_meetings(&self, limit: u32, offset: u32) -> Result<Vec<Meeting>> {
+        self.store
+            .read(move |connection| meetings::list(connection, limit, offset))
+            .await
+    }
+
+    pub async fn get_meeting(&self, id: &str) -> Result<Option<(Meeting, Vec<TranscriptSegment>)>> {
+        let id = id.to_string();
+        self.store
+            .read(move |connection| {
+                let Some(meeting) = meetings::get(connection, &id)? else {
+                    return Ok(None);
+                };
+                Ok(Some((meeting, meetings::segments(connection, &id)?)))
+            })
+            .await
+    }
+
+    pub async fn retitle_meeting(&self, id: &str, title: &str) -> Result<Meeting> {
+        let (id, title) = (id.to_string(), title.to_string());
+        let meeting = self
+            .store
+            .write(move |connection| meetings::retitle(connection, &id, &title))
+            .await?;
+        // The filename follows the title, so rebuild before answering: the
+        // caller's next `ls` should already show the new name.
+        self.mirror.rebuild_pending().await?;
+        self.get_meeting(&meeting.id)
+            .await?
+            .map(|(meeting, _)| meeting)
+            .ok_or_else(|| anyhow::anyhow!("the Meeting vanished after retitling"))
+    }
+
+    /// Removes a Meeting entirely: rows, Mirror, and audio (story 21).
+    pub async fn delete_meeting(&self, id: &str) -> Result<bool> {
+        let id_for_write = id.to_string();
+        let deleted = self
+            .store
+            .write(move |connection| {
+                let transaction = connection.transaction()?;
+                let deleted = meetings::delete(&transaction, &id_for_write)?;
+                transaction.commit()?;
+                Ok(deleted)
+            })
+            .await?;
+
+        if !deleted.existed {
+            return Ok(false);
+        }
+        if let Some(filename) = deleted.mirror_filename {
+            self.mirror.remove(&filename);
+        }
+        if let Some(audio_path) = deleted.audio_path {
+            let path = self.history_dir.join(&audio_path);
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    warn!(path = %path.display(), %error, "could not remove the Meeting's audio");
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// The Meeting's Mirror markdown. Rendered from the record rather than
+    /// read back from disk, so an export is never a stale file.
+    pub async fn export_meeting(&self, id: &str) -> Result<Option<(String, Option<String>)>> {
+        let Some((meeting, segments)) = self.get_meeting(id).await? else {
+            return Ok(None);
+        };
+        let markdown = mirror::render(&meeting, &segments);
+        let path = meeting
+            .mirror_filename
+            .as_ref()
+            .map(|filename| self.history_dir.join(filename).display().to_string());
+        Ok(Some((markdown, path)))
+    }
+
+    pub async fn search_history(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<evertranscript_protocol::SearchResult>> {
+        let query = query.to_string();
+        self.store
+            .read(move |connection| meetings::search(connection, &query, limit))
+            .await
+    }
+
+    /// Appends a Transcript segment to the Meeting in progress. Ticket 06's
+    /// ASR pipeline is the real caller; it exists here so the storage path is
+    /// exercised end to end before then.
+    pub async fn append_segment(
+        &self,
+        meeting_id: &str,
+        channel: AudioChannel,
+        start_ms: i64,
+        end_ms: i64,
+        text: &str,
+    ) -> Result<TranscriptSegment> {
+        let (meeting_id, text) = (meeting_id.to_string(), text.to_string());
+        let segment = self
+            .store
+            .write(move |connection| {
+                meetings::append_segment(connection, &meeting_id, channel, start_ms, end_ms, &text)
+            })
+            .await?;
+        self.wake_mirror();
+        Ok(segment)
+    }
+
+    fn wake_mirror(&self) {
+        self.mirror_wake.notify_one();
     }
 }
 
@@ -268,14 +470,115 @@ impl Server {
             _ => {}
         }
 
-        let result = match request {
-            ClientRequest::Initialize(params) => self.handle_initialize(connection_id, params),
-            ClientRequest::Status(_) => {
-                serde_json::to_value(self.core.status().await).unwrap_or(serde_json::Value::Null)
-            }
-        };
+        match self.handle(connection_id, request).await {
+            Ok(result) => JsonRpcMessage::Response(JsonRpcResponse { id, result }),
+            Err(error) => JsonRpcMessage::Error(JsonRpcError::new(
+                id,
+                error_codes::INTERNAL_ERROR,
+                error.to_string(),
+            )),
+        }
+    }
 
-        JsonRpcMessage::Response(JsonRpcResponse { id, result })
+    async fn handle(
+        &mut self,
+        connection_id: ConnectionId,
+        request: ClientRequest,
+    ) -> Result<serde_json::Value> {
+        match request {
+            ClientRequest::Initialize(params) => Ok(self.handle_initialize(connection_id, params)),
+
+            ClientRequest::Status(_) => Ok(serde_json::to_value(self.core.status().await)?),
+
+            ClientRequest::MeetingStart(params) => {
+                let meeting = self
+                    .core
+                    .start_meeting(params.title, params.detected_app)
+                    .await?;
+                self.announce(MeetingChangeKind::Started, &meeting).await;
+                self.broadcast(ServerNotification::CoreStateChanged(
+                    CoreStateChangedParams {
+                        state: CoreState::Recording,
+                    },
+                ))
+                .await;
+                Ok(serde_json::to_value(MeetingResponse { meeting })?)
+            }
+
+            ClientRequest::MeetingStop(_) => {
+                let meeting = self.core.stop_meeting().await?;
+                self.announce(MeetingChangeKind::Stopped, &meeting).await;
+                self.broadcast(ServerNotification::CoreStateChanged(
+                    CoreStateChangedParams {
+                        state: CoreState::Idle,
+                    },
+                ))
+                .await;
+                Ok(serde_json::to_value(MeetingResponse { meeting })?)
+            }
+
+            ClientRequest::MeetingList(params) => {
+                let meetings = self
+                    .core
+                    .list_meetings(
+                        params.limit.unwrap_or(DEFAULT_LIST_LIMIT),
+                        params.offset.unwrap_or(0),
+                    )
+                    .await?;
+                Ok(serde_json::to_value(MeetingListResponse { meetings })?)
+            }
+
+            ClientRequest::MeetingGet(params) => {
+                let (meeting, segments) = self
+                    .core
+                    .get_meeting(&params.id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("no Meeting with id {}", params.id))?;
+                Ok(serde_json::to_value(MeetingDetailResponse {
+                    meeting,
+                    segments,
+                })?)
+            }
+
+            ClientRequest::MeetingRetitle(params) => {
+                let meeting = self.core.retitle_meeting(&params.id, &params.title).await?;
+                self.announce(MeetingChangeKind::Updated, &meeting).await;
+                Ok(serde_json::to_value(MeetingResponse { meeting })?)
+            }
+
+            ClientRequest::MeetingDelete(params) => {
+                let deleted = self.core.delete_meeting(&params.id).await?;
+                if deleted {
+                    self.broadcast(ServerNotification::MeetingChanged(MeetingChangedParams {
+                        kind: MeetingChangeKind::Deleted,
+                        meeting_id: params.id.clone(),
+                        meeting: None,
+                    }))
+                    .await;
+                }
+                Ok(serde_json::to_value(MeetingDeleteResponse { deleted })?)
+            }
+
+            ClientRequest::MeetingExport(params) => {
+                let (markdown, mirror_path) = self
+                    .core
+                    .export_meeting(&params.id)
+                    .await?
+                    .ok_or_else(|| anyhow::anyhow!("no Meeting with id {}", params.id))?;
+                Ok(serde_json::to_value(MeetingExportResponse {
+                    markdown,
+                    mirror_path,
+                })?)
+            }
+
+            ClientRequest::HistorySearch(params) => {
+                let results = self
+                    .core
+                    .search_history(&params.query, params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT))
+                    .await?;
+                Ok(serde_json::to_value(HistorySearchResponse { results })?)
+            }
+        }
     }
 
     fn handle_initialize(
@@ -305,6 +608,15 @@ impl Server {
             capabilities: ServerCapabilities { experimental_api },
         })
         .unwrap_or(serde_json::Value::Null)
+    }
+
+    async fn announce(&mut self, kind: MeetingChangeKind, meeting: &Meeting) {
+        self.broadcast(ServerNotification::MeetingChanged(MeetingChangedParams {
+            kind,
+            meeting_id: meeting.id.clone(),
+            meeting: Some(meeting.clone()),
+        }))
+        .await;
     }
 
     async fn send(&mut self, connection_id: ConnectionId, message: JsonRpcMessage) {

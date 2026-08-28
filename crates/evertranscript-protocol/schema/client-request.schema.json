@@ -36,6 +36,142 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "Starts recording. In M1 this is the Operator's explicit act; from M2\nAuto-Record calls the same path.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/start"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingStartParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Stops the Meeting in progress and persists it.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/stop"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingStopParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Most recent Meetings first.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/list"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingListParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "One Meeting with its Transcript.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/get"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Renames a Meeting. The Mirror follows, and the old filename is\ngarbage-collected by its id8 (ADR-0035).",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/retitle"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingRetitleParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Removes a Meeting entirely — rows, Mirror, and audio. The only\ndestructive operation on the record besides Voiceprint deletion.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/delete"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingDeleteParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "The Meeting's Mirror markdown, exactly as written to disk.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/export"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Full-text search across History.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "history/search"
+        },
+        "params": {
+          "$ref": "#/$defs/HistorySearchParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -65,6 +201,25 @@
         "version"
       ]
     },
+    "HistorySearchParams": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    },
     "InitializeParams": {
       "type": "object",
       "properties": {
@@ -81,6 +236,84 @@
       "required": [
         "clientInfo"
       ]
+    },
+    "MeetingDeleteParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "MeetingGetParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "MeetingListParams": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        }
+      }
+    },
+    "MeetingRetitleParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title"
+      ]
+    },
+    "MeetingStartParams": {
+      "type": "object",
+      "properties": {
+        "detectedApp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "MeetingStopParams": {
+      "type": "object"
     },
     "StatusParams": {
       "type": "object"
