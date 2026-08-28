@@ -145,3 +145,21 @@
 **Supersedes:** Q3 — its stated asymmetry does not hold on macOS 26; the conclusion it drew is kept, the evidence it drew it from is replaced.
 
 **Ref:** (pending)
+
+## Q10 — m1/11-guarantee-tests-closeout — gate-resolution
+
+**Question:** Q9 replaced the refused-permission check but could not exercise the refusal itself, because the machine held the grant, and recorded that half as resting on unit tests alone. Does the check still fire when a permission is genuinely denied?
+
+**Options considered:** leave it on unit tests and say so / package an `.app` and test a fresh identity / revoke the grant on this machine and run it.
+
+**Chosen:** Revoke and run it. Verified on 2026-08-28: the check fires, and the leg is noted rather than ended.
+
+**Decided-by:** agent
+
+**Justification:** Q9's caveat was the honest position at the time and a poor one to leave standing, because a refusal that never fires is the failure the check exists to prevent and would look exactly like success. The Operator cleared the stored decision with `tccutil reset AudioCapture`, answered the prompt with Don't allow, and a 34 s meeting was recorded with audio playing throughout. The note appeared and named the permission; `audio-check` chose the played-but-silent wording rather than the quiet-meeting one; the log showed `capture leg is degraded; it stays attached` with **no `EndLeg` at all**; and the audio came out full length with the microphone at -8.1 dB and the system channel at -91.0 dB, which is the refused tap. Checked first, because it is the one way this fix could have failed silently: `anything_is_playing` keeps working with the grant denied, so the gate cannot go quiet and take the detector with it. Q9's decision is unchanged — only the caveat in its justification is closed, and it is left standing there as written.
+
+The same run settled two things the ticket records in full. The TCC prompt does fire for a plain unbundled binary, so the `.app` carrying `NSAudioCaptureUsageDescription` that the M1 handoff named as the next thing to try is not needed; and either grant authorises the process tap, screen capture or audio capture, which corrects an earlier reading of the same evidence. One consequence of a refusal is worth knowing before it is met in a real meeting: with the system leg silent the echo canceller has no reference, so the far end arrives through the microphone and is attributed to the Operator — the harm Q1 and Q2 exist to prevent, unavoidable once the reference is gone, and the real reason the incomplete note matters.
+
+**Outcome:** applied
+
+**Ref:** (pending)
