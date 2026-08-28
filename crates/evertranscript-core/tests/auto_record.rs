@@ -196,3 +196,52 @@ async fn an_armed_meeting_alone_records_nothing() {
         "the calendar started a recording, which it must never do"
     );
 }
+
+#[tokio::test]
+async fn a_meeting_auto_record_started_recovers_from_a_crash_like_any_other() {
+    // Ticket 09's crash criterion. A Meeting nobody opened by hand is still
+    // a Meeting: the recovery path must not care who started it, and the
+    // one thing that could differ — that no Client ever attached to it — is
+    // exactly the shape an unattended capture has.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let history = dir.path().join("History");
+
+    let started = {
+        let core = Core::with_history_dir_acknowledged(history.clone()).expect("core");
+        core.set_source_factory(Arc::new(|| {
+            Box::new(FixtureSource::new(vec![
+                Step::audio(AudioChannel::Mic, 400, 0.3),
+                Step::audio(AudioChannel::System, 400, -0.3),
+            ]))
+        }))
+        .await;
+
+        let shutdown = CancellationToken::new();
+        let source: Box<dyn DetectionSource> = Box::new(FixtureDetectionSource::new(
+            Timeline::new().mic_held("us.zoom.xos").into_events(),
+        ));
+        tokio::spawn(evertranscript_core::detect::driver::run(
+            Arc::clone(&core),
+            vec![source],
+            Box::new(SilentNotifier),
+            shutdown.clone(),
+        ));
+        settle().await;
+
+        let meetings = core.list_meetings(10, 0).await.expect("list");
+        assert_eq!(meetings.len(), 1, "Auto-Record should have started one");
+        assert!(meetings[0].ended_at.is_none(), "and it is still running");
+        shutdown.cancel();
+        meetings[0].id.clone()
+        // The Core is dropped here with a Meeting still open: what a kill
+        // leaves behind.
+    };
+
+    // A new Core over the same History, as the next start would be.
+    let recovered = Core::with_history_dir_acknowledged(history).expect("core");
+    recovered.recover_interrupted_audio().await;
+
+    let meetings = recovered.list_meetings(10, 0).await.expect("list");
+    assert_eq!(meetings.len(), 1, "the auto-started Meeting must survive");
+    assert_eq!(meetings[0].id, started, "and be the same one");
+}

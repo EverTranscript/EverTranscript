@@ -34,6 +34,9 @@ hanconv = "0.5"
 # microphone attribution (ADR-0030, the ship gate). An inline table, so it
 # does not end the `[workspace.dependencies]` section it sits in.
 windows = { version = "0.62", features = [
+    "ApplicationModel_Appointments",
+    "Foundation",
+    "Foundation_Collections",
     "Win32_Foundation",
     "Win32_Media_Audio",
     "Win32_System_Com",
@@ -42,6 +45,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Threading",
     "Win32_System_Variant",
 ] }
+windows-future = "0.3"
 
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",

@@ -124,14 +124,103 @@ mod eventkit {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// The WinRT appointment store (ADR-0025 as amended: this milestone, not
+/// after it).
+///
+/// Same bounds as EventKit — local store, never a cloud API, read-only —
+/// through a different shape: WinRT asks asynchronously, and the store is
+/// consulted from a polling thread every thirty seconds, so a bounded spin
+/// is honest here rather than a runtime to yield to.
+///
+/// **Typechecked against `x86_64-pc-windows-msvc`, never executed.** Same
+/// status as the Windows detector, and for the same reason.
+#[cfg(target_os = "windows")]
+mod eventkit {
+    use super::*;
+    use windows::ApplicationModel::Appointments::AppointmentManager;
+    use windows::ApplicationModel::Appointments::AppointmentStore;
+    use windows::ApplicationModel::Appointments::AppointmentStoreAccessType;
+    use windows::Foundation::DateTime;
+    use windows::Foundation::TimeSpan;
+    use windows_future::AsyncStatus;
+    use windows_future::IAsyncOperation;
+
+    fn block_on<T: windows::core::RuntimeType + 'static>(
+        operation: IAsyncOperation<T>,
+    ) -> windows::core::Result<T> {
+        loop {
+            match operation.Status()? {
+                AsyncStatus::Started => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                _ => return operation.GetResults(),
+            }
+        }
+    }
+
+    fn store() -> Option<AppointmentStore> {
+        AppointmentManager::RequestStoreAsync(AppointmentStoreAccessType::AllCalendarsReadOnly)
+            .and_then(block_on)
+            .ok()
+    }
+
+    pub fn access() -> Access {
+        // Read-only, all calendars: the narrowest access that can answer
+        // "what is scheduled now", and it cannot write to anyone's calendar.
+        match store() {
+            Some(_) => Access::Granted,
+            None => Access::Withheld,
+        }
+    }
+
+    pub fn upcoming(now: DetectionInstant) -> Vec<CalendarEvent> {
+        let Some(store) = store() else {
+            return Vec::new();
+        };
+        let from = DateTime { UniversalTime: 0 };
+        let horizon = TimeSpan {
+            // WinRT counts in 100 ns ticks.
+            Duration: (HORIZON_SECS as i64) * 10_000_000,
+        };
+        let Ok(found) = store
+            .FindAppointmentsAsync(from, horizon)
+            .and_then(block_on)
+        else {
+            return Vec::new();
+        };
+        found
+            .into_iter()
+            .map(|appointment| {
+                let title = appointment
+                    .Subject()
+                    .map(|subject| subject.to_string())
+                    .unwrap_or_default();
+                let seconds = appointment
+                    .Duration()
+                    .map(|duration| duration.Duration as f64 / 10_000_000.0)
+                    .unwrap_or(0.0);
+                CalendarEvent {
+                    id: appointment
+                        .LocalId()
+                        .map(|id| id.to_string())
+                        .unwrap_or_default(),
+                    title: if title.trim().is_empty() {
+                        "Untitled event".to_string()
+                    } else {
+                        title
+                    },
+                    attendees: Vec::new(),
+                    scheduled_end: Some(now.plus_millis((seconds.max(0.0) * 1000.0) as u64)),
+                }
+            })
+            .collect()
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 mod eventkit {
     use super::*;
 
-    /// Windows reads the WinRT appointment store; ADR-0025 as amended puts
-    /// it in this milestone. Not written here, and reported as withheld
-    /// rather than pretended: a calendar that silently returns nothing looks
-    /// exactly like one the Operator declined.
     pub fn access() -> Access {
         Access::Withheld
     }
