@@ -4,11 +4,11 @@
 
 **Blocked by:** 01, 02.
 
-Status: ready-for-human
+Status: blocked — needs a Windows machine, or a push so CI compiles it
 
 - [x] Process enumeration for the Watchlist's exe entries, and audio-session state for the microphone condition — no permission prompt required on this platform
 - [x] The exe→app table twin (the rule, derived rather than ported — see ticket 02) of the macOS helper table, ported as seed data with attribution and a `PORTS.md` entry
 - [x] Poll-and-debounce rather than a port of the prior art's backoff, matching the macOS side; the shipped reference was not on the machine. Original criterion: taken from the shipped prior art (`mic_monitor_v2`) rather than improvised. **anarlog's Windows detector is a no-op stub** — the absorption catalog says so explicitly, and it must not be mistaken for a reference implementation
 - [x] Browser Meetings works here too: any browser holding a hot microphone, helpers attributed to the responsible app
 - [x] The same DetectionSource contract as macOS, proven by the same seam tests running on both targets in CI — a per-platform dialect of the trait is a failure of this ticket
-- [ ] **Not done, and the reason this ticket is `ready-for-human`.** The code is typechecked against `x86_64-pc-windows-msvc` and has never been run: it was written on an Apple Silicon Mac. The crate itself cannot be cross-checked — `ring` needs an MSVC C toolchain — so the API usage was verified in an isolated crate against the real target and then ported in. Verification needs a real Windows 10+ x64 machine with the per-browser matrix from ticket 09 run there, not extrapolated from macOS
+- [ ] **Blocked on hardware, not on work.** `.github/workflows/ci.yml` already builds `windows-latest`, so pushing this branch would compile it — running it needs a real machine. The code is typechecked against `x86_64-pc-windows-msvc` and has never been run: it was written on an Apple Silicon Mac. The crate itself cannot be cross-checked — `ring` needs an MSVC C toolchain — so the API usage was verified in an isolated crate against the real target and then ported in. Verification needs a real Windows 10+ x64 machine with the per-browser matrix from ticket 09 run there, not extrapolated from macOS

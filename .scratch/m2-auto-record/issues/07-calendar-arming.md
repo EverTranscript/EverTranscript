@@ -4,7 +4,7 @@
 
 **Blocked by:** 03.
 
-Status: ready-for-human — macOS reader written, no grant on this machine; Windows not written
+Status: blocked — both readers written; needs a Calendars grant and a Windows machine
 
 - [x] EventKit local-store read on macOS — written, and it compiles and links correctly.
 - [x] **The WinRT appointment store is written** — `AppointmentManager` with read-only access to all calendars, typechecked against `x86_64-pc-windows-msvc` and never executed, the same status as the Windows detector
