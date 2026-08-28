@@ -4,7 +4,7 @@
 
 **Blocked by:** 03.
 
-**Status:** done — the tray is built; the icon itself is not visually confirmed
+**Status:** done — the icon has been seen: `○` idle, `●` recording (2026-08-28)
 
 - [x] **Built.** An `NSStatusItem` with an accessory activation policy, so no app bundle is needed and no Dock
       icon appears — which matters because the Core is installed as a LaunchAgent running the binary directly

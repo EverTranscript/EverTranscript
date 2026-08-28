@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 02.
 
-**Status:** done — system-audio capture verified as far as this machine's permissions allow
+**Status:** done — system-audio capture verified with the permission granted and, separately, genuinely denied (DECISIONS Q9/Q10)
 
 - [x] AudioSource trait with live and fixture implementations — the ratified seam; all end-to-end tests feed through it
 - [x] macOS: CoreAudio process tap + private aggregate device (14.4+) for system audio, cpal for mic; Windows: WASAPI
