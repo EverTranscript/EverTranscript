@@ -17,6 +17,8 @@ use evertranscript_protocol::MeetingDetailResponse;
 use evertranscript_protocol::MeetingExportResponse;
 use evertranscript_protocol::MeetingListResponse;
 use evertranscript_protocol::MeetingResponse;
+use evertranscript_protocol::ModelAvailability;
+use evertranscript_protocol::ModelsStatusResponse;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
@@ -81,6 +83,23 @@ enum Command {
     },
     /// Print a Meeting's Mirror markdown to stdout.
     Export { id: String },
+    /// Inspect and fetch the models the Core needs.
+    #[command(subcommand)]
+    Models(ModelsCommand),
+}
+
+#[derive(Subcommand)]
+enum ModelsCommand {
+    /// Show what is on disk and what is still needed.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Download missing models, resuming any partial download.
+    Fetch {
+        /// One model by key; omit to fetch everything required.
+        key: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -122,7 +141,56 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Delete { id, force } => run_delete(&id, force).await,
         Command::Search { query, limit, json } => run_search(&query.join(" "), limit, json).await,
         Command::Export { id } => run_export(&id).await,
+        Command::Models(ModelsCommand::Status { json }) => run_models_status(json).await,
+        Command::Models(ModelsCommand::Fetch { key }) => run_models_fetch(key).await,
     }
+}
+
+async fn run_models_status(json: bool) -> Result<()> {
+    let mut client = client().await?;
+    let response: ModelsStatusResponse = client.request("models/status", None).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    for model in &response.models {
+        let state = match model.state {
+            ModelAvailability::Ready => "ready".to_string(),
+            ModelAvailability::Missing => "missing".to_string(),
+            ModelAvailability::Partial => match model.bytes_on_disk {
+                Some(bytes) => format!(
+                    "partial ({}%)",
+                    (bytes as f64 / model.total_bytes.max(1) as f64 * 100.0) as u32
+                ),
+                None => "partial".to_string(),
+            },
+            ModelAvailability::Corrupted => "corrupted".to_string(),
+        };
+        println!("{:<32} {:<16} {}", model.key, state, model.display_name);
+        if let Some(detail) = &model.detail {
+            println!("{:<32} {detail}", "");
+        }
+    }
+    if !response.ready {
+        println!("\nrun `evertranscript models fetch` to download what is missing");
+    }
+    Ok(())
+}
+
+async fn run_models_fetch(key: Option<String>) -> Result<()> {
+    let mut client = client().await?;
+    println!(
+        "downloading… (this can take a while on a slow link; interrupting is safe — it resumes)"
+    );
+    let response: ModelsStatusResponse = client
+        .request("models/fetch", Some(serde_json::json!({ "key": key })))
+        .await?;
+    for model in &response.models {
+        if model.state == ModelAvailability::Ready {
+            println!("ready  {}", model.key);
+        }
+    }
+    Ok(())
 }
 
 async fn client() -> Result<CoreClient> {

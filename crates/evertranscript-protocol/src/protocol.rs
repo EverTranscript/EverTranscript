@@ -209,6 +209,16 @@ client_request_definitions! {
         params: HistorySearchParams,
         response: HistorySearchResponse,
     },
+    /// What the Core has on disk and what it still needs.
+    ModelsStatus => "models/status" {
+        params: ModelsStatusParams,
+        response: ModelsStatusResponse,
+    },
+    /// Downloads missing models. Returns once they are verified in place.
+    ModelsFetch => "models/fetch" {
+        params: ModelsFetchParams,
+        response: ModelsStatusResponse,
+    },
 }
 
 server_notification_definitions! {
@@ -565,6 +575,65 @@ pub enum MeetingChangeKind {
     Updated,
     Stopped,
     Deleted,
+}
+
+// -------------------------------------------------------------------- Models
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelsStatusParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelsFetchParams {
+    /// Fetch one model by key; omit to fetch everything required.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelsStatusResponse {
+    pub models: Vec<ModelState>,
+    /// True when everything required is present and verified — the gate the
+    /// tray's not-ready state and any capture attempt read.
+    pub ready: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ModelState {
+    pub key: String,
+    pub display_name: String,
+    pub state: ModelAvailability,
+    pub required: bool,
+    #[ts(type = "number")]
+    pub total_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub bytes_on_disk: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub path: Option<String>,
+    /// Why a model is corrupted, when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ModelAvailability {
+    Missing,
+    Partial,
+    Corrupted,
+    Ready,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

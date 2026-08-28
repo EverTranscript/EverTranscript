@@ -31,6 +31,9 @@ use evertranscript_protocol::MeetingDetailResponse;
 use evertranscript_protocol::MeetingExportResponse;
 use evertranscript_protocol::MeetingListResponse;
 use evertranscript_protocol::MeetingResponse;
+use evertranscript_protocol::ModelAvailability;
+use evertranscript_protocol::ModelState;
+use evertranscript_protocol::ModelsStatusResponse;
 use evertranscript_protocol::RequestId;
 use evertranscript_protocol::ServerCapabilities;
 use evertranscript_protocol::ServerInfo;
@@ -46,6 +49,7 @@ use tracing::warn;
 
 use crate::mirror;
 use crate::mirror::MirrorWriter;
+use crate::models;
 use crate::paths;
 use crate::store::meetings;
 use crate::store::Store;
@@ -307,6 +311,80 @@ impl Core {
 
     fn wake_mirror(&self) {
         self.mirror_wake.notify_one();
+    }
+
+    // -------------------------------------------------------------- Models
+
+    /// What is on disk and what is still needed. Never touches the network.
+    pub fn models_status(&self) -> Result<ModelsStatusResponse> {
+        let downloader = models::Downloader::new(paths::models_dir())?;
+        let models: Vec<ModelState> = models::registry::ALL
+            .iter()
+            .map(|entry| describe_model(&downloader, entry))
+            .collect();
+        let ready = models
+            .iter()
+            .all(|model| !model.required || model.state == ModelAvailability::Ready);
+        Ok(ModelsStatusResponse { models, ready })
+    }
+
+    /// Downloads what is missing. A corrupted file is removed first so the
+    /// fetch starts from a clean slate rather than trying to resume garbage.
+    pub async fn fetch_models(&self, key: Option<&str>, cancel: CancellationToken) -> Result<()> {
+        let downloader = models::Downloader::new(paths::models_dir())?;
+        let entries: Vec<&'static models::registry::ModelEntry> = match key {
+            Some(key) => vec![models::registry::find(key)
+                .ok_or_else(|| anyhow::anyhow!("no model with key {key}"))?],
+            None => models::registry::required().collect(),
+        };
+
+        for entry in entries {
+            if let models::ModelStatus::Corrupted { reason } = downloader.status(entry) {
+                warn!(model = entry.key, reason, "discarding a corrupted model");
+                downloader.remove(entry)?;
+            }
+            downloader
+                .fetch(entry, cancel.clone(), |progress| {
+                    debug!(
+                        model = entry.key,
+                        percent = (progress.fraction() * 100.0) as u32,
+                        "downloading"
+                    );
+                })
+                .await?;
+        }
+        Ok(())
+    }
+}
+
+fn describe_model(
+    downloader: &models::Downloader,
+    entry: &models::registry::ModelEntry,
+) -> ModelState {
+    let (state, bytes_on_disk, path, detail) = match downloader.status(entry) {
+        models::ModelStatus::Missing => (ModelAvailability::Missing, None, None, None),
+        models::ModelStatus::Partial { bytes_on_disk } => {
+            (ModelAvailability::Partial, Some(bytes_on_disk), None, None)
+        }
+        models::ModelStatus::Corrupted { reason } => {
+            (ModelAvailability::Corrupted, None, None, Some(reason))
+        }
+        models::ModelStatus::Ready { path } => (
+            ModelAvailability::Ready,
+            Some(entry.integrity.size_bytes),
+            Some(path.display().to_string()),
+            None,
+        ),
+    };
+    ModelState {
+        key: entry.key.to_string(),
+        display_name: entry.display_name.to_string(),
+        state,
+        required: entry.required,
+        total_bytes: entry.integrity.size_bytes,
+        bytes_on_disk,
+        path,
+        detail,
     }
 }
 
@@ -577,6 +655,15 @@ impl Server {
                     .search_history(&params.query, params.limit.unwrap_or(DEFAULT_SEARCH_LIMIT))
                     .await?;
                 Ok(serde_json::to_value(HistorySearchResponse { results })?)
+            }
+
+            ClientRequest::ModelsStatus(_) => Ok(serde_json::to_value(self.core.models_status()?)?),
+
+            ClientRequest::ModelsFetch(params) => {
+                self.core
+                    .fetch_models(params.key.as_deref(), CancellationToken::new())
+                    .await?;
+                Ok(serde_json::to_value(self.core.models_status()?)?)
             }
         }
     }

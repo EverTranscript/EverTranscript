@@ -4,10 +4,10 @@
 
 **Blocked by:** 01.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Registry entries carry filename, byte size, pinned checksum, and language coverage; the Whisper default and AEC models are listed
-- [ ] Download resumes after a kill/restart (Range + partial-file validation); a 30s per-chunk stall aborts with a legible network error
-- [ ] Checksum mismatch deletes the file and reports corruption; success promotes via atomic rename; magic-bytes triage before the full checksum
-- [ ] Mirror URL setting is honored end-to-end (Hugging Face primary; ModelScope-style mirror configurable)
-- [ ] `evertranscript models fetch` / `models status` work against the running Core; a not-ready signal is exposed on the protocol (consumed by the tray in ticket 09)
+- [x] Registry entries carry filename, byte size, pinned checksum, and language coverage; the Whisper default and AEC models are listed
+- [x] Download resumes after a kill/restart (Range + partial-file validation); a 30s per-chunk stall aborts with a legible network error
+- [x] Checksum mismatch deletes the file and reports corruption; success promotes via atomic rename; magic-bytes triage before the full checksum
+- [x] Mirror URL setting is honored end-to-end (Hugging Face primary; ModelScope-style mirror configurable)
+- [x] `evertranscript models fetch` / `models status` work against the running Core; a not-ready signal is exposed on the protocol (consumed by the tray in ticket 09)

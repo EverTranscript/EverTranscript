@@ -12,8 +12,12 @@ evertranscript-protocol.workspace = true
 
 anyhow.workspace = true
 chrono.workspace = true
+crc32fast.workspace = true
 dirs.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
 rusqlite.workspace = true
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

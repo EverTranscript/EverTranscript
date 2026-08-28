@@ -172,6 +172,40 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "What the Core has on disk and what it still needs.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "models/status"
+        },
+        "params": {
+          "$ref": "#/$defs/ModelsStatusParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Downloads missing models. Returns once they are verified in place.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "models/fetch"
+        },
+        "params": {
+          "$ref": "#/$defs/ModelsFetchParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -313,6 +347,21 @@
       }
     },
     "MeetingStopParams": {
+      "type": "object"
+    },
+    "ModelsFetchParams": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "Fetch one model by key; omit to fetch everything required.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "ModelsStatusParams": {
       "type": "object"
     },
     "StatusParams": {

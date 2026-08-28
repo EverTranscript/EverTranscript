@@ -7,6 +7,7 @@
 
 pub mod client;
 pub mod mirror;
+pub mod models;
 pub mod paths;
 pub mod server;
 pub mod store;
