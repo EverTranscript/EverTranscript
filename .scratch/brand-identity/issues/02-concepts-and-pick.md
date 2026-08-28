@@ -4,4 +4,4 @@
 
 **Blocked by:** 01.
 
-**Status:** resolved — B, the letterform e (DECISIONS.md Q10)
+**Status:** resolved — B, the letterform e (DECISIONS.md Q15)

@@ -269,3 +269,13 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Justification:** The Operator chose the teal direction from the option set before the concepts were drawn. Constraint honoured throughout: the mark may suggest nothing the guarantees forbid (ADR-0001/0020/0034 — no clouds, sync arrows, globes, padlocks, sparkles), and it must not collide with the three neighbours studied (Granola chartreuse, Anarlog cream, Meetily purple) or the Zoom/Teams blues beside it in a Dock.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q19 — brand-identity/reference-logos — deviation
+
+**Question:** The extracted Granola/Anarlog/Meetily logos were asked into `brand/` — committed like the rest of that directory, or kept out of git?
+**Options considered:** commit them like every other brand asset / save them untracked with provenance and re-extraction paths / refuse to store them in the repo tree at all
+**Chosen:** Saved to `brand/reference/` but gitignored, with a README recording exact source paths and versions so re-extraction is one command.
+**Decided-by:** agent
+**Justification:** They are other companies' copyrighted artwork and trademarks, and ADR-0033 makes this tree public at M2 — committing them would make the repo redistribute marks that are not ours (a different thing from *naming* the products, which `docs/competitive-facts-*.md` already does). Untracked-with-provenance keeps the requested local convenience and loses nothing that cannot be regenerated from the named paths. Easy to override: `git add -f brand/reference` if the Operator wants them tracked.
+**Outcome:** assumed
+**Ref:** (pending)

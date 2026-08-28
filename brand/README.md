@@ -85,6 +85,14 @@ name in another face.
 - `dist/`, `build/` and `out/` are gitignored, which is why the committed
   outputs live in `generated/`.
 
+## Reference and prompts
+
+`reference/` holds the three neighbours' logos, extracted locally for
+comparison and as image-model references — third-party marks, untracked on
+purpose (its README has provenance and re-extraction paths).
+`chatgpt-image-prompt.md` carries ready-to-paste prompts for ChatGPT's
+image model, with the identity constraints baked in.
+
 ## Exploring
 
 The three original candidates and the contact sheet that chose between

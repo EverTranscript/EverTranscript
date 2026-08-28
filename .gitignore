@@ -77,6 +77,10 @@ Icon?
 # `Icon?` above is the macOS folder-icon file, but with core.ignorecase it also
 # swallows any directory named `icons`. Re-include those explicitly.
 !**/icons/
+
+# Third-party marks extracted for design reference (brand/reference/README.md
+# explains) — not ours to redistribute in a repo that goes public at M2.
+brand/reference/
 .Spotlight-V100/
 
 # Unwanted package managers
