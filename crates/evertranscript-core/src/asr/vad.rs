@@ -195,6 +195,10 @@ pub struct Chunker {
     /// How much speech this chunk contains.
     speech_ms: u64,
     frame_samples: usize,
+    /// Audio left over from the last push: shorter than one frame, so it
+    /// cannot be judged yet. Carried rather than dropped, because live
+    /// capture delivers blocks far smaller than a frame.
+    pending: Vec<f32>,
 }
 
 impl Chunker {
@@ -213,6 +217,7 @@ impl Chunker {
             silence_ms: 0,
             speech_ms: 0,
             frame_samples,
+            pending: Vec::new(),
         }
     }
 
@@ -237,8 +242,14 @@ impl Chunker {
         let mut chunks = Vec::new();
         let mut offset = 0;
 
-        while offset + self.frame_samples <= samples.len() {
-            let frame = &samples[offset..offset + self.frame_samples];
+        // A CoreAudio callback is a fraction of a frame, so judging only
+        // what arrived in this call discards all of it, every time. The
+        // remainder joins the next block instead.
+        let mut pending = std::mem::take(&mut self.pending);
+        pending.extend_from_slice(samples);
+
+        while offset + self.frame_samples <= pending.len() {
+            let frame = &pending[offset..offset + self.frame_samples];
             offset += self.frame_samples;
 
             let frame_ms = self.samples_to_ms(self.frame_samples);
@@ -283,6 +294,8 @@ impl Chunker {
                 chunks.push(chunk);
             }
         }
+        pending.drain(..offset);
+        self.pending = pending;
         chunks
     }
 
@@ -315,6 +328,15 @@ impl Chunker {
     /// Closes whatever is buffered at the end of a Meeting, so the last
     /// sentence is not lost when the Operator hits stop.
     pub fn flush(&mut self) -> Option<SpeechChunk> {
+        // The last partial frame belongs to the last sentence (story 5).
+        if !self.pending.is_empty() {
+            let tail = std::mem::take(&mut self.pending);
+            if self.buffer.is_empty() {
+                self.buffer_start_ms = self.samples_to_ms(self.consumed as usize);
+            }
+            self.consumed += tail.len() as u64;
+            self.buffer.extend_from_slice(&tail);
+        }
         if self.buffer.is_empty() {
             return None;
         }
@@ -484,6 +506,35 @@ mod tests {
         assert!(
             detector.probability(&loud[..480]) >= 0.5,
             "a clear voiced tone is speech"
+        );
+    }
+
+    /// Live capture delivers audio in small CoreAudio callbacks, not in
+    /// whole files. The same speech must chunk identically however it is
+    /// sliced on the way in.
+    #[test]
+    fn speech_chunks_the_same_when_delivered_in_small_blocks() {
+        let audio = {
+            let mut audio = speech(2_000);
+            audio.extend(silence(1_500));
+            audio
+        };
+
+        let mut whole = Chunker::with_defaults(RATE);
+        let in_one_call = whole.push(&audio).len();
+
+        // 10 ms at 16 kHz is 160 samples — a third of one 30 ms frame,
+        // which is what a resampled CoreAudio callback actually looks like.
+        let mut streamed = Chunker::with_defaults(RATE);
+        let mut in_small_blocks = 0;
+        for block in audio.chunks(160) {
+            in_small_blocks += streamed.push(block).len();
+        }
+
+        assert_eq!(
+            in_small_blocks, in_one_call,
+            "{in_one_call} chunk(s) when pushed whole but {in_small_blocks} when \
+             pushed in 160-sample blocks: audio shorter than one frame is being dropped"
         );
     }
 }
