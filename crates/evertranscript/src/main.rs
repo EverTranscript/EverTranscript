@@ -12,6 +12,7 @@ use clap::Parser;
 use clap::Subcommand;
 use evertranscript_core::client::CoreClient;
 use evertranscript_core::paths;
+use evertranscript_protocol::ChineseScript;
 use evertranscript_protocol::HistorySearchResponse;
 use evertranscript_protocol::Meeting;
 use evertranscript_protocol::MeetingDeleteResponse;
@@ -346,6 +347,13 @@ async fn run_settings(json: bool) -> Result<()> {
     println!(
         "auto-record            {}",
         if settings.auto_record { "on" } else { "off" }
+    );
+    println!(
+        "chinese script         {}",
+        match settings.chinese_script {
+            ChineseScript::Simplified => "simplified",
+            ChineseScript::Traditional => "traditional",
+        }
     );
     println!(
         "launch at login        {}",

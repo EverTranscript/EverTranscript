@@ -163,3 +163,19 @@ The same run settled two things the ticket records in full. The TCC prompt does 
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q11 — m1/11-guarantee-tests-closeout — deviation
+
+**Question:** The dogfood run measured Mandarin coming back in Traditional characters when the speaker had read Simplified. Transcription stays on automatic language detection for code-switching, so the script is whatever the model's training data favoured. Should the record be left as decoded, or written in a script the Operator chooses?
+
+**Options considered:** leave the model's output untouched / pin the language to `zh` and hope the script follows / seed whisper's initial prompt with Simplified text / normalise the script after decoding, with the choice as a setting.
+
+**Chosen:** Normalise after decoding. `Settings::chinese_script` ships Simplified and can be set to Traditional; conversion runs inside `filters::clean`, using `hanconv` (MIT, no dependencies of its own).
+
+**Decided-by:** human
+
+**Justification:** Pinning the language would break story 7 — meetings code-switch, and `Language::Auto` is deliberate. Seeding the prompt only biases the decoder, and this session has already paid for shipping a probabilistic assumption as though it were a guarantee (Q9); it also collides with the rolling `previous_text` prompt. Converting is deterministic and verifiable, and it is orthography rather than translation: the words are identical in either script, which is why this does not offend the immutability the record depends on. Conversion is by phrase and not by character, which is what makes the ambiguous direction safe — Simplified 发 is 發 in 发送 and 髮 in 头发, and a per-character table would have to guess; both are covered by tests. Simplified is the default because more people read it, and it is a setting because that is a preference and not a fact about the speaker. Placing it before the invention filters rather than after fixed a second bug for free: `KNOWN_INVENTIONS` lists its Chinese boilerplate in Simplified, so a Traditional decode of the same subtitle spam used to walk straight past it. Measured end to end after the change: a spoken Simplified sentence is recorded at CER 0.0% against its reference, where the same sentence previously came back Traditional. The protocol change is additive, which ADR-0028 permits, and was checked to be so before the fixtures were regenerated.
+
+**Outcome:** applied
+
+**Ref:** (pending)

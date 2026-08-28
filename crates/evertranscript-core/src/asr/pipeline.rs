@@ -9,6 +9,8 @@
 use evertranscript_protocol::AudioChannel;
 use tracing::debug;
 
+use evertranscript_protocol::ChineseScript;
+
 use super::Transcriber;
 use super::vad::ChunkPolicy;
 use super::vad::Chunker;
@@ -53,6 +55,10 @@ pub struct TranscriptionPipeline {
     /// Removes the far end from the microphone leg on speakerphone. Costs
     /// nothing on headphones, where it converges to doing nothing at all.
     echo: Option<aec::EchoCanceller>,
+    /// Which Han script Mandarin is written in. Read once when the Meeting
+    /// starts: changing it mid-recording would leave one transcript written
+    /// two ways.
+    script: ChineseScript,
 }
 
 impl TranscriptionPipeline {
@@ -71,7 +77,14 @@ impl TranscriptionPipeline {
             mic_loudness: dsp::LoudnessNormalizer::new(WHISPER_RATE).ok(),
             system_loudness: dsp::LoudnessNormalizer::new(WHISPER_RATE).ok(),
             echo: Some(aec::EchoCanceller::new(WHISPER_RATE)),
+            script: ChineseScript::default(),
         }
+    }
+
+    /// Sets the Han script Mandarin is recorded in.
+    pub fn in_script(mut self, script: ChineseScript) -> Self {
+        self.script = script;
+        self
     }
 
     /// Turns echo cancellation off.
@@ -164,7 +177,7 @@ impl TranscriptionPipeline {
             }
         };
 
-        let text = super::filters::clean(&result.text)?;
+        let text = super::filters::clean(&result.text, self.script)?;
         if result.confidence < MIN_CONFIDENCE {
             debug!(
                 confidence = result.confidence,

@@ -16,6 +16,7 @@ crc32fast.workspace = true
 ebur128.workspace = true
 dirs.workspace = true
 futures-util.workspace = true
+hanconv.workspace = true
 reqwest.workspace = true
 rubato.workspace = true
 rusqlite.workspace = true

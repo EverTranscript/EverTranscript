@@ -59,6 +59,7 @@ impl Recorder {
         meeting_key: String,
         transcriber: Option<Box<dyn crate::asr::Transcriber>>,
         segments: Option<mpsc::Sender<TranscribedSegment>>,
+        script: evertranscript_protocol::ChineseScript,
     ) -> Result<Self> {
         let clock = CaptureClock::start();
         let (events_tx, events_rx) = mpsc::channel::<CaptureEvent>(256);
@@ -75,7 +76,7 @@ impl Recorder {
             stop.clone(),
             finished_tx,
             meeting_key,
-            transcriber.map(TranscriptionPipeline::new),
+            transcriber.map(|engine| TranscriptionPipeline::new(engine).in_script(script)),
             segments,
         ));
 
@@ -92,7 +93,14 @@ impl Recorder {
         audio_dir: PathBuf,
         meeting_key: String,
     ) -> Result<Self> {
-        Self::start(source, audio_dir, meeting_key, None, None)
+        Self::start(
+            source,
+            audio_dir,
+            meeting_key,
+            None,
+            None,
+            evertranscript_protocol::ChineseScript::default(),
+        )
     }
 
     pub fn clock(&self) -> &CaptureClock {

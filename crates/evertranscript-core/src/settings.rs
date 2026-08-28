@@ -10,6 +10,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use anyhow::Result;
+use evertranscript_protocol::ChineseScript;
 use serde::Deserialize;
 use serde::Serialize;
 use tracing::warn;
@@ -28,6 +29,10 @@ pub struct Settings {
     /// arrives in M2; the setting exists now so the M1 tray and CLI have one
     /// switch to show rather than growing one later.
     pub auto_record: bool,
+    /// Which Han script Mandarin is written in. Ships Simplified, which more
+    /// people read; the model's own preference is neither stable nor the
+    /// Operator's, so this is a choice rather than an accident.
+    pub chinese_script: ChineseScript,
 }
 
 impl Default for Settings {
@@ -37,6 +42,7 @@ impl Default for Settings {
             briefing_acknowledged: false,
             launch_at_login: true,
             auto_record: true,
+            chinese_script: ChineseScript::default(),
         }
     }
 }

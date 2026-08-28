@@ -277,6 +277,22 @@
     }
   ],
   "$defs": {
+    "ChineseScript": {
+      "description": "Which Han script to write Mandarin in.\n\nTranscription stays on automatic language detection, because meetings\ncode-switch (story 7) — so the script the model returns is whatever its\ntraining data favoured, not what the speaker would have written. Left\nalone it is frequently Traditional even for a Simplified speaker, which\nthe dogfood run measured. This is the Operator saying which one their\nrecord should use; it is an orthographic choice, not a translation, and\nthe words are identical either way.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "traditional"
+          ]
+        },
+        {
+          "description": "The default: more people read it than any other Han script.",
+          "type": "string",
+          "const": "simplified"
+        }
+      ]
+    },
     "ClientCapabilities": {
       "type": "object",
       "properties": {
@@ -449,6 +465,17 @@
           "type": [
             "boolean",
             "null"
+          ]
+        },
+        "chineseScript": {
+          "description": "Which Han script Mandarin is written in. See [`ChineseScript`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChineseScript"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "launchAtLogin": {

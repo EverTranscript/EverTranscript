@@ -264,6 +264,7 @@ impl Core {
             briefing_acknowledged: settings.briefing_acknowledged,
             launch_at_login: settings.launch_at_login,
             auto_record: settings.auto_record,
+            chinese_script: settings.chinese_script,
             launch_at_login_location: autostart::describe(),
             launch_at_login_registered: autostart::is_enabled(),
         }
@@ -282,6 +283,13 @@ impl Core {
             }
             if let Some(auto_record) = change.auto_record {
                 settings.auto_record = auto_record;
+            }
+            if let Some(script) = change.chinese_script {
+                // Takes effect for the next Meeting: the running one read it
+                // when it started, and a transcript written two ways would be
+                // worse than one written in the script the Operator has since
+                // changed their mind about.
+                settings.chinese_script = script;
             }
             if let Some(launch_at_login) = change.launch_at_login {
                 settings.launch_at_login = launch_at_login;
@@ -411,6 +419,7 @@ impl Core {
         // be running without a row to attach it to.
         let source = (self.source_factory.lock().await)();
         let transcriber = self.open_transcriber().await;
+        let script = self.settings.lock().await.chinese_script;
         let (segments_tx, segments_rx) = mpsc::channel(256);
 
         match audio::recorder::Recorder::start(
@@ -419,6 +428,7 @@ impl Core {
             mirror::id8(&meeting.id),
             transcriber,
             Some(segments_tx),
+            script,
         ) {
             Ok(recorder) => {
                 *self.recorder.lock().await = Some(recorder);

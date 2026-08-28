@@ -10,6 +10,8 @@
 //! 2. The model is configured not to invent (`whisper`).
 //! 3. Whatever still comes back is filtered here.
 
+use evertranscript_protocol::ChineseScript;
+
 /// Phrases whisper produces from silence and room tone.
 ///
 /// The English list is the well-known set; the Chinese entries are the
@@ -161,9 +163,28 @@ pub fn repetition_ratio(text: &str) -> f32 {
     1.0 - (distinct.len() as f32 / words.len() as f32)
 }
 
+/// Rewrites Mandarin into the script the Operator asked for.
+///
+/// The words are the same either way — this is orthography, not
+/// translation — and text with no Han characters comes back untouched.
+/// Both directions are handled by phrase, not character by character,
+/// which is what makes the ambiguous one safe: Simplified 发 is 發 in
+/// 发送 and 髮 in 头发, and a per-character table would have to guess.
+pub fn in_script(text: &str, script: ChineseScript) -> String {
+    match script {
+        ChineseScript::Simplified => hanconv::t2s(text),
+        ChineseScript::Traditional => hanconv::s2t(text),
+    }
+}
+
 /// Runs every filter, returning the text to store or `None` to discard it.
-pub fn clean(text: &str) -> Option<String> {
-    let trimmed = text.trim();
+pub fn clean(text: &str, script: ChineseScript) -> Option<String> {
+    // Settle the script before anything judges the text. The Chinese
+    // entries in `KNOWN_INVENTIONS` are written Simplified, so a
+    // Traditional decode of the same subtitle boilerplate used to walk
+    // straight past them — the filter was script-dependent by accident.
+    let normalized = hanconv::t2s(text);
+    let trimmed = normalized.trim();
     if trimmed.is_empty() || is_meaningless(trimmed) || is_known_invention(trimmed) {
         return None;
     }
@@ -188,12 +209,67 @@ pub fn clean(text: &str) -> Option<String> {
         return None;
     }
     let collapsed = collapsed.trim();
-    (!collapsed.is_empty()).then(|| collapsed.to_string())
+    if collapsed.is_empty() {
+        return None;
+    }
+    // Judged Simplified, stored as asked.
+    Some(in_script(collapsed, script))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What ships, and what every test here means by "the record".
+    const SIMPLIFIED: ChineseScript = ChineseScript::Simplified;
+
+    #[test]
+    fn mandarin_is_recorded_in_simplified_characters() {
+        // Measured in the dogfood run (ticket 11): the speaker read
+        // Simplified Chinese and the record came back Traditional, because
+        // the model stays on automatic language detection for
+        // code-switching (story 7) and picks the script its training data
+        // favoured. Character-perfect once normalised, and wrong before.
+        let heard = "會議決定推遲投票,等審計報告出來以後再做決定。";
+        let want = "会议决定推迟投票,等审计报告出来以后再做决定。";
+        assert_eq!(clean(heard, SIMPLIFIED).as_deref(), Some(want));
+    }
+
+    #[test]
+    fn normalising_the_script_leaves_everything_else_alone() {
+        let english = "The council met on Tuesday to review the quarterly budget.";
+        assert_eq!(clean(english, SIMPLIFIED).as_deref(), Some(english));
+        let simplified = "会议决定推迟投票";
+        assert_eq!(clean(simplified, SIMPLIFIED).as_deref(), Some(simplified));
+    }
+
+    #[test]
+    fn subtitle_boilerplate_is_rejected_in_either_script() {
+        // The invention list is written Simplified, so a Traditional decode
+        // of the same boilerplate used to walk straight past it.
+        assert_eq!(clean("請不吝點贊", SIMPLIFIED), None);
+    }
+
+    #[test]
+    fn an_operator_who_wants_traditional_gets_traditional() {
+        // Simplified ships, but it is a preference and not a fact about the
+        // speaker. The words are identical either way.
+        let simplified = "会议决定推迟投票";
+        assert_eq!(
+            clean(simplified, ChineseScript::Traditional).as_deref(),
+            Some("會議決定推遲投票")
+        );
+    }
+
+    #[test]
+    fn the_ambiguous_direction_is_resolved_by_phrase_not_by_character() {
+        // 发 is 發 in "send" and 髮 in "hair". A per-character table has to
+        // guess; this is why the conversion is done by phrase.
+        assert_eq!(
+            clean("发送邮件，理头发", ChineseScript::Traditional).as_deref(),
+            Some("發送郵件，理頭髮")
+        );
+    }
 
     #[test]
     fn the_classic_inventions_are_rejected() {
@@ -210,7 +286,7 @@ mod tests {
             "[BLANK_AUDIO]",
         ] {
             assert!(
-                clean(invention).is_none(),
+                clean(invention, SIMPLIFIED).is_none(),
                 "{invention:?} must never reach the record"
             );
         }
@@ -226,7 +302,7 @@ mod tests {
             "thank you for sending those numbers over",
         ] {
             assert_eq!(
-                clean(real).as_deref(),
+                clean(real, SIMPLIFIED).as_deref(),
                 Some(real),
                 "{real:?} is speech and must be kept verbatim"
             );
@@ -237,7 +313,7 @@ mod tests {
     fn a_stuck_decoder_is_discarded_rather_than_recorded() {
         let stuck = "we agreed we agreed we agreed we agreed we agreed we agreed";
         assert!(
-            clean(stuck).is_none(),
+            clean(stuck, SIMPLIFIED).is_none(),
             "a decoder loop is not a record of anything said"
         );
     }
@@ -247,7 +323,7 @@ mod tests {
         // A real speaker repeating a word is speech; the filter must not
         // throw the sentence away.
         let stutter = "the the plan is to defer hiring until October";
-        let cleaned = clean(stutter).expect("this is speech");
+        let cleaned = clean(stutter, SIMPLIFIED).expect("this is speech");
         assert_eq!(cleaned, "the plan is to defer hiring until October");
     }
 
@@ -286,7 +362,7 @@ mod tests {
     fn punctuation_and_case_do_not_smuggle_an_invention_through() {
         for disguised in ["THANK YOU!", "  thank you.  ", "Thank, you"] {
             assert!(
-                clean(disguised).is_none(),
+                clean(disguised, SIMPLIFIED).is_none(),
                 "{disguised:?} is the same invention wearing punctuation"
             );
         }
@@ -295,7 +371,7 @@ mod tests {
     #[test]
     fn a_looped_invention_is_caught_after_collapsing() {
         assert!(
-            clean("thank you thank you thank you").is_none(),
+            clean("thank you thank you thank you", SIMPLIFIED).is_none(),
             "the loop hides an invention until it is folded away"
         );
     }

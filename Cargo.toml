@@ -25,6 +25,9 @@ cpal = "0.15"
 crc32fast = "1"
 ebur128 = "0.1"
 futures-util = "0.3"
+# Han script conversion, by phrase rather than by character so the
+# ambiguous direction is safe. MIT, and no dependencies of its own.
+hanconv = "0.5"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "stream",

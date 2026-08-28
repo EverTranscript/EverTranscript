@@ -650,6 +650,29 @@ pub struct SettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub auto_record: Option<bool>,
+    /// Which Han script Mandarin is written in. See [`ChineseScript`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub chinese_script: Option<ChineseScript>,
+}
+
+/// Which Han script to write Mandarin in.
+///
+/// Transcription stays on automatic language detection, because meetings
+/// code-switch (story 7) — so the script the model returns is whatever its
+/// training data favoured, not what the speaker would have written. Left
+/// alone it is frequently Traditional even for a Simplified speaker, which
+/// the dogfood run measured. This is the Operator saying which one their
+/// record should use; it is an orthographic choice, not a translation, and
+/// the words are identical either way.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum ChineseScript {
+    /// The default: more people read it than any other Han script.
+    #[default]
+    Simplified,
+    Traditional,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
@@ -659,6 +682,7 @@ pub struct SettingsResponse {
     pub briefing_acknowledged: bool,
     pub launch_at_login: bool,
     pub auto_record: bool,
+    pub chinese_script: ChineseScript,
     /// Where the login-item registration lives, so the Operator can see and
     /// remove it by hand.
     pub launch_at_login_location: String,
