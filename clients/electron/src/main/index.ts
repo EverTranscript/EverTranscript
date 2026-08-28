@@ -8,6 +8,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
 
@@ -24,6 +25,35 @@ let connecting: Promise<CoreClient> | null = null;
 let client: CoreClient | null = null;
 let window: BrowserWindow | null = null;
 let startAttempted = false;
+/** Why starting the Core failed, when it did. */
+let startFailure: string | null = null;
+
+/**
+ * Where the Core binary is, or `null` if it cannot be found.
+ *
+ * `EVERTRANSCRIPT_BIN` wins, so an unusual install can say outright. `PATH`
+ * is searched by hand rather than left to `spawn`, because a GUI app
+ * inherits a much smaller `PATH` than a shell — a Core installed in
+ * `/opt/homebrew/bin` is invisible to an app launched from Finder — and
+ * because knowing the name resolved to nothing is what lets this say so.
+ * A checkout's own build is the last resort, for a Client run from source
+ * before there is anything installed at all.
+ */
+function coreBinary(): string | null {
+  const explicit = process.env.EVERTRANSCRIPT_BIN;
+  if (explicit) return explicit;
+  for (const dir of (process.env.PATH ?? "").split(":")) {
+    if (!dir) continue;
+    const candidate = join(dir, "evertranscript");
+    if (existsSync(candidate)) return candidate;
+  }
+  const repo = join(__dirname, "../../../..");
+  for (const built of ["target/release/evertranscript", "target/debug/evertranscript"]) {
+    const candidate = join(repo, built);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
 
 /**
  * Starts the Core if it is not already running.
@@ -35,15 +65,32 @@ let startAttempted = false;
 function startCore(): void {
   if (startAttempted) return;
   startAttempted = true;
-  const binary = process.env.EVERTRANSCRIPT_BIN ?? "evertranscript";
+  const binary = coreBinary();
+  if (binary === null) {
+    // Nothing was started, so a later attempt is not a duplicate.
+    startAttempted = false;
+    startFailure =
+      "could not find the evertranscript binary — put it on PATH, or set EVERTRANSCRIPT_BIN to it";
+    return;
+  }
   try {
     const child = spawn(binary, ["daemon"], {
       detached: true,
       stdio: "ignore",
     });
+    // A binary that cannot be executed reports ENOENT asynchronously rather
+    // than throwing, so the `catch` below never sees it. Unhandled, that
+    // becomes an uncaught exception in the main process and Electron
+    // replaces the whole Client with a crash dialog — failing to find the
+    // Core would take the window down with it.
+    child.on("error", (error: Error) => {
+      startAttempted = false;
+      startFailure = `could not start the Core at ${binary}: ${error.message}`;
+    });
     child.unref();
-  } catch {
-    // Reported to the renderer by the failing connect below.
+  } catch (error) {
+    startAttempted = false;
+    startFailure = `could not start the Core at ${binary}: ${String(error)}`;
   }
 }
 
@@ -61,6 +108,10 @@ async function connectWithRetry(): Promise<CoreClient> {
         continue;
       }
     }
+    // Say why the Core is not there, when the reason is known. "No Core is
+    // listening" is true and useless if the reason is that the binary was
+    // never found.
+    if (startFailure !== null) throw new Error(startFailure);
     throw first;
   }
 }
