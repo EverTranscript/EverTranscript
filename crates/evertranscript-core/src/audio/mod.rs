@@ -13,6 +13,7 @@
 //! 3. **The legs are independent.** The system-audio leg failing must not
 //!    stop the microphone, and neither may stop the recording.
 
+pub mod aec;
 pub mod dsp;
 pub mod fixture;
 pub mod joiner;

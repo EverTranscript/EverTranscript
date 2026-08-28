@@ -14,6 +14,7 @@ use super::vad::Chunker;
 use super::vad::EnergyDetector;
 use super::whisper::WHISPER_RATE;
 use super::Transcriber;
+use crate::audio::aec;
 use crate::audio::dsp;
 use crate::audio::joiner::StereoBlock;
 use crate::audio::SAMPLE_RATE;
@@ -49,6 +50,9 @@ pub struct TranscriptionPipeline {
     /// Enhance can re-derive from unmodified audio later (ADR-0019).
     mic_loudness: Option<dsp::LoudnessNormalizer>,
     system_loudness: Option<dsp::LoudnessNormalizer>,
+    /// Removes the far end from the microphone leg on speakerphone. Costs
+    /// nothing on headphones, where it converges to doing nothing at all.
+    echo: Option<aec::EchoCanceller>,
 }
 
 impl TranscriptionPipeline {
@@ -66,7 +70,18 @@ impl TranscriptionPipeline {
             system_resampler: dsp::StreamResampler::new(SAMPLE_RATE, WHISPER_RATE).ok(),
             mic_loudness: dsp::LoudnessNormalizer::new(WHISPER_RATE).ok(),
             system_loudness: dsp::LoudnessNormalizer::new(WHISPER_RATE).ok(),
+            echo: Some(aec::EchoCanceller::new(WHISPER_RATE)),
         }
+    }
+
+    /// Turns echo cancellation off.
+    ///
+    /// Exists so a test can run the same audio both ways: a claim that the
+    /// canceller stops the far end being credited to the Operator means
+    /// nothing unless the version without it demonstrably fails.
+    pub fn without_echo_cancellation(mut self) -> Self {
+        self.echo = None;
+        self
     }
 
     /// Feeds one stereo capture block, returning any segments that completed.
@@ -74,7 +89,23 @@ impl TranscriptionPipeline {
         let (mic, system) = split(block);
         let mut segments = Vec::new();
 
+        // Both legs are resampled before either is chunked, because echo
+        // cancellation needs them side by side. They came from one block on
+        // one clock and go through identical resamplers, so they stay
+        // aligned to the sample — which is the condition the canceller is
+        // built on.
         let mut mic_ready = resample(self.mic_resampler.as_mut(), &mic);
+        let mut system_ready = resample(self.system_resampler.as_mut(), &system);
+
+        // On speakers the far end comes back in through the microphone, and
+        // would otherwise be transcribed a second time as though the
+        // Operator had said it. The reference is the system leg at its
+        // captured level: normalizing it first would change the very gain
+        // the filter is trying to learn.
+        if let Some(canceller) = self.echo.as_mut() {
+            canceller.process(&mut mic_ready, &system_ready);
+        }
+
         if let Some(loudness) = self.mic_loudness.as_mut() {
             loudness.process(&mut mic_ready);
         }
@@ -84,7 +115,6 @@ impl TranscriptionPipeline {
             }
         }
 
-        let mut system_ready = resample(self.system_resampler.as_mut(), &system);
         if let Some(loudness) = self.system_loudness.as_mut() {
             loudness.process(&mut system_ready);
         }

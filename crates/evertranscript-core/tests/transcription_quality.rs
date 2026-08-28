@@ -198,3 +198,99 @@ fn real_speech_survives_the_whole_pipeline_into_segments() {
     let rate = word_error_rate(ENGLISH_MEETING.transcript, &combined);
     println!("\n  end-to-end WER: {rate}\n  heard: {combined}\n");
 }
+
+/// The speakerphone failure, end to end.
+///
+/// The Operator is on speakers and saying nothing. Everything their
+/// microphone hears is the far end coming back out of their own laptop. What
+/// must not happen is the far end's words appearing on the microphone
+/// channel, because that channel means "the Operator said this" — a
+/// transcript that credits people with sentences they never spoke is worse
+/// than one that missed them.
+///
+/// Run both ways on purpose. Without the canceller this is expected to fail,
+/// and the test says so: a guard nobody has watched fail is a guard nobody
+/// knows works.
+#[test]
+fn a_speakerphone_does_not_credit_the_far_end_to_the_operator() {
+    use evertranscript_core::asr::pipeline::TranscriptionPipeline;
+    use evertranscript_core::audio::joiner::StereoBlock;
+    use evertranscript_core::audio::CaptureOffset;
+    use evertranscript_core::audio::SAMPLE_RATE;
+    use evertranscript_fixtures::echo::echo_of;
+    use evertranscript_fixtures::echo::Room;
+    use evertranscript_protocol::AudioChannel;
+
+    let Some(model) = test_model() else {
+        eprintln!("skipping: set EVERTRANSCRIPT_TEST_MODEL to run transcription tests");
+        return;
+    };
+
+    // The far end plays through the speakers; the microphone hears its echo
+    // and nothing else.
+    let far = ENGLISH_MEETING.samples_at(SAMPLE_RATE);
+    let echo = echo_of(&far.data, SAMPLE_RATE, &Room::default());
+    let mut interleaved = Vec::with_capacity(far.data.len() * 2);
+    for (echo, far) in echo.iter().zip(&far.data) {
+        interleaved.push(*echo); // mic: only what leaked back in
+        interleaved.push(*far); // system: the far end itself
+    }
+    let block = StereoBlock {
+        offset: CaptureOffset::ZERO,
+        samples: interleaved,
+    };
+
+    let words_on = |pipeline: &mut TranscriptionPipeline, channel: AudioChannel| {
+        let mut segments = pipeline.push(&block);
+        segments.extend(pipeline.flush());
+        segments
+            .iter()
+            .filter(|segment| segment.channel == channel)
+            .map(|segment| segment.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    let engine = WhisperEngine::load_with(&model, Language::Fixed("en".into())).expect("load");
+    let mut without = TranscriptionPipeline::new(Box::new(engine)).without_echo_cancellation();
+    let leaked = words_on(&mut without, AudioChannel::Mic);
+
+    let engine = WhisperEngine::load_with(&model, Language::Fixed("en".into())).expect("load");
+    let mut with = TranscriptionPipeline::new(Box::new(engine));
+    let cancelled = words_on(&mut with, AudioChannel::Mic);
+    let far_end = words_on(&mut with, AudioChannel::System);
+
+    println!(
+        "\n  without cancellation, the mic channel heard: {leaked:?}\
+         \n  with cancellation, it heard:                 {cancelled:?}\
+         \n  the far end itself:                          {far_end:?}\n"
+    );
+
+    // Measured as error against what the far end actually said, because the
+    // harm is specifically that the microphone channel *reproduces* it. A
+    // word count would not distinguish a faithful sentence from a garbled
+    // fragment of the same length, and only the first is a lie about who
+    // spoke.
+    let leaked_fidelity = word_error_rate(ENGLISH_MEETING.transcript, &leaked);
+    let cancelled_fidelity = word_error_rate(ENGLISH_MEETING.transcript, &cancelled);
+    println!(
+        "  the mic channel as a copy of the far end — without: {leaked_fidelity}, \
+         with: {cancelled_fidelity}\n"
+    );
+
+    // The control. If the echo was never loud enough to transcribe faithfully,
+    // the experiment proves nothing and should be strengthened rather than
+    // quietly passing.
+    assert!(
+        leaked_fidelity.rate() < 0.2,
+        "uncancelled echo should transcribe as a faithful copy of the far end, \
+         or this test is vacuous — got {leaked_fidelity} for {leaked:?}"
+    );
+    // And the claim: what survives is no longer a record of the far end's
+    // words attributed to the Operator.
+    assert!(
+        cancelled_fidelity.rate() > 0.7,
+        "after cancellation the mic channel must not still read as the far end — \
+         got {cancelled_fidelity} for {cancelled:?}"
+    );
+}

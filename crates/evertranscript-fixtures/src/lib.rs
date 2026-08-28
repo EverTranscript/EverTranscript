@@ -23,6 +23,7 @@
 //! enough to ship". Real recorded meetings are separate homework, and the
 //! PRD's ASR-quality risk is not retired by a good number here.
 
+pub mod echo;
 pub mod similarity;
 pub mod wer;
 
