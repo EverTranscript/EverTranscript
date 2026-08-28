@@ -4,4 +4,4 @@
 
 **Blocked by:** 03.
 
-**Status:** resolved
+**Status:** resolved — the glyph has been seen: the e alone with a hollow dot (Attention, on a machine with no model), the e with a solid dot while a real Meeting recorded (2026-08-28, screencapture after the Operator granted Screen Recording to sshd-keygen-wrapper)
