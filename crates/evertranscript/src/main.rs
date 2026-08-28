@@ -19,6 +19,7 @@ use evertranscript_protocol::MeetingListResponse;
 use evertranscript_protocol::MeetingResponse;
 use evertranscript_protocol::ModelAvailability;
 use evertranscript_protocol::ModelsStatusResponse;
+use evertranscript_protocol::SettingsResponse;
 use evertranscript_protocol::TranscriptSnapshotResponse;
 use tokio_util::sync::CancellationToken;
 
@@ -89,6 +90,19 @@ enum Command {
     Models(ModelsCommand),
     /// Follow live captions from the Meeting in progress.
     Captions,
+    /// Show this installation's settings.
+    Settings {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Acknowledge the first-run briefing. Nothing is captured before this.
+    Acknowledge,
+    /// Turn launch-at-login on or off. Registration only: a running Core is
+    /// left alone, and Quit is what stops it.
+    Autostart {
+        #[arg(value_parser = ["on", "off"])]
+        state: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -147,7 +161,107 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Models(ModelsCommand::Status { json }) => run_models_status(json).await,
         Command::Models(ModelsCommand::Fetch { key }) => run_models_fetch(key).await,
         Command::Captions => run_captions().await,
+        Command::Settings { json } => run_settings(json).await,
+        Command::Acknowledge => run_acknowledge().await,
+        Command::Autostart { state } => run_autostart(&state).await,
     }
+}
+
+async fn run_settings(json: bool) -> Result<()> {
+    let mut client = client().await?;
+    let settings: SettingsResponse = client.request("settings/get", None).await?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&settings)?);
+        return Ok(());
+    }
+    println!(
+        "briefing acknowledged  {}",
+        if settings.briefing_acknowledged {
+            "yes"
+        } else {
+            "no — nothing will be recorded"
+        }
+    );
+    println!(
+        "auto-record            {}",
+        if settings.auto_record { "on" } else { "off" }
+    );
+    println!(
+        "launch at login        {}",
+        if settings.launch_at_login {
+            "on"
+        } else {
+            "off"
+        }
+    );
+    println!(
+        "  registration         {}",
+        settings.launch_at_login_location
+    );
+    if settings.launch_at_login != settings.launch_at_login_registered {
+        println!(
+            "  note                 the setting and the actual registration disagree; \
+             run `evertranscript autostart {}` to reconcile",
+            if settings.launch_at_login {
+                "on"
+            } else {
+                "off"
+            }
+        );
+    }
+    Ok(())
+}
+
+async fn run_acknowledge() -> Result<()> {
+    // The real Briefing is M5's onboarding; this is the CLI path to the same
+    // one-way flag, so the pre-capture invariant is testable and dogfoodable
+    // now rather than after the UI exists.
+    println!(
+        "Recording other people may require their consent, and in some places all \
+         parties must agree.\nEverTranscript builds a voice profile for each speaker \
+         so it can recognize them across meetings.\nAuto-Record is ON by default: once \
+         detection lands, meetings record without you asking."
+    );
+    let mut client = client().await?;
+    let settings: SettingsResponse = client
+        .request(
+            "settings/set",
+            Some(serde_json::json!({ "briefingAcknowledged": true })),
+        )
+        .await?;
+    println!(
+        "\nacknowledged — recording is now permitted ({}).",
+        if settings.briefing_acknowledged {
+            "confirmed"
+        } else {
+            "not saved"
+        }
+    );
+    Ok(())
+}
+
+async fn run_autostart(state: &str) -> Result<()> {
+    let enabled = state == "on";
+    let mut client = client().await?;
+    let settings: SettingsResponse = client
+        .request(
+            "settings/set",
+            Some(serde_json::json!({ "launchAtLogin": enabled })),
+        )
+        .await?;
+    println!(
+        "launch at login {} ({})",
+        if settings.launch_at_login {
+            "on"
+        } else {
+            "off"
+        },
+        settings.launch_at_login_location
+    );
+    if !enabled {
+        println!("the running Core is untouched; use the tray's Quit to stop it now");
+    }
+    Ok(())
 }
 
 async fn run_captions() -> Result<()> {

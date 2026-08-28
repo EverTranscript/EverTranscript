@@ -38,7 +38,7 @@ impl TestCore {
         let socket_path = dir.path().join("s");
         let history_dir = dir.path().join("History");
 
-        let core = Core::with_history_dir(history_dir.clone()).expect("core");
+        let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
         core.set_source_factory(Arc::new(move || {
             Box::new(FixtureSource::new(script.clone()))
         }))
@@ -208,7 +208,7 @@ async fn a_meeting_records_even_when_capture_cannot_start() {
     // record and audio is the bonus (ADR-0019).
     let dir = tempfile::tempdir().expect("tempdir");
     let history_dir = dir.path().join("History");
-    let core = Core::with_history_dir(history_dir).expect("core");
+    let core = Core::with_history_dir_acknowledged(history_dir).expect("core");
 
     // A source that refuses to start at all.
     struct BrokenSource;
@@ -252,7 +252,7 @@ async fn audio_from_an_interrupted_run_is_recovered_on_the_next_start() {
     // A Core that recorded and was killed before finalizing: the checkpoint
     // directory survives with sealed segments in it.
     {
-        let core = Core::with_history_dir(history_dir.clone()).expect("core");
+        let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
         core.set_source_factory(Arc::new(|| Box::new(FixtureSource::simple(200))))
             .await;
         core.start_meeting(None, Some("Zoom".to_string()))
@@ -269,7 +269,7 @@ async fn audio_from_an_interrupted_run_is_recovered_on_the_next_start() {
         return;
     }
 
-    let core = Core::with_history_dir(history_dir.clone()).expect("core");
+    let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
     core.recover_interrupted_audio().await;
     assert!(
         !checkpoints.exists()

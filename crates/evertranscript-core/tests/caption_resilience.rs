@@ -66,7 +66,7 @@ async fn core_with(
     transcriber: impl Fn() -> Option<Box<dyn Transcriber>> + Send + Sync + 'static,
 ) -> (Arc<Core>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let core = Core::with_history_dir(dir.path().join("History")).expect("core");
+    let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
     core.set_source_factory(Arc::new(|| {
         Box::new(FixtureSource::new(script_ending_mid_sentence()))
     }))

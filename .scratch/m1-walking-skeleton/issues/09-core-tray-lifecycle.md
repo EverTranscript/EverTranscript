@@ -4,11 +4,19 @@
 
 **Blocked by:** 03.
 
-**Status:** ready-for-agent
+**Status:** partly done — the tray UI itself is not built
 
-- [ ] Tray shows the state machine (stopped/starting/recording/stopping + transitional disabled items that revert on error); record/stop work from it
-- [ ] Not-ready gate: while required models are missing, the menu swaps to a legible "downloading model" state (signal from ticket 05)
-- [ ] Quit stops the running Core now; the launch-at-login toggle (Settings-surface protocol method + `evertranscript autostart on|off`) changes SMAppService / Run-key registration only — verified as three separate acts (story 9c)
-- [ ] First-run acknowledgment dialog gates all capture: `record start` before acknowledgment is refused with a legible error (the M1 stand-in for the Briefing)
-- [ ] Microphone and system-audio permissions requested at first record with plain explanations; silent preflight checks are separate from prompting requests
-- [ ] Works on both platforms (tray + Run key on Windows; LSUIElement agent + SMAppService on macOS)
+- [ ] **Not done.** A tray needs the macOS main-thread event loop, which restructures how the daemon starts,
+      and it cannot be verified on this headless machine. The state it would display is all available over
+      the protocol (`status`, `core/stateChanged`, `models/status`), so the tray is presentation over an
+      interface that already exists.
+- [~] The not-ready signal exists and is correct (`models/status` reports `ready`); nothing renders it yet.
+- [x] Launch-at-login is a protocol method and `evertranscript autostart on|off`, registration-only (a LaunchAgent
+      plist on macOS, the Run key on Windows), leaving a running Core alone. Quit-from-tray awaits the tray;
+      SIGTERM stops the Core today.
+- [x] The acknowledgment gates all capture, enforced in the Core so no Client can route around it; verified live
+      (a fresh install refuses to record and says how to fix it). `evertranscript acknowledge` is the M1
+      stand-in for the Briefing.
+- [ ] **Not done.** Needs objc2 bindings to AVCaptureDevice authorization status; cpal currently triggers the
+      system prompt implicitly on first capture.
+- [~] Autostart is implemented for both platforms; the tray is implemented for neither.

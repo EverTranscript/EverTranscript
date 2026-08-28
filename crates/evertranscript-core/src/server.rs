@@ -38,6 +38,8 @@ use evertranscript_protocol::RequestId;
 use evertranscript_protocol::ServerCapabilities;
 use evertranscript_protocol::ServerInfo;
 use evertranscript_protocol::ServerNotification;
+use evertranscript_protocol::SettingsResponse;
+use evertranscript_protocol::SettingsSetParams;
 use evertranscript_protocol::StatusResponse;
 use evertranscript_protocol::TranscriptCaptionsDroppedParams;
 use evertranscript_protocol::TranscriptSegment;
@@ -54,10 +56,12 @@ use tracing::info;
 use tracing::warn;
 
 use crate::audio;
+use crate::autostart;
 use crate::mirror;
 use crate::mirror::MirrorWriter;
 use crate::models;
 use crate::paths;
+use crate::settings::Settings;
 use crate::store::meetings;
 use crate::store::Store;
 use crate::transport::ConnectionId;
@@ -94,6 +98,12 @@ pub struct Core {
     /// How to open transcription. Overridden in tests so the caption path
     /// can be driven without a 900 MB model.
     transcriber_factory: Mutex<Option<TranscriberFactory>>,
+    /// This installation's settings, including the Briefing acknowledgment
+    /// that gates all capture.
+    settings: Mutex<Settings>,
+    /// Where settings are stored. Overridable so tests never touch the real
+    /// machine's acknowledgment state.
+    settings_path: std::path::PathBuf,
 }
 
 /// Produces a transcription engine for a new Meeting.
@@ -164,6 +174,31 @@ impl Core {
     /// Same, against an explicit History folder. Tests use this so they never
     /// depend on process-global paths.
     pub fn with_history_dir(history_dir: std::path::PathBuf) -> Result<Arc<Self>> {
+        Self::with_paths(history_dir, Settings::path())
+    }
+
+    /// A Core whose Briefing is already acknowledged, with settings scoped
+    /// to the History folder.
+    ///
+    /// For tests about anything *other* than the consent gate. Tests of the
+    /// gate itself use `with_history_dir`, which starts unacknowledged like
+    /// a real fresh install.
+    pub fn with_history_dir_acknowledged(history_dir: std::path::PathBuf) -> Result<Arc<Self>> {
+        let settings_path = history_dir.join(".settings-test.json");
+        crate::settings::Settings {
+            briefing_acknowledged: true,
+            ..Default::default()
+        }
+        .save_to(&settings_path)?;
+        Self::with_paths(history_dir, settings_path)
+    }
+
+    /// Same, with an explicit settings file. Tests use this so they never
+    /// read or write the real machine's acknowledgment state.
+    pub fn with_paths(
+        history_dir: std::path::PathBuf,
+        settings_path: std::path::PathBuf,
+    ) -> Result<Arc<Self>> {
         let incomplete_copy = paths::detect_incomplete_copy(&history_dir).then(|| {
             format!(
                 "{} holds Mirrors but no machine store — this looks like an incomplete copy, \
@@ -196,7 +231,53 @@ impl Core {
             source_factory: Mutex::new(live_source_factory()),
             notifications: broadcast::channel(NOTIFICATION_CAPACITY).0,
             transcriber_factory: Mutex::new(None),
+            settings: Mutex::new(Settings::load_from(&settings_path)),
+            settings_path,
         }))
+    }
+
+    /// Settings as a Client sees them, including whether the login-item
+    /// registration actually matches the setting.
+    pub async fn settings(&self) -> SettingsResponse {
+        let settings = self.settings.lock().await.clone();
+        SettingsResponse {
+            briefing_acknowledged: settings.briefing_acknowledged,
+            launch_at_login: settings.launch_at_login,
+            auto_record: settings.auto_record,
+            launch_at_login_location: autostart::describe(),
+            launch_at_login_registered: autostart::is_enabled(),
+        }
+    }
+
+    /// Applies a settings change. Only the fields present are touched.
+    pub async fn update_settings(&self, change: SettingsSetParams) -> Result<SettingsResponse> {
+        {
+            let mut settings = self.settings.lock().await;
+            if let Some(acknowledged) = change.briefing_acknowledged {
+                // One-way on purpose: consent that can be un-given by a
+                // Client is not a pre-capture invariant, it is a toggle.
+                if acknowledged {
+                    settings.briefing_acknowledged = true;
+                }
+            }
+            if let Some(auto_record) = change.auto_record {
+                settings.auto_record = auto_record;
+            }
+            if let Some(launch_at_login) = change.launch_at_login {
+                settings.launch_at_login = launch_at_login;
+                // Registration only: a running Core is untouched (story 9c).
+                if let Err(error) = autostart::set_enabled(launch_at_login) {
+                    warn!(%error, "could not change the login item");
+                }
+            }
+            settings.save_to(&self.settings_path)?;
+        }
+        Ok(self.settings().await)
+    }
+
+    /// True once the Operator has acknowledged the Briefing here.
+    pub async fn briefing_acknowledged(&self) -> bool {
+        self.settings.lock().await.briefing_acknowledged
     }
 
     /// Replaces transcription. Tests use this to produce captions on demand.
@@ -282,6 +363,17 @@ impl Core {
         title: Option<String>,
         detected_app: Option<String>,
     ) -> Result<Meeting> {
+        // Nothing is captured before the Operator acknowledges the Briefing
+        // (ADR-0023). This is the enforcement point rather than a UI
+        // convention, so no Client — and no future Auto-Record path — can
+        // route around it.
+        if !self.briefing_acknowledged().await {
+            anyhow::bail!(
+                "recording is blocked until the first-run briefing is acknowledged \
+                 (run `evertranscript acknowledge` or complete first-run setup)"
+            );
+        }
+
         let meeting = self
             .store
             .write(move |connection| {
@@ -945,6 +1037,12 @@ impl Server {
                     subscribed: true,
                 })?)
             }
+
+            ClientRequest::SettingsGet(_) => Ok(serde_json::to_value(self.core.settings().await)?),
+
+            ClientRequest::SettingsSet(params) => Ok(serde_json::to_value(
+                self.core.update_settings(params).await?,
+            )?),
 
             ClientRequest::TranscriptUnsubscribe(_) => {
                 if let Some(connection) = self.connections.get_mut(&connection_id) {

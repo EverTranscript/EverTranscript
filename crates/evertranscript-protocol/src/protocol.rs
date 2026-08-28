@@ -235,6 +235,17 @@ client_request_definitions! {
         params: TranscriptUnsubscribeParams,
         response: TranscriptUnsubscribeResponse,
     },
+    /// This installation's settings.
+    SettingsGet => "settings/get" {
+        params: SettingsGetParams,
+        response: SettingsResponse,
+    },
+    /// Changes settings. Every field is optional; omitted fields are left
+    /// alone, so a Client can toggle one thing without echoing the rest.
+    SettingsSet => "settings/set" {
+        params: SettingsSetParams,
+        response: SettingsResponse,
+    },
 }
 
 server_notification_definitions! {
@@ -602,6 +613,49 @@ pub enum MeetingChangeKind {
     Updated,
     Stopped,
     Deleted,
+}
+
+// ------------------------------------------------------------------ Settings
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SettingsGetParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SettingsSetParams {
+    /// Records that the Operator acknowledged the Briefing. Once true it is
+    /// never set back to false by a Client: un-acknowledging consent is not
+    /// a thing that happens, and allowing it would make the pre-capture
+    /// invariant a toggle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub briefing_acknowledged: Option<bool>,
+    /// Registration only — this changes the *next* login and leaves a
+    /// running Core alone (story 9c).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub launch_at_login: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub auto_record: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SettingsResponse {
+    pub briefing_acknowledged: bool,
+    pub launch_at_login: bool,
+    pub auto_record: bool,
+    /// Where the login-item registration lives, so the Operator can see and
+    /// remove it by hand.
+    pub launch_at_login_location: String,
+    /// True when the setting and the actual registration disagree — for
+    /// example after the Operator deleted the plist themselves.
+    pub launch_at_login_registered: bool,
 }
 
 // ---------------------------------------------------------------- Transcript

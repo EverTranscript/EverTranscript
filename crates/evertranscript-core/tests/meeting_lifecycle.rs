@@ -39,7 +39,7 @@ impl TestCore {
         let socket_path = dir.path().join("s");
         let history_dir = dir.path().join("History");
 
-        let core = Core::with_history_dir(history_dir.clone()).expect("core");
+        let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
         let listener = transport::bind(&socket_path).await.expect("bind");
         let (events_tx, events_rx) = mpsc::channel(64);
         let shutdown = CancellationToken::new();

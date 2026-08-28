@@ -62,7 +62,7 @@ fn decode(path: &Path, channel: AudioChannel) -> Vec<f32> {
 async fn record_fixture(fixture: Fixture, channel: AudioChannel) -> (PathBuf, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let history_dir = dir.path().join("History");
-    let core = Core::with_history_dir(history_dir.clone()).expect("core");
+    let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
 
     // Capture runs at 48 kHz; the fixtures are stored at 16 kHz.
     let samples = fixture.samples_at(SAMPLE_RATE).data;

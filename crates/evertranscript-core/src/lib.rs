@@ -7,11 +7,13 @@
 
 pub mod asr;
 pub mod audio;
+pub mod autostart;
 pub mod client;
 pub mod mirror;
 pub mod models;
 pub mod paths;
 pub mod server;
+pub mod settings;
 pub mod store;
 pub mod transport;
 

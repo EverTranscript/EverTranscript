@@ -240,6 +240,40 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "This installation's settings.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "settings/get"
+        },
+        "params": {
+          "$ref": "#/$defs/SettingsGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Changes settings. Every field is optional; omitted fields are left\nalone, so a Client can toggle one thing without echoing the rest.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "settings/set"
+        },
+        "params": {
+          "$ref": "#/$defs/SettingsSetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -397,6 +431,34 @@
     },
     "ModelsStatusParams": {
       "type": "object"
+    },
+    "SettingsGetParams": {
+      "type": "object"
+    },
+    "SettingsSetParams": {
+      "type": "object",
+      "properties": {
+        "autoRecord": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "briefingAcknowledged": {
+          "description": "Records that the Operator acknowledged the Briefing. Once true it is\nnever set back to false by a Client: un-acknowledging consent is not\na thing that happens, and allowing it would make the pre-capture\ninvariant a toggle.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "launchAtLogin": {
+          "description": "Registration only — this changes the *next* login and leaves a\nrunning Core alone (story 9c).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
     },
     "StatusParams": {
       "type": "object"

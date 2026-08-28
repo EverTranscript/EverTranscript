@@ -30,7 +30,7 @@ impl TestCore {
     async fn start(lines: &'static [&'static str]) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket_path = dir.path().join("s");
-        let core = Core::with_history_dir(dir.path().join("History")).expect("core");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
 
         // Enough speech, with pauses, to close several chunks.
         core.set_source_factory(Arc::new(|| {
