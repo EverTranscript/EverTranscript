@@ -43,6 +43,7 @@ use objc2_core_audio::AudioHardwareCreateProcessTap;
 use objc2_core_audio::AudioHardwareDestroyAggregateDevice;
 use objc2_core_audio::AudioHardwareDestroyProcessTap;
 use objc2_core_audio::AudioObjectGetPropertyData;
+use objc2_core_audio::AudioObjectGetPropertyDataSize;
 use objc2_core_audio::AudioObjectID;
 use objc2_core_audio::AudioObjectPropertyAddress;
 use objc2_core_audio::CATapDescription;
@@ -54,9 +55,11 @@ use objc2_core_audio::kAudioAggregateDeviceTapAutoStartKey;
 use objc2_core_audio::kAudioAggregateDeviceTapListKey;
 use objc2_core_audio::kAudioAggregateDeviceUIDKey;
 use objc2_core_audio::kAudioHardwarePropertyDefaultOutputDevice;
+use objc2_core_audio::kAudioHardwarePropertyProcessObjectList;
 use objc2_core_audio::kAudioObjectPropertyElementMain;
 use objc2_core_audio::kAudioObjectPropertyScopeGlobal;
 use objc2_core_audio::kAudioObjectSystemObject;
+use objc2_core_audio::kAudioProcessPropertyIsRunningOutput;
 use objc2_core_audio::kAudioSubTapDriftCompensationKey;
 use objc2_core_audio::kAudioSubTapUIDKey;
 use objc2_core_audio::kAudioTapPropertyFormat;
@@ -105,15 +108,39 @@ struct TapContext {
     silent_ms: u64,
     heard_audio: bool,
     reported_silence: bool,
+    /// Whether anything was playing when last asked, and how long ago that
+    /// was. Cached because the IO callback runs every few milliseconds and
+    /// enumerating audio processes is far too costly to do there.
+    output_running: bool,
+    since_output_check_ms: u64,
 }
 
-/// How much delivered-but-silent audio proves the permission was refused.
+impl TapContext {
+    /// Whether anything is playing, re-asked about once a second.
+    fn output_is_running(&mut self, duration_ms: u64) -> bool {
+        self.since_output_check_ms += duration_ms;
+        if self.since_output_check_ms >= OUTPUT_CHECK_INTERVAL_MS {
+            self.since_output_check_ms = 0;
+            self.output_running = anything_is_playing();
+        }
+        self.output_running
+    }
+}
+
+/// How often to ask the system whether anything is playing.
+const OUTPUT_CHECK_INTERVAL_MS: u64 = 1_000;
+
+/// How much *played-but-silent* audio proves the permission was refused.
 ///
-/// The threshold can be generous because the signal is not "it went quiet".
-/// A global tap's callback fires only while something is *playing*, so a
-/// machine with nothing to record delivers no frames at all. Frames arriving
-/// steadily while every sample is bit-exact zero is a different claim: audio
-/// is being played and we are being handed zeros in place of it.
+/// Measured against playback, not wall clock. The original form of this
+/// check counted any silence at all, on the premise that "a global tap's
+/// callback fires only while something is playing, so a machine with
+/// nothing to record delivers no frames at all". That premise is false on
+/// macOS 26: the tap delivers zero-filled frames continuously with nothing
+/// playing, so a quiet meeting was accused of a permission it already had
+/// (DECISIONS Q9, superseding Q3). The asymmetry the check needs is real,
+/// but it has to be asked for rather than inferred — see
+/// [`anything_is_playing`].
 const SILENCE_PROVES_REFUSAL_MS: u64 = 15_000;
 
 /// Watches for the one failure a created tap cannot rule out.
@@ -126,12 +153,24 @@ const SILENCE_PROVES_REFUSAL_MS: u64 = 15_000;
 /// stated reason.
 ///
 /// Returns the reason once, when it becomes certain.
-fn note_level(context: &mut TapContext, samples: &[f32], duration_ms: u64) -> Option<String> {
+///
+/// `output_is_running` is the caller's answer to "is anything playing right
+/// now": silence while nothing plays is the ordinary state of a quiet
+/// meeting and proves nothing at all.
+fn note_level(
+    context: &mut TapContext,
+    samples: &[f32],
+    duration_ms: u64,
+    output_is_running: bool,
+) -> Option<String> {
     if context.heard_audio || context.reported_silence {
         return None;
     }
     if samples.iter().any(|sample| *sample != 0.0) {
         context.heard_audio = true;
+        return None;
+    }
+    if !output_is_running {
         return None;
     }
     context.silent_ms += duration_ms;
@@ -292,6 +331,8 @@ pub fn start(
         silent_ms: 0,
         heard_audio: false,
         reported_silence: false,
+        output_running: false,
+        since_output_check_ms: OUTPUT_CHECK_INTERVAL_MS,
     }));
     capture.context = context;
 
@@ -446,6 +487,68 @@ fn address(selector: u32) -> AudioObjectPropertyAddress {
     }
 }
 
+/// Whether any process on this machine is currently playing audio.
+///
+/// This is the question the refusal check depends on, and asking it outright
+/// is the whole of the fix in DECISIONS Q9. Measured on macOS 26 before it
+/// was relied on: false with nothing playing, true while a process plays,
+/// and — the case that decides whether it is usable at all — still false
+/// while our own tap is capturing, so the recorder does not see itself and
+/// no self-exclusion is needed here.
+pub(crate) fn anything_is_playing() -> bool {
+    let mut addr = address(kAudioHardwarePropertyProcessObjectList);
+    let mut size: u32 = 0;
+    let code = unsafe {
+        AudioObjectGetPropertyDataSize(
+            kAudioObjectSystemObject as AudioObjectID,
+            NonNull::from(&mut addr),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+        )
+    };
+    if code != 0 || size == 0 {
+        return false;
+    }
+
+    let mut processes =
+        vec![0 as AudioObjectID; size as usize / std::mem::size_of::<AudioObjectID>()];
+    let code = unsafe {
+        AudioObjectGetPropertyData(
+            kAudioObjectSystemObject as AudioObjectID,
+            NonNull::from(&mut addr),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+            NonNull::from(processes.as_mut_slice()).cast(),
+        )
+    };
+    if code != 0 {
+        return false;
+    }
+    processes.iter().copied().any(is_running_output)
+}
+
+/// Whether one audio process object is playing. A property that cannot be
+/// read is treated as "not playing": this gates an accusation, so the
+/// failure that costs nothing is the one that stays quiet.
+fn is_running_output(process: AudioObjectID) -> bool {
+    let mut addr = address(kAudioProcessPropertyIsRunningOutput);
+    let mut value: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let code = unsafe {
+        AudioObjectGetPropertyData(
+            process,
+            NonNull::from(&mut addr),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+            NonNull::from(&mut value).cast(),
+        )
+    };
+    code == 0 && value == 1
+}
+
 fn require_an_output_device() -> Result<()> {
     let mut device: AudioObjectID = 0;
     let mut size = std::mem::size_of::<AudioObjectID>() as u32;
@@ -595,14 +698,17 @@ unsafe extern "C-unwind" fn io_proc(
     };
 
     if let Some(frame) = frame {
-        if let Some(reason) = note_level(context, &frame.samples, frame.duration_ms()) {
-            // Say it once and stop the leg: this cannot fix itself mid-
-            // meeting, and the recording continues on the microphone.
-            let _ = context.events.try_send(CaptureEvent::Unavailable {
+        let duration_ms = frame.duration_ms();
+        let playing = context.output_is_running(duration_ms);
+        if let Some(reason) = note_level(context, &frame.samples, duration_ms, playing) {
+            // Said once, and the leg stays attached. Ending it here would
+            // make a wrong accusation unrecoverable for the rest of the
+            // meeting, and the frames still have to flow either way or the
+            // joiner waits forever on a leg that is talking to it.
+            let _ = context.events.try_send(CaptureEvent::Degraded {
                 channel: AudioChannel::System,
                 reason,
             });
-            return 0;
         }
         let _ = context.events.try_send(CaptureEvent::Frame(frame));
     }
@@ -638,6 +744,10 @@ pub fn available() -> std::result::Result<(), String> {
 mod tests {
     use super::*;
 
+    /// These tests are all about a tap that something is playing into:
+    /// that is the only situation in which silence accuses anyone.
+    const PLAYING: bool = true;
+
     fn context() -> TapContext {
         let (events, _rx) = mpsc::channel(8);
         TapContext {
@@ -649,6 +759,8 @@ mod tests {
             silent_ms: 0,
             heard_audio: false,
             reported_silence: false,
+            output_running: false,
+            since_output_check_ms: OUTPUT_CHECK_INTERVAL_MS,
         }
     }
 
@@ -660,7 +772,7 @@ mod tests {
         let silence = vec![0.0f32; 4_800]; // 100 ms
         let mut reason = None;
         for _ in 0..(SILENCE_PROVES_REFUSAL_MS / 100) {
-            reason = reason.or(note_level(&mut context, &silence, 100));
+            reason = reason.or(note_level(&mut context, &silence, 100, PLAYING));
         }
         let reason = reason.expect("silence for the whole window must be reported");
         assert!(
@@ -670,12 +782,46 @@ mod tests {
     }
 
     #[test]
+    fn silence_while_nothing_plays_never_accuses_anyone() {
+        // The dogfood failure, in miniature. A tap delivers zero-filled
+        // frames continuously on macOS 26 whether or not anything is
+        // playing, so counting silence alone marked a correct recording
+        // incomplete and told the Operator to grant a permission they
+        // already had (DECISIONS Q9).
+        let mut context = context();
+        let silence = vec![0.0f32; 4_800]; // 100 ms
+
+        // Ten times over the threshold, and still not evidence of anything.
+        for _ in 0..(SILENCE_PROVES_REFUSAL_MS / 100 * 10) {
+            assert!(
+                note_level(&mut context, &silence, 100, false).is_none(),
+                "a quiet meeting is not a refused permission"
+            );
+        }
+        assert_eq!(
+            context.silent_ms, 0,
+            "silence with nothing playing must not even be counted"
+        );
+
+        // The same tap, once something is actually played into it, is still
+        // caught: gating the evidence must not discard it.
+        let mut reason = None;
+        for _ in 0..(SILENCE_PROVES_REFUSAL_MS / 100) {
+            reason = reason.or(note_level(&mut context, &silence, 100, PLAYING));
+        }
+        assert!(
+            reason.is_some_and(|reason| reason.contains("Privacy & Security")),
+            "played-but-silent audio is still a refused permission"
+        );
+    }
+
+    #[test]
     fn it_is_said_once_rather_than_every_buffer() {
         let mut context = context();
         let silence = vec![0.0f32; 4_800];
         let mut reported = 0;
         for _ in 0..400 {
-            if note_level(&mut context, &silence, 100).is_some() {
+            if note_level(&mut context, &silence, 100, PLAYING).is_some() {
                 reported += 1;
             }
         }
@@ -688,13 +834,13 @@ mod tests {
         // audio, so one real sample ends the check. Without this, a quiet
         // stretch late in a long meeting would accuse a working tap.
         let mut context = context();
-        assert!(note_level(&mut context, &[0.0, 0.4, 0.0], 100).is_none());
+        assert!(note_level(&mut context, &[0.0, 0.4, 0.0], 100, PLAYING).is_none());
         assert!(context.heard_audio);
 
         let silence = vec![0.0f32; 4_800];
         for _ in 0..400 {
             assert!(
-                note_level(&mut context, &silence, 100).is_none(),
+                note_level(&mut context, &silence, 100, PLAYING).is_none(),
                 "a tap that has produced audio is never accused of being silent"
             );
         }
@@ -705,7 +851,7 @@ mod tests {
         let mut context = context();
         let silence = vec![0.0f32; 4_800];
         for _ in 0..10 {
-            assert!(note_level(&mut context, &silence, 100).is_none());
+            assert!(note_level(&mut context, &silence, 100, PLAYING).is_none());
         }
         assert_eq!(context.silent_ms, 1_000);
     }

@@ -36,6 +36,24 @@ mod windows;
 
 #[cfg(target_os = "macos")]
 pub use macos::available as macos_available;
+
+/// Whether anything on this machine is playing audio right now.
+///
+/// `None` means this platform cannot say — which callers must read as
+/// "cannot tell", never as "nothing is playing". The distinction is the
+/// whole point: silence with nothing playing is an ordinary quiet meeting,
+/// while silence with something playing is a refused permission
+/// (DECISIONS Q9).
+pub fn output_is_active() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        Some(macos::anything_is_playing())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
 #[cfg(target_os = "windows")]
 pub use windows::available as windows_available;
 
