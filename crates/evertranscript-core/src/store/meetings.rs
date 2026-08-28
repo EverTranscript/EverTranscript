@@ -20,7 +20,7 @@ use uuid::Uuid;
 use super::now_rfc3339;
 
 const MEETING_COLUMNS: &str = "id, started_at, ended_at, title, detected_app, \
-                               mirror_filename, audio_path";
+                               mirror_filename, audio_path, audio_notes";
 
 fn row_to_meeting(row: &Row<'_>) -> rusqlite::Result<Meeting> {
     let started_at: String = row.get(1)?;
@@ -35,6 +35,13 @@ fn row_to_meeting(row: &Row<'_>) -> rusqlite::Result<Meeting> {
         duration_seconds,
         mirror_filename: row.get(5)?,
         audio_path: row.get(6)?,
+        // Stored as JSON. A row written before this column existed, or one
+        // holding something unparseable, reads as "nothing was lost" rather
+        // than failing the whole Meeting.
+        audio_notes: row
+            .get::<_, Option<String>>(7)?
+            .and_then(|notes| serde_json::from_str(&notes).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -121,6 +128,16 @@ pub fn set_audio_path(connection: &Connection, id: &str, audio_path: &str) -> Re
     connection.execute(
         "UPDATE meetings SET audio_path = ?2, updated_at = ?3 WHERE id = ?1",
         params![id, audio_path, now_rfc3339()],
+    )?;
+    Ok(())
+}
+
+/// Records what this recording lost, so the Meeting says so.
+pub fn set_audio_notes(connection: &Connection, id: &str, notes: &[String]) -> Result<()> {
+    let encoded = serde_json::to_string(notes)?;
+    connection.execute(
+        "UPDATE meetings SET audio_notes = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, encoded, now_rfc3339()],
     )?;
     Ok(())
 }
@@ -278,7 +295,10 @@ pub fn search(connection: &Connection, query: &str, limit: u32) -> Result<Vec<Se
         .query_map(params![prepared, limit], |row| {
             Ok(SearchResult {
                 meeting: row_to_meeting(row)?,
-                snippet: row.get(7)?,
+                // By name, not position: the snippet follows the meeting
+                // columns, so a positional index here silently reads the
+                // wrong column the moment one is added.
+                snippet: row.get("snippet")?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

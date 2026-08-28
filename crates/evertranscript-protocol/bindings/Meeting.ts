@@ -18,4 +18,14 @@ title?: string,
  * The app detection attributed this Meeting to; the Mirror's slug
  * before a Title exists.
  */
-detectedApp?: string, durationSeconds?: number, mirrorFilename?: string, audioPath?: string, };
+detectedApp?: string, durationSeconds?: number, mirrorFilename?: string, audioPath?: string, 
+/**
+ * What this recording lost, in the Operator's terms — a capture leg that
+ * never started, one that died partway, audio that would not encode.
+ *
+ * Empty for a whole recording. This is in the record rather than only in
+ * a log because a Meeting missing half its audio is otherwise
+ * indistinguishable from one where nobody spoke, and the Operator finds
+ * out by reading a transcript that makes no sense.
+ */
+audioNotes?: Array<string>, };

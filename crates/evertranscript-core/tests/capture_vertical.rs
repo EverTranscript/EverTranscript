@@ -281,3 +281,63 @@ async fn audio_from_an_interrupted_run_is_recovered_on_the_next_start() {
         "recovery must consume the checkpoint directory"
     );
 }
+
+#[tokio::test]
+async fn a_meeting_that_lost_a_capture_leg_says_so_in_its_record_and_its_mirror() {
+    // The failure this closes: capture loss reached a log line and stopped
+    // there. A meeting recorded with no system audio produced a transcript
+    // with one side of the conversation missing and nothing anywhere to
+    // explain it — indistinguishable, to the person reading their notes
+    // later, from a meeting where nobody else spoke. On a machine without
+    // the system-audio permission that is every meeting.
+    if skip_without_ffmpeg().await {
+        return;
+    }
+    let core = TestCore::start(vec![
+        Step::audio(AudioChannel::Mic, 200, 0.5),
+        Step::Unavailable {
+            channel: AudioChannel::System,
+            reason: "permission to record system audio has not been granted".to_string(),
+        },
+        Step::audio(AudioChannel::Mic, 200, 0.5),
+    ])
+    .await;
+    let mut client = core.client().await;
+
+    let started: MeetingResponse = client.request("meeting/start", None).await.expect("start");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    client
+        .request::<MeetingResponse>("meeting/stop", None)
+        .await
+        .expect("stop");
+
+    let (meeting, _) = core
+        .core
+        .get_meeting(&started.meeting.id)
+        .await
+        .expect("get")
+        .expect("the Meeting");
+    assert!(
+        meeting
+            .audio_notes
+            .iter()
+            .any(|note| note.contains("system audio")),
+        "the record must name the leg it lost, got {:?}",
+        meeting.audio_notes
+    );
+    assert!(
+        meeting
+            .audio_notes
+            .iter()
+            .any(|note| note.contains("permission")),
+        "and carry the reason the Operator can act on, got {:?}",
+        meeting.audio_notes
+    );
+
+    core.core.mirror().rebuild_pending().await.expect("mirror");
+    let body = core.mirror_body();
+    assert!(
+        body.contains("This recording is incomplete"),
+        "the Mirror is what the Operator actually reads:\n{body}"
+    );
+}

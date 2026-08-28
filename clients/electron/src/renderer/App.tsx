@@ -251,6 +251,22 @@ function MeetingView({
         )}
       </header>
 
+      {/* Above the transcript, because the transcript is only as complete
+          as the capture was. Without this, a meeting that recorded one side
+          of a conversation looks like one where nobody else spoke. */}
+      {meeting.audioNotes && meeting.audioNotes.length > 0 ? (
+        <div className="border-b border-[--color-line] bg-[--color-surface-raised] px-6 py-2 text-xs">
+          <p className="font-medium text-[--color-recording]">
+            {t("meeting.incomplete")}
+          </p>
+          <ul className="mt-1 list-disc pl-4 text-[--color-ink-muted]">
+            {meeting.audioNotes.map((note) => (
+              <li key={note}>{note}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {dropped > 0 ? (
         <p className="border-b border-[--color-line] bg-[--color-surface-raised] px-6 py-2 text-xs text-[--color-ink-muted]">
           {t("transcript.dropped")}

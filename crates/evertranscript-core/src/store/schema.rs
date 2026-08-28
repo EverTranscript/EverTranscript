@@ -100,6 +100,14 @@ const MIGRATIONS: &[&str] = &[
         body
     );
     "#,
+    // 4 — what a recording lost, in the record rather than only in a log.
+    // A Meeting captured with half its audio previously looked exactly like
+    // a complete one; the Operator opened one-sided notes with nothing to
+    // explain them. A JSON array of human-readable notes, empty when the
+    // recording was whole.
+    r#"
+    ALTER TABLE meetings ADD COLUMN audio_notes TEXT;
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.

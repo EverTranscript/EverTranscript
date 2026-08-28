@@ -26,6 +26,7 @@ const en = {
   "meeting.untitled": "Untitled",
   "meeting.recordingNow": "Recording now",
   "meeting.selectPrompt": "Select a meeting",
+  "meeting.incomplete": "This recording is incomplete",
   "meeting.deleteConfirm":
     "Delete this meeting? Its transcript, notes file, and audio are removed permanently.",
   "transcript.empty": "No transcript yet.",
@@ -62,6 +63,7 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "meeting.untitled": "未命名",
     "meeting.recordingNow": "正在录制",
     "meeting.selectPrompt": "请选择一个会议",
+    "meeting.incomplete": "这次录音不完整",
     "meeting.deleteConfirm": "确定删除这个会议？转录、笔记文件和音频都会被永久删除。",
     "transcript.empty": "暂无转录内容。",
     "transcript.listening": "正在聆听…",

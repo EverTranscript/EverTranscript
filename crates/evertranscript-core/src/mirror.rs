@@ -127,6 +127,18 @@ pub fn render(meeting: &Meeting, segments: &[TranscriptSegment]) -> String {
         .unwrap_or_else(|| fallback_title(meeting));
     out.push_str(&format!("# {title}\n\n"));
 
+    // Directly under the title, before anything derived from the audio,
+    // because everything below is only as complete as the capture was. A
+    // Meeting that recorded one side of a conversation must not read like a
+    // Meeting where one side stayed quiet.
+    if !meeting.audio_notes.is_empty() {
+        out.push_str("> **This recording is incomplete.**\n");
+        for note in &meeting.audio_notes {
+            out.push_str(&format!("> - {note}\n"));
+        }
+        out.push('\n');
+    }
+
     out.push_str("## Summary\n\n");
     out.push_str("*Not generated yet.*\n\n");
 
@@ -346,7 +358,39 @@ mod tests {
             duration_seconds: Some(2820),
             mirror_filename: None,
             audio_path: Some(".data/audio/0199a1b2.m4a".to_string()),
+            audio_notes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn an_incomplete_recording_says_so_above_everything_derived_from_it() {
+        // The Operator reads the Mirror, not the log. A Meeting that captured
+        // one side of a conversation and a Meeting where one side stayed
+        // quiet produce the same transcript, and only this tells them apart.
+        let mut meeting = meeting();
+        meeting.audio_notes = vec![
+            "system audio: permission to record system audio has not been granted".to_string(),
+        ];
+        let rendered = render(&meeting, &[]);
+
+        let warning = rendered
+            .find("This recording is incomplete")
+            .expect("an incomplete recording must say so");
+        assert!(
+            warning < rendered.find("## Summary").expect("a summary section"),
+            "the warning belongs above what was derived from the missing audio"
+        );
+        assert!(
+            rendered.contains("permission to record system audio"),
+            "and must carry the reason, not just the fact"
+        );
+    }
+
+    #[test]
+    fn a_whole_recording_is_not_littered_with_reassurance() {
+        // The note appears only when something was lost; a clean Meeting
+        // says nothing, or the warning stops meaning anything.
+        assert!(!render(&meeting(), &[]).contains("incomplete"));
     }
 
     #[test]

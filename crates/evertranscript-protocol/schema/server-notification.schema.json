@@ -104,6 +104,13 @@
       "description": "One recorded session: the unit of storage, retrieval, and summary.",
       "type": "object",
       "properties": {
+        "audioNotes": {
+          "description": "What this recording lost, in the Operator's terms — a capture leg that\nnever started, one that died partway, audio that would not encode.\n\nEmpty for a whole recording. This is in the record rather than only in\na log because a Meeting missing half its audio is otherwise\nindistinguishable from one where nobody spoke, and the Operator finds\nout by reading a transcript that makes no sense.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "audioPath": {
           "type": [
             "string",

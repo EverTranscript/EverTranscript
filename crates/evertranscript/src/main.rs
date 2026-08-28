@@ -541,6 +541,14 @@ async fn run_show(id: &str, json: bool) -> Result<()> {
     if let Some(filename) = &response.meeting.mirror_filename {
         println!("  mirror   {filename}");
     }
+    // Before the transcript, because the transcript is only as complete as
+    // the capture was.
+    if !response.meeting.audio_notes.is_empty() {
+        println!("\nthis recording is incomplete:");
+        for note in &response.meeting.audio_notes {
+            println!("  - {note}");
+        }
+    }
     if response.segments.is_empty() {
         println!("\nno transcript yet");
     } else {

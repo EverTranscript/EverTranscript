@@ -447,8 +447,17 @@ impl Core {
                     .write(move |connection| meetings::set_audio_path(connection, &id, &relative))
                     .await?;
             }
-            for note in &outcome.degraded {
-                warn!(meeting = %meeting.id, note, "this Meeting's audio is partial");
+            if !outcome.degraded.is_empty() {
+                for note in &outcome.degraded {
+                    warn!(meeting = %meeting.id, note, "this Meeting's audio is partial");
+                }
+                // And into the record. A log line is invisible to the person
+                // who later reads a transcript with one side missing.
+                let id = meeting.id.clone();
+                let notes = outcome.degraded.clone();
+                self.store
+                    .write(move |connection| meetings::set_audio_notes(connection, &id, &notes))
+                    .await?;
             }
         }
 

@@ -85,13 +85,22 @@ impl LiveSource {
         let host = cpal::default_host();
         let device = host
             .default_input_device()
-            .context("no default input device — is a microphone connected?")?;
+            .context("no microphone is connected")?;
         let name = device.name().unwrap_or_else(|_| "unknown".to_string());
-        // A device can exist and still be unusable: a machine with no built-in
-        // microphone reports one and then refuses to describe it.
-        let config = device
-            .default_input_config()
-            .with_context(|| format!("the input device \"{name}\" has no usable configuration"))?;
+        // A device can exist and still be unusable, and the platform error
+        // for it says nothing an Operator can act on — a machine with no
+        // microphone at all still reports a default input device, then
+        // refuses to describe it, and so does one where recording has not
+        // been permitted. Name both causes rather than forwarding a message
+        // about a Rust binding.
+        let config = device.default_input_config().map_err(|error| {
+            debug!(device = %name, %error, "the input device could not be configured");
+            anyhow::anyhow!(
+                "no usable microphone — check that one is connected, and that \
+                 EverTranscript is allowed to use it in System Settings › \
+                 Privacy & Security › Microphone"
+            )
+        })?;
         info!(device = %name, rate = config.sample_rate().0, channels = config.channels(), "microphone capture starting");
 
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

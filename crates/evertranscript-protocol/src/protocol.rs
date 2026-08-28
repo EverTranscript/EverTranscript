@@ -439,6 +439,15 @@ pub struct Meeting {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub audio_path: Option<String>,
+    /// What this recording lost, in the Operator's terms — a capture leg that
+    /// never started, one that died partway, audio that would not encode.
+    ///
+    /// Empty for a whole recording. This is in the record rather than only in
+    /// a log because a Meeting missing half its audio is otherwise
+    /// indistinguishable from one where nobody spoke, and the Operator finds
+    /// out by reading a transcript that makes no sense.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audio_notes: Vec<String>,
 }
 
 /// One attributed span of the Transcript.

@@ -47,3 +47,19 @@
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q4 — m1/03-capture-vertical — deviation
+
+**Question:** A recording that lost a capture leg recorded that fact only to a log line. Should the loss reach the record itself, which means a schema migration and a protocol field neither ticket asked for?
+
+**Options considered:** leave it in the log and let the Operator infer / add a note to the Mirror only / carry it on the Meeting through store, protocol, Mirror, CLI and client.
+
+**Chosen:** Carry it on the Meeting: a new `audio_notes` column (migration 4), an additive `audioNotes` protocol field, and rendering in the Mirror, `show`, and the Electron client.
+
+**Decided-by:** agent
+
+**Justification:** Not asked for by tickets 03 or 09, but it is what makes the rest of their work legible. A Meeting recorded with one leg missing produced a one-sided transcript and nothing anywhere to explain it — indistinguishable, to the person reading their notes a week later, from a meeting where nobody else spoke. On any machine without the system-audio permission that is every meeting, so the gap is not an edge case. The protocol change is additive, which ADR-0028 permits. Verified end to end against a real daemon on this machine, which has neither leg available: both reasons reach `show` and the Mirror.
+
+**Outcome:** applied
+
+**Ref:** (pending)
