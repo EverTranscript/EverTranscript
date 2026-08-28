@@ -127,3 +127,21 @@
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q9 — m1/11-guarantee-tests-closeout — gate-resolution
+
+**Question:** Q3 concluded that a refused system-audio permission can be recognised from delivered-but-silent frames, on the premise that a global tap only fires while something is playing. The dogfood run falsified that premise. How should a refusal be recognised now?
+
+**Options considered:** keep counting silence and raise the threshold / drop the check and let a refused tap record silence unexplained / ask the system whether anything is actually playing, and count silence only against that.
+
+**Chosen:** Ask. `kAudioHardwarePropertyProcessObjectList` and `kAudioProcessPropertyIsRunningOutput` answer "is anything playing right now", and `silent_ms` accumulates only while the answer is yes. The refusal note also stops ending the leg: a new `CaptureEvent::Degraded` records the reason and leaves capture attached.
+
+**Decided-by:** agent
+
+**Justification:** Q3's asymmetry was the right idea resting on an assumption nobody measured. On macOS 26 the tap delivers zero-filled frames continuously with nothing playing, so meeting `01a047ff` — a correct recording on a machine whose grant `audio-check` had measured at peak 0.795 twelve minutes earlier — was stamped incomplete and told the Operator to grant a permission they already had. Raising the threshold only moves the accusation later; dropping the check restores the silent failure Q3 existed to end. The signal Q3 assumed the tap provided implicitly turns out to exist as an API, so the fix is to stop inferring it. Measured on this machine before being relied on, which is the step Q3 skipped: false with nothing playing, true while a process plays, and still false while our own tap is capturing — so the recorder does not mistake itself for playback and no self-exclusion is needed. Verified end to end: 60 s of quiet now produces no note where the same scenario produced one before, and a played sentence is still captured and attributed. Not ending the leg is the second half and matters independently of the gate: this is a diagnosis the Core infers rather than reads, so when it is wrong it should cost a sentence in the record, not every remaining minute of the far end. The one path this machine cannot exercise is a genuine refusal, because the grant is present; that half rests on unit tests and is recorded in ticket 11 as untested end to end.
+
+**Outcome:** applied
+
+**Supersedes:** Q3 — its stated asymmetry does not hold on macOS 26; the conclusion it drew is kept, the evidence it drew it from is replaced.
+
+**Ref:** (pending)

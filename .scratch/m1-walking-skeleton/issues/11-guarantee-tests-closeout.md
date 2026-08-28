@@ -50,26 +50,43 @@ chunk's English as whisper's rolling prompt, and the first chunk after a languag
 follows that bias, and (b) **script** — Simplified input is returned as Traditional. Both are
 addressable in the prompt/decode path; neither is a model-capacity problem.
 
-### Still open: the refusal detector reports a false negative
+### Resolved: the refusal detector reported a false negative
 
-The Mirror for this recording says **"This recording is incomplete — system audio is being
-played but arrives as silence — grant EverTranscript permission…"**. The grant is present:
-`audio-check` measured the system leg at peak 0.795 twelve minutes earlier, on this machine,
-in this session.
+The Mirror for `01a047ff` said **"This recording is incomplete — system audio is being
+played but arrives as silence — grant EverTranscript permission…"**. The grant was
+present: `audio-check` measured the system leg at peak 0.795 twelve minutes earlier, on
+this machine, in this session.
 
-Nothing was playing during the meeting. `SILENCE_PROVES_REFUSAL_MS` rests on the asymmetry
-recorded in DECISIONS Q3 — "a global tap's callback fires only while something is *playing*,
-so a machine with nothing to record delivers no frames at all". **On macOS 26.x that does not
-hold**: the tap delivered frames of bit-exact zero for 44 s with nothing playing, and the
-detector concluded the permission was refused. Two harms follow:
+Nothing was playing during the meeting. `SILENCE_PROVES_REFUSAL_MS` rested on the
+asymmetry recorded in DECISIONS Q3 — "a global tap's callback fires only while something
+is *playing*, so a machine with nothing to record delivers no frames at all". **On macOS
+26 that does not hold**: the tap delivered frames of bit-exact zero for 44 s with
+nothing playing.
 
-- a correct recording is permanently marked incomplete, with a confident instruction to grant
-  a permission the Operator already granted;
-- the leg is **ended**, not paused, so a meeting that opens with 44 s of quiet loses system
-  audio for its entire remaining duration.
+Fixed in DECISIONS Q9, which supersedes Q3. The check now asks the system whether
+anything is playing (`kAudioHardwarePropertyProcessObjectList` plus
+`kAudioProcessPropertyIsRunningOutput`) and counts silence only against playback, and
+the note no longer ends the leg — a diagnosis the Core infers should cost a sentence in
+the record, not every remaining minute of the far end.
 
-Q3's conclusion needs re-deriving against this machine's behaviour — the detector is sound
-only if the asymmetry it rests on is real.
+Verified, both directions, end to end:
+
+- **The false positive is gone.** 60 s of quiet — the scenario that produced the note,
+  and longer than the 44 s that triggered it — produces no note at all.
+- **A working leg is unaffected.** A played sentence is still captured and attributed to
+  **Participants**.
+- **A genuine refusal is still caught.** With the grant actually denied and audio
+  playing, the note appears and names the permission, `audio-check` reports "captured,
+  but all of it silent" rather than the quiet-meeting wording, and the log shows
+  `capture leg is degraded; it stays attached` with **no `EndLeg` at all**. The audio
+  file is full length with the microphone intact at −8.1 dB and the system channel at
+  −91.0 dB, which is the refused tap.
+
+One consequence of a refusal worth recording, because it is not obvious: with the system
+leg silent, the echo canceller's reference is digital silence, so it cannot remove the
+speaker bleed and the far end is transcribed and attributed to **You**. That is the harm
+Q1 and Q2 exist to prevent, and it is unavoidable once the far-end reference is gone —
+the incomplete note is what tells the reader the attribution cannot be trusted.
 
 ### Confirmed while there
 
@@ -77,8 +94,14 @@ only if the asymmetry it rests on is real.
   Recording, and the daemon's Quit stops the Core. It had never appeared to be missing: on a
   multi-display Mac it lands on a non-main display's menu bar. Because the binary is not
   bundled, macOS names the status item after the process PID where other items use bundle ids.
-- **No TCC prompt ever appeared** — the grants attach to the *responsible process*, which for
-  a terminal-launched binary is the terminal (Ghostty held both already).
-  `kTCCServiceAudioCapture` holds no entry for it, so the process tap is authorised by the
-  Screen & System Audio Recording grant. Whether the prompt fires for an unprivileged launch
-  is therefore **still unanswered** — it never needed to fire.
+- **The TCC prompt does fire, and no app bundle is needed for it.** This was the
+  handoff's main open risk, with packaging a minimal `.app` carrying
+  `NSAudioCaptureUsageDescription` named as the next thing to try. It is not necessary: a
+  plain terminal-launched binary, unbundled, prompted as soon as the cached
+  authorisation was cleared. No prompt appeared during the dogfood run only because the
+  responsible process — the terminal, not EverTranscript — had already been granted.
+- **Either grant authorises the process tap.** `kTCCServiceScreenCapture` satisfied it
+  while no `kTCCServiceAudioCapture` entry existed; with screen capture revoked and
+  audio capture allowed, the tap kept working; with both denied, it delivers silence.
+  The grant attaches to the responsible process throughout, so a binary run from a
+  terminal is authorised as that terminal.
