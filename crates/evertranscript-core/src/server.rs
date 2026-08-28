@@ -452,6 +452,16 @@ impl Core {
         title: Option<String>,
         detected_app: Option<String>,
     ) -> Result<Meeting> {
+        self.start_meeting_armed(title, detected_app, None).await
+    }
+
+    /// Same, carrying the calendar event that named it (ADR-0036).
+    pub async fn start_meeting_armed(
+        &self,
+        title: Option<String>,
+        detected_app: Option<String>,
+        armed: Option<crate::detect::CalendarEvent>,
+    ) -> Result<Meeting> {
         // Nothing is captured before the Operator acknowledges the Briefing
         // (ADR-0023). This is the enforcement point rather than a UI
         // convention, so no Client — and no future Auto-Record path — can
@@ -472,7 +482,16 @@ impl Core {
                         running.started_at
                     );
                 }
-                meetings::start(connection, title.as_deref(), detected_app.as_deref())
+                meetings::start_armed(
+                    connection,
+                    title.as_deref(),
+                    detected_app.as_deref(),
+                    armed.as_ref().map(|event| event.id.as_str()),
+                    armed
+                        .as_ref()
+                        .map(|event| event.attendees.as_slice())
+                        .unwrap_or(&[]),
+                )
             })
             .await?;
 

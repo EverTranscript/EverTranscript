@@ -20,7 +20,8 @@ use uuid::Uuid;
 use super::now_rfc3339;
 
 const MEETING_COLUMNS: &str = "id, started_at, ended_at, title, detected_app, \
-                               mirror_filename, audio_path, audio_notes";
+                               mirror_filename, audio_path, audio_notes, \
+                               calendar_event_id, calendar_attendees";
 
 fn row_to_meeting(row: &Row<'_>) -> rusqlite::Result<Meeting> {
     let started_at: String = row.get(1)?;
@@ -42,6 +43,11 @@ fn row_to_meeting(row: &Row<'_>) -> rusqlite::Result<Meeting> {
             .get::<_, Option<String>>(7)?
             .and_then(|notes| serde_json::from_str(&notes).ok())
             .unwrap_or_default(),
+        calendar_event_id: row.get(8)?,
+        calendar_attendees: row
+            .get::<_, Option<String>>(9)?
+            .and_then(|names| serde_json::from_str(&names).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -62,12 +68,27 @@ pub fn start(
     title: Option<&str>,
     detected_app: Option<&str>,
 ) -> Result<Meeting> {
+    start_armed(connection, title, detected_app, None, &[])
+}
+
+/// Same, carrying what the calendar knew (ADR-0036).
+pub fn start_armed(
+    connection: &Connection,
+    title: Option<&str>,
+    detected_app: Option<&str>,
+    calendar_event_id: Option<&str>,
+    attendees: &[String],
+) -> Result<Meeting> {
     let id = Uuid::now_v7().to_string();
     let now = now_rfc3339();
+    let attendees = (!attendees.is_empty())
+        .then(|| serde_json::to_string(attendees))
+        .transpose()?;
     connection.execute(
-        "INSERT INTO meetings (id, started_at, title, detected_app, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?2, ?2)",
-        params![id, now, title, detected_app],
+        "INSERT INTO meetings (id, started_at, title, detected_app, created_at, updated_at, \
+                               calendar_event_id, calendar_attendees)
+         VALUES (?1, ?2, ?3, ?4, ?2, ?2, ?5, ?6)",
+        params![id, now, title, detected_app, calendar_event_id, attendees],
     )?;
     get(connection, &id)?.ok_or_else(|| anyhow::anyhow!("the Meeting vanished after insert"))
 }

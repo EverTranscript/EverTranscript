@@ -112,7 +112,10 @@ async fn act(core: &Arc<Core>, notifier: &dyn Notifier, action: Action) {
             // Meeting when it armed one, and the detected app is the
             // placeholder otherwise.
             let title = armed.as_ref().map(|event| event.title.clone());
-            match core.start_meeting(title, Some(app.name.clone())).await {
+            match core
+                .start_meeting_armed(title, Some(app.name.clone()), armed)
+                .await
+            {
                 Ok(meeting) => info!(
                     meeting = meeting.id,
                     app = app.id,

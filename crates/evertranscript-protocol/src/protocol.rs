@@ -441,6 +441,17 @@ pub struct Meeting {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub title: Option<String>,
+    /// The calendar event this Meeting was armed from, when one named it
+    /// (ADR-0036). Kept so the record can say *which* scheduled meeting
+    /// this was, not merely that it had a title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub calendar_event_id: Option<String>,
+    /// Who the event invited. **Stored, not applied**: these become
+    /// Speaker-naming suggestions in M3, and turning an invitation into an
+    /// attribution before Diarization exists would be inventing who spoke.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calendar_attendees: Vec<String>,
     /// The app detection attributed this Meeting to; the Mirror's slug
     /// before a Title exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]

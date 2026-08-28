@@ -15,6 +15,18 @@ id: string, startedAt: string, endedAt?: string,
  */
 title?: string, 
 /**
+ * The calendar event this Meeting was armed from, when one named it
+ * (ADR-0036). Kept so the record can say *which* scheduled meeting
+ * this was, not merely that it had a title.
+ */
+calendarEventId?: string, 
+/**
+ * Who the event invited. **Stored, not applied**: these become
+ * Speaker-naming suggestions in M3, and turning an invitation into an
+ * attribution before Diarization exists would be inventing who spoke.
+ */
+calendarAttendees?: Array<string>, 
+/**
  * The app detection attributed this Meeting to; the Mirror's slug
  * before a Title exists.
  */

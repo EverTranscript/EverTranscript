@@ -231,6 +231,15 @@ impl Watchlist {
     /// The blocklist is checked first and wins: an app that holds a
     /// microphone without being a meeting must not become one by being
     /// Electron-shaped.
+    /// Blocks an app for the life of this list. Test-facing: the shipped
+    /// blocklist is seed data, and this is how a test can ask whether the
+    /// mechanism works using an application that actually exists on the
+    /// machine running it.
+    pub fn also_blocking(mut self, id: &str) -> Self {
+        self.blocked.insert(id.to_string());
+        self
+    }
+
     pub fn watches(&self, app: &AppIdentity) -> bool {
         if self.blocked.contains(&app.id) {
             return false;

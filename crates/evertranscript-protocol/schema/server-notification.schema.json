@@ -117,6 +117,20 @@
             "null"
           ]
         },
+        "calendarAttendees": {
+          "description": "Who the event invited. **Stored, not applied**: these become\nSpeaker-naming suggestions in M3, and turning an invitation into an\nattribution before Diarization exists would be inventing who spoke.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "calendarEventId": {
+          "description": "The calendar event this Meeting was armed from, when one named it\n(ADR-0036). Kept so the record can say *which* scheduled meeting\nthis was, not merely that it had a title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "detectedApp": {
           "description": "The app detection attributed this Meeting to; the Mirror's slug\nbefore a Title exists.",
           "type": [

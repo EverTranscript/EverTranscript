@@ -84,7 +84,12 @@ impl Drop for TestCore {
 /// Collects caption notifications until `count` arrive or time runs out.
 async fn collect_captions(client: &mut CoreClient, count: usize) -> Vec<String> {
     let mut texts = Vec::new();
-    let deadline = std::time::Duration::from_secs(3);
+    // Generous on purpose. The claim is that captions reach a subscribed
+    // Client, not that they arrive within any particular second, and a
+    // deadline tight enough to be load-sensitive tests the machine rather
+    // than the code — this went red as soon as the suite grew detection
+    // tests running beside it.
+    let deadline = std::time::Duration::from_secs(20);
     let _ = tokio::time::timeout(deadline, async {
         while texts.len() < count {
             match client.next_notification().await {

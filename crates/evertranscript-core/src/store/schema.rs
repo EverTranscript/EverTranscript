@@ -130,6 +130,16 @@ const MIGRATIONS: &[&str] = &[
         ('com.tencent.tencentmeeting', '腾讯会议',         'process'),
         ('browser-meetings',           'Browser Meetings','browserMeetings');
     "#,
+    // 6 — what the calendar knew (ADR-0036). The title already rides the
+    // Meeting; these are the two facts that would otherwise be lost: which
+    // event it was, and who was invited. Attendees are *stored, not
+    // applied* — they become Speaker-naming suggestions in M3, and turning
+    // an invitation into an attribution before Diarization exists would be
+    // inventing who spoke.
+    r#"
+    ALTER TABLE meetings ADD COLUMN calendar_event_id TEXT;
+    ALTER TABLE meetings ADD COLUMN calendar_attendees TEXT;
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.

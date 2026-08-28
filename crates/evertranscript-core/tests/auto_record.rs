@@ -176,6 +176,11 @@ async fn a_calendar_armed_meeting_is_named_from_the_event() {
         Some("Quarterly review"),
         "the Meeting should carry the event's title"
     );
+    assert_eq!(
+        meetings[0].calendar_event_id.as_deref(),
+        Some("evt-1"),
+        "and be traceable back to the entry that armed it"
+    );
 }
 
 #[tokio::test]

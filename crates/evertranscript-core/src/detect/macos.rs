@@ -296,12 +296,18 @@ mod tests {
 
     #[test]
     fn a_real_microphone_hold_is_visible_to_the_detector() {
-        // The mechanism, proven against this machine rather than asserted.
-        // Nothing is recording at rest; opening a capture stream makes the
-        // count rise. `microphone_holders` cannot be used for this — a test
-        // binary has no bundle id, so it filters itself out, which is
+        // The mechanism, proven against this machine rather than asserted:
+        // while a capture stream is open, CoreAudio must report at least one
+        // process recording. `microphone_holders` cannot be used for this —
+        // a test binary has no bundle id, so it filters itself out, which is
         // correct behaviour and a useless test subject.
-        let before = recording_process_count();
+        //
+        // Deliberately not a before/after delta. The first version of this
+        // compared the count at rest against the count during, and it went
+        // red as soon as the suite grew: cargo runs tests in parallel, other
+        // tests in this crate open capture streams, and "at rest" is a
+        // fiction inside a parallel suite. An absolute claim is the one that
+        // is actually true.
 
         let mut source = crate::audio::live::LiveSource::new();
         let (events, _rx) = tokio::sync::mpsc::channel(64);
@@ -317,9 +323,9 @@ mod tests {
         source.stop();
 
         assert!(
-            during > before,
-            "the detector saw {during} processes recording while we held the \
-             microphone, against {before} at rest — it cannot see a live mic"
+            during >= 1,
+            "a capture stream was open and the detector saw no process \
+             recording at all — it cannot see a live microphone"
         );
     }
 

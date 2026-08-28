@@ -112,6 +112,19 @@ pub fn render(meeting: &Meeting, segments: &[TranscriptSegment]) -> String {
         out.push_str(&format!("duration: {}\n", format_duration(duration)));
     }
     out.push_str(&format!("speakers: [{}]\n", speaker_list(segments)));
+    // What the calendar knew (ADR-0036). The event id makes the Meeting
+    // traceable back to the entry that armed it; the attendees are a record
+    // of who was *invited*, which is not the same claim as who spoke and is
+    // never rendered as one.
+    if let Some(event) = &meeting.calendar_event_id {
+        out.push_str(&format!("calendar_event: {event}\n"));
+    }
+    if !meeting.calendar_attendees.is_empty() {
+        out.push_str(&format!(
+            "invited: [{}]\n",
+            meeting.calendar_attendees.join(", ")
+        ));
+    }
     if let Some(audio) = &meeting.audio_path {
         // In-app playback is a non-goal; the path is how "any player serves"
         // stays a real sentence now that audio lives in a hidden folder.
@@ -359,7 +372,29 @@ mod tests {
             mirror_filename: None,
             audio_path: Some(".data/audio/0199a1b2.m4a".to_string()),
             audio_notes: Vec::new(),
+            calendar_event_id: None,
+            calendar_attendees: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_calendar_armed_meeting_records_which_event_and_who_was_invited() {
+        // ADR-0036: the event id makes the Meeting traceable back to the
+        // entry that armed it, and the attendees are who was *invited* —
+        // never rendered as who spoke, which is M3's question and needs
+        // Diarization to answer.
+        let armed = Meeting {
+            calendar_event_id: Some("evt-42".to_string()),
+            calendar_attendees: vec!["Ada".to_string(), "Grace".to_string()],
+            ..meeting()
+        };
+        let rendered = render(&armed, &[]);
+        assert!(rendered.contains("calendar_event: evt-42"), "{rendered}");
+        assert!(rendered.contains("invited: [Ada, Grace]"), "{rendered}");
+        assert!(
+            !rendered.contains("speakers: [Ada"),
+            "an invitation is not an attribution"
+        );
     }
 
     #[test]

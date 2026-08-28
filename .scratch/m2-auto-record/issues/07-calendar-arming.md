@@ -7,12 +7,12 @@
 Status: ready-for-human — macOS reader written, no grant on this machine; Windows not written
 
 - [x] EventKit local-store read on macOS — written, and it compiles and links correctly.
-- [ ] **The WinRT appointment store is not written.** ADR-0025 as amended puts it in this milestone; it reports access as withheld rather than pretending, because a calendar that silently returns nothing looks exactly like one the Operator declined
+- [x] **The WinRT appointment store is written** — `AppointmentManager` with read-only access to all calendars, typechecked against `x86_64-pc-windows-msvc` and never executed, the same status as the Windows detector
 - [x] **Never a cloud calendar API**: no OAuth, no token lifecycle, no new network. The zero-network guarantee test must still pass with the calendar granted — that test is what proves this clause rather than asserting it
 - [x] Access is a skippable, Recommended step; an Operator who declines gets the whole product minus the niceties, and no feature silently degrades beyond the calendar ones
 - [x] Arming pre-creates the Meeting carrying the event's title and attendees; an ignored armed Meeting is discarded (with 06's follow-up), never left as an empty row
 - [x] Title chain becomes **manual > calendar event title > transcript suggestion > detected-app placeholder** (ADR-0030 as amended). The transcript-suggestion link lands in M4; M2 must leave the seam for it rather than hard-coding a two-step chain
-- [ ] **Not done:** the event id and title reach Mirror frontmatter; attendee names **stored, not applied** — they become Speaker-naming suggestions in M3
+- [x] The event id and title reach Mirror frontmatter (`calendar_event:` and `invited:`); attendee names are **stored, not applied** — rendered as who was invited and never as who spoke, which is M3's question and needs Diarization to answer
 - [x] Scheduled end feeds the continuity window, with the early-end and end-grace constants taken from the prior art rather than guessed
 - [x] **Done ahead of this ticket.** `CONTEXT.md` was stale against ADR-0036 and is corrected: Meeting Detection no longer claims to be "the product's **single** ambient sense", and Calendar Arming is defined beside it as the second one. The drift was internal — the Nothing Ambient entry already enumerated both senses, so the two entries contradicted each other. "Reads state, never content" is kept on Meeting Detection, where it is still true; the calendar entry is where the honest exception now lives
 - [x] The permission-set audit was updated, and it earned its keep: adding EventKit with default features linked **MapKit and CoreLocation**, which `default-features = false` removed and the guarantee now forbids by name. Original criterion: Calendars as a **conditional** entry: present under grant, absent otherwise, and Screen Recording still absent in the default posture
