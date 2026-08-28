@@ -252,10 +252,20 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
     let started = source.start(CaptureClock::start(), events_tx);
 
     let mut unavailable: Vec<(AudioChannel, String)> = Vec::new();
+    // Whether anything played during the window. Without it, "captured, but
+    // all of it silent" reads as a permission problem even when the
+    // Operator simply had nothing playing — which is the same confusion the
+    // Core's own refusal check used to make (DECISIONS Q9).
+    let mut heard_playback = false;
     if let Err(error) = &started {
         println!("Nothing can be recorded on this machine:\n  {error:#}");
     } else {
-        tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+        while std::time::Instant::now() < until {
+            heard_playback |=
+                evertranscript_core::audio::system::output_is_active().unwrap_or(false);
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
     }
     source.stop();
 
@@ -293,6 +303,12 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
         if ms > 0 && peak > 0.0 {
             usable += 1;
             println!("{name}  {ms} ms captured, peak level {peak:.3}");
+        } else if ms > 0 && channel == AudioChannel::System && !heard_playback {
+            // Nothing was played, so this leg was never asked a question it
+            // could answer. Reporting "silent" here would send the Operator
+            // to System Settings over nothing at all.
+            println!("{name}  {ms} ms captured, but nothing was playing");
+            println!("              play some audio and run this again to check this leg");
         } else if ms > 0 {
             println!("{name}  {ms} ms captured, but all of it silent");
         } else {
