@@ -36,8 +36,6 @@ storybook-static/
 *~
 
 # cli / agent tools
-CLAUDE.md
-.claude/
 AGENTS.override.md
 AGENTS.local.md
 .mindfs/
