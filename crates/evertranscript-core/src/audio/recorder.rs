@@ -20,6 +20,7 @@ use super::AudioSource;
 use super::CaptureClock;
 use super::CaptureEvent;
 use super::joiner::Joiner;
+use super::joiner::StereoBlock;
 use super::sink::CheckpointSink;
 use super::supervisor::Action;
 use super::supervisor::ChurnPolicy;
@@ -113,7 +114,7 @@ async fn run(
     stop: CancellationToken,
     finished: oneshot::Sender<RecordingOutcome>,
     meeting_key: String,
-    mut transcription: Option<TranscriptionPipeline>,
+    transcription: Option<TranscriptionPipeline>,
     segments_tx: Option<mpsc::Sender<TranscribedSegment>>,
 ) {
     let mut joiner = Joiner::new();
@@ -121,21 +122,13 @@ async fn run(
     let mut degraded = Vec::new();
     let mut transcribed = 0usize;
 
-    /// Sends transcript segments on, dropping them only if the consumer is
-    /// gone — never blocking capture on a slow writer.
-    async fn deliver(
-        sender: &Option<mpsc::Sender<TranscribedSegment>>,
-        segments: Vec<TranscribedSegment>,
-        count: &mut usize,
-    ) {
-        let Some(sender) = sender else { return };
-        for segment in segments {
-            *count += 1;
-            if sender.send(segment).await.is_err() {
-                return;
-            }
-        }
-    }
+    // Transcription gets its own thread. A whisper window decodes in
+    // seconds while the capture channel holds about one second of frames,
+    // so decoding inline stalls this drain long enough for CoreAudio to
+    // start dropping frames — losing audio that was captured perfectly
+    // well. ADR-0019 puts the recording first, and that is only true if
+    // the recording never waits for the transcript.
+    let transcription = transcription.map(|pipeline| Transcription::spawn(pipeline, segments_tx));
 
     // Stopping is two steps, not one. Breaking out of the loop the moment
     // the Operator says stop would abandon whatever capture has already
@@ -192,9 +185,8 @@ async fn run(
             if let Err(error) = sink.write(&block).await {
                 warn!(%error, "writing audio failed");
             }
-            if let Some(pipeline) = transcription.as_mut() {
-                let produced = pipeline.push(&block);
-                deliver(&segments_tx, produced, &mut transcribed).await;
+            if let Some(worker) = transcription.as_ref() {
+                worker.offer(block);
             }
         }
     }
@@ -204,16 +196,23 @@ async fn run(
         if let Err(error) = sink.write(&block).await {
             warn!(%error, "writing the final audio block failed");
         }
-        if let Some(pipeline) = transcription.as_mut() {
-            let produced = pipeline.push(&block);
-            deliver(&segments_tx, produced, &mut transcribed).await;
+        if let Some(worker) = transcription.as_ref() {
+            worker.offer(block);
         }
     }
-    // The tail: whatever is still buffered when the Operator hits stop.
-    // Without this the last sentence of every Meeting is lost (story 5).
-    if let Some(pipeline) = transcription.as_mut() {
-        let produced = pipeline.flush();
-        deliver(&segments_tx, produced, &mut transcribed).await;
+    // Closing the queue is what tells the worker to flush its tail, so the
+    // last sentence of the Meeting is not lost (story 5). Joining it can
+    // take as long as one decode, which is why it does not run on a
+    // runtime thread.
+    if let Some(worker) = transcription {
+        let (count, dropped) = worker.finish().await;
+        transcribed = count;
+        if dropped > 0 {
+            warn!(dropped, "transcription fell behind; captions were lost");
+            degraded.push(format!(
+                "captions: {dropped} block(s) went untranscribed because transcription fell behind"
+            ));
+        }
     }
 
     let seconds = sink.seconds_written();
@@ -240,6 +239,81 @@ async fn run(
         degraded,
         segments: transcribed,
     });
+}
+
+/// Transcription, running beside capture rather than inside it.
+struct Transcription {
+    blocks: std::sync::mpsc::SyncSender<StereoBlock>,
+    handle: std::thread::JoinHandle<usize>,
+    /// Blocks the worker could not keep up with. Counted rather than
+    /// ignored: a caption silently missing is indistinguishable from
+    /// nobody having spoken.
+    dropped: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Transcription {
+    fn spawn(
+        mut pipeline: TranscriptionPipeline,
+        segments_tx: Option<mpsc::Sender<TranscribedSegment>>,
+    ) -> Self {
+        // Roughly a minute of blocks. Deep enough to ride out a slow
+        // decode, bounded so a hopelessly slow machine loses captions
+        // rather than memory.
+        let (blocks, incoming) = std::sync::mpsc::sync_channel::<StereoBlock>(4096);
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let handle = std::thread::spawn(move || {
+            let mut count = 0usize;
+            let send = |segments: Vec<TranscribedSegment>, count: &mut usize| {
+                let Some(sender) = segments_tx.as_ref() else {
+                    *count += segments.len();
+                    return;
+                };
+                for segment in segments {
+                    *count += 1;
+                    if sender.blocking_send(segment).is_err() {
+                        return;
+                    }
+                }
+            };
+            while let Ok(block) = incoming.recv() {
+                let produced = pipeline.push(&block);
+                send(produced, &mut count);
+            }
+            // The tail: whatever is still buffered when capture ends.
+            send(pipeline.flush(), &mut count);
+            count
+        });
+
+        Self {
+            blocks,
+            handle,
+            dropped,
+        }
+    }
+
+    /// Hands a block over, or counts it lost. Never blocks capture.
+    fn offer(&self, block: StereoBlock) {
+        if self.blocks.try_send(block).is_err() {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Closes the queue and waits for the worker's tail. Returns the
+    /// segment count and how many blocks were never transcribed.
+    async fn finish(self) -> (usize, usize) {
+        let Self {
+            blocks,
+            handle,
+            dropped,
+        } = self;
+        drop(blocks);
+        let count = tokio::task::spawn_blocking(move || handle.join().unwrap_or(0))
+            .await
+            .unwrap_or(0);
+        (count, dropped.load(std::sync::atomic::Ordering::Relaxed))
+    }
 }
 
 fn channel_name(channel: AudioChannel) -> &'static str {
