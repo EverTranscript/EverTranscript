@@ -36,6 +36,9 @@ uuid.workspace = true
 # capture channel starts dropping frames.
 whisper-rs = { workspace = true, features = ["metal"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
 objc2-app-kit.workspace = true

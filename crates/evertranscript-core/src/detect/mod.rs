@@ -19,8 +19,12 @@
 //!    here is a function of the timeline it was given (ADR-0023 as amended).
 
 pub mod fixture;
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod policy;
 pub mod watchlist;
+#[cfg(target_os = "windows")]
+pub mod windows;
 
 /// Milliseconds since detection started.
 ///
