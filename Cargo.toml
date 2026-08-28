@@ -21,6 +21,7 @@ anyhow = "1"
 chrono = { version = "0.4", features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive"] }
 dirs = "5"
+cpal = "0.15"
 crc32fast = "1"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = [
@@ -43,6 +44,7 @@ tokio = { version = "1", features = [
     "time",
     "fs",
     "signal",
+    "process",
 ] }
 tokio-util = "0.7"
 tracing = "0.1"

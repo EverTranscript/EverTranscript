@@ -5,6 +5,7 @@
 //! Electron Client, the CLI — is a Client of this crate over the protocol in
 //! `evertranscript-protocol`, never a second writer.
 
+pub mod audio;
 pub mod client;
 pub mod mirror;
 pub mod models;
@@ -38,6 +39,12 @@ pub async fn run_daemon(shutdown: CancellationToken) -> anyhow::Result<()> {
     };
 
     let core = Core::new()?;
+
+    // Before serving anything: merge audio checkpoints a previous run left
+    // behind. A Core that was killed mid-meeting gets its recording back,
+    // minus at most the checkpoint that was in flight.
+    core.recover_interrupted_audio().await;
+
     let (events_tx, events_rx) = mpsc::channel(transport::CHANNEL_CAPACITY);
 
     // The Mirror projection runs alongside the server, not inside it: a slow

@@ -45,8 +45,10 @@ use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+use tracing::info;
 use tracing::warn;
 
+use crate::audio;
 use crate::mirror;
 use crate::mirror::MirrorWriter;
 use crate::models;
@@ -73,6 +75,19 @@ pub struct Core {
     store: Store,
     mirror: MirrorWriter,
     mirror_wake: Arc<Notify>,
+    /// The recording in progress, if any. The Meeting owns it; capture
+    /// streams inside it come and go (ADR-0029 as amended).
+    recorder: Mutex<Option<audio::recorder::Recorder>>,
+    /// How to open capture. Swapped in tests for the fixture source — the
+    /// AudioSource seam the PRD names.
+    source_factory: Mutex<SourceFactory>,
+}
+
+/// Produces a capture source for a new Meeting.
+pub type SourceFactory = Arc<dyn Fn() -> Box<dyn audio::AudioSource> + Send + Sync>;
+
+fn live_source_factory() -> SourceFactory {
+    Arc::new(|| Box::new(audio::live::LiveSource::new()))
 }
 
 impl Core {
@@ -112,7 +127,33 @@ impl Core {
             store,
             mirror,
             mirror_wake: Arc::new(Notify::new()),
+            recorder: Mutex::new(None),
+            source_factory: Mutex::new(live_source_factory()),
         }))
+    }
+
+    /// Replaces the capture source. Tests use this to drive the whole
+    /// pipeline from a script instead of a microphone.
+    pub async fn set_source_factory(&self, factory: SourceFactory) {
+        *self.source_factory.lock().await = factory;
+    }
+
+    /// Merges any checkpoints a previous Core left behind after a crash.
+    pub async fn recover_interrupted_audio(&self) {
+        match audio::sink::recover_interrupted(&self.audio_dir()).await {
+            Ok(recoveries) if !recoveries.is_empty() => {
+                info!(
+                    count = recoveries.len(),
+                    "recovered audio from recordings a previous run did not finish"
+                );
+            }
+            Ok(_) => {}
+            Err(error) => warn!(%error, "audio recovery failed"),
+        }
+    }
+
+    fn audio_dir(&self) -> std::path::PathBuf {
+        self.history_dir.join(paths::DATA_DIR_NAME).join("audio")
     }
 
     pub fn history_dir(&self) -> &std::path::Path {
@@ -176,6 +217,19 @@ impl Core {
                 meetings::start(connection, title.as_deref(), detected_app.as_deref())
             })
             .await?;
+
+        // Capture starts after the Meeting exists, so a recording can never
+        // be running without a row to attach it to.
+        let source = (self.source_factory.lock().await)();
+        match audio::recorder::Recorder::start(source, self.audio_dir(), mirror::id8(&meeting.id)) {
+            Ok(recorder) => *self.recorder.lock().await = Some(recorder),
+            Err(error) => {
+                // The transcript is the record; audio is the bonus
+                // (ADR-0019). A Meeting with no audio still beats no Meeting.
+                warn!(%error, "capture could not start; recording without audio");
+            }
+        }
+
         self.set_state(CoreState::Recording).await;
         self.wake_mirror();
         Ok(meeting)
@@ -192,11 +246,41 @@ impl Core {
                 meetings::stop(connection, &running.id)
             })
             .await?;
+
+        // Finalize capture before answering: "stopped" must mean the audio
+        // is merged and on disk, not merged eventually.
+        if let Some(recorder) = self.recorder.lock().await.take() {
+            let outcome = recorder.finish().await;
+            if let Some(path) = &outcome.audio_path {
+                let relative = self.relative_to_history(path);
+                let id = meeting.id.clone();
+                self.store
+                    .write(move |connection| meetings::set_audio_path(connection, &id, &relative))
+                    .await?;
+            }
+            for note in &outcome.degraded {
+                warn!(meeting = %meeting.id, note, "this Meeting's audio is partial");
+            }
+        }
+
         self.set_state(CoreState::Idle).await;
         self.wake_mirror();
         // Persisting means the Mirror exists too, not just the rows.
         self.mirror.rebuild_pending().await?;
-        Ok(meeting)
+        self.get_meeting(&meeting.id)
+            .await?
+            .map(|(meeting, _)| meeting)
+            .ok_or_else(|| anyhow::anyhow!("the Meeting vanished after stopping"))
+    }
+
+    /// Paths are stored relative to the History folder so the record stays
+    /// portable: moving the folder must not break every audio reference
+    /// (ADR-0035).
+    fn relative_to_history(&self, path: &std::path::Path) -> String {
+        path.strip_prefix(&self.history_dir)
+            .unwrap_or(path)
+            .display()
+            .to_string()
     }
 
     pub async fn list_meetings(&self, limit: u32, offset: u32) -> Result<Vec<Meeting>> {

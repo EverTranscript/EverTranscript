@@ -12,6 +12,7 @@ evertranscript-protocol.workspace = true
 
 anyhow.workspace = true
 chrono.workspace = true
+cpal.workspace = true
 crc32fast.workspace = true
 dirs.workspace = true
 futures-util.workspace = true

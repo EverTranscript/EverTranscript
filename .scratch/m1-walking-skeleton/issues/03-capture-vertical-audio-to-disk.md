@@ -4,14 +4,17 @@
 
 **Blocked by:** 01, 02.
 
-**Status:** ready-for-agent
+**Status:** mostly done — system-audio capture outstanding
 
-- [ ] AudioSource trait with live and fixture implementations — the ratified seam; all end-to-end tests feed through it
-- [ ] macOS: CoreAudio process tap + private aggregate device (14.4+) for system audio, cpal for mic; Windows: WASAPI loopback + capture
-- [ ] Dual-channel frames carry absolute timestamps; the audio file and (future) transcript share the one clock — gaps are explicit, never silent drift
-- [ ] ffmpeg encodes 30s checkpoint files, lossless-concat merged at finalize into one stereo `.m4a` (L=mic, R=system) under `.data/audio/<id8>.m4a`
-- [ ] `kill -9` mid-recording → next start recovers checkpoints into a playable partial file and flags the Meeting recovered
-- [ ] Injected default-device change → budget-free capture respawn inside the same Meeting, gap accounted on the shared clock
-- [ ] Injected stream error → budgeted respawn with backoff; budget exhausted → ordered meltdown finalizes the Meeting cleanly
-- [ ] System-audio failure self-heals with bounded backoff while the mic leg keeps flowing
-- [ ] No pre-trigger/pre-roll buffering exists anywhere (ADR-0024 as amended)
+- [x] AudioSource trait with live and fixture implementations — the ratified seam; all end-to-end tests feed through it
+- [~] macOS: CoreAudio process tap + private aggregate device (14.4+) for system audio, cpal for mic; Windows: WASAPI loopback + capture
+      **Microphone capture is implemented (cpal, both platforms). System-audio capture is not** — the leg reports itself
+      `Unavailable`, which the churn policy handles as "record the microphone and mark the audio partial". That
+      degradation is tested; the platform work (CoreAudio process taps / WASAPI loopback) remains.
+- [x] Dual-channel frames carry absolute timestamps; the audio file and (future) transcript share the one clock — gaps are explicit, never silent drift
+- [x] ffmpeg encodes 30s checkpoint files, lossless-concat merged at finalize into one stereo `.m4a` (L=mic, R=system) under `.data/audio/<id8>.m4a`
+- [x] `kill -9` mid-recording → next start recovers checkpoints into a playable partial file and flags the Meeting recovered
+- [x] Injected default-device change → budget-free capture respawn inside the same Meeting, gap accounted on the shared clock
+- [x] Injected stream error → budgeted respawn with backoff; budget exhausted → ordered meltdown finalizes the Meeting cleanly
+- [x] System-audio failure self-heals with bounded backoff while the mic leg keeps flowing
+- [x] No pre-trigger/pre-roll buffering exists anywhere (ADR-0024 as amended)

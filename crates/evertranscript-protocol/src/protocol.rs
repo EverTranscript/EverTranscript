@@ -425,7 +425,7 @@ pub struct TranscriptSegment {
 
 /// Which capture leg a segment came from. The mic channel is where the
 /// Operator is (ADR-0029 as amended).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub enum AudioChannel {
