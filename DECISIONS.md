@@ -63,3 +63,19 @@
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q5 — m1/09-core-tray-lifecycle — deviation
+
+**Question:** Ticket 09 asks the tray for "a not-ready gate during model downloads". Should the tray refuse to record while a transcription model is missing?
+
+**Options considered:** block recording until models are ready, as the word "gate" suggests / show the not-ready state but still allow recording / say nothing about models at all.
+
+**Chosen:** Show it, do not block. `NotReady` is a visible state whose menu item remains clickable, and its status line says the recording will have no captions.
+
+**Decided-by:** agent
+
+**Justification:** The first draft blocked, and the tests caught it on a machine with no models downloaded. Blocking contradicts the Core: `start_meeting` deliberately does not require a model, because ADR-0019 holds that a Meeting recorded without captions still beats no Meeting. A tray that refused would lose the meeting to save the transcript, which is backwards, and would make the menu bar stricter than the interface it is a face for. The gate is therefore informational — the Operator learns what they will not get, and still gets the recording.
+
+**Outcome:** applied
+
+**Ref:** (pending)

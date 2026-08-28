@@ -66,7 +66,7 @@ version = "0.6"
 
 [workspace.dependencies.objc2-foundation]
 version = "0.3"
-features = ["NSString", "NSArray", "NSValue", "NSUUID", "NSDictionary"]
+features = ["NSString", "NSArray", "NSValue", "NSUUID", "NSDictionary", "NSTimer", "NSDate", "NSThread", "NSRunLoop"]
 
 [workspace.dependencies.objc2-core-audio]
 version = "0.3"
@@ -75,6 +75,30 @@ features = ["objc2", "objc2-foundation", "objc2-core-audio-types", "AudioHardwar
 [workspace.dependencies.objc2-core-audio-types]
 version = "0.3"
 features = ["CoreAudioBaseTypes"]
+
+# The menu bar item (ADR-0023). AppKit only — the guarantee suite still
+# fails the build if ScreenCaptureKit, EventKit or Contacts appear.
+[workspace.dependencies.objc2-app-kit]
+version = "0.3"
+features = [
+    "NSApplication",
+    "NSStatusBar",
+    "NSStatusItem",
+    "NSStatusBarButton",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+    "NSControl",
+    "NSView",
+    "NSButton",
+    "NSEvent",
+    "NSGraphicsContext",
+]
+
+# Used for one call: does this process have a window server to draw in?
+[workspace.dependencies.objc2-core-graphics]
+version = "0.3"
+features = ["CGSession"]
 
 [workspace.dependencies.objc2-core-foundation]
 version = "0.3"

@@ -16,6 +16,7 @@ pub mod server;
 pub mod settings;
 pub mod store;
 pub mod transport;
+pub mod tray;
 
 pub use server::Core;
 pub use server::Server;
@@ -26,7 +27,31 @@ use tokio_util::sync::CancellationToken;
 
 /// Boots the Core: acquires the startup lock, binds the listener, and serves
 /// until shutdown. Returns when the listener stops.
-pub async fn run_daemon(shutdown: CancellationToken) -> anyhow::Result<()> {
+/// A Core that is up and serving.
+///
+/// Handed back so the caller can decide what the main thread does next. That
+/// only matters on macOS, where the menu bar demands the main thread and the
+/// async work has to move off it (ADR-0023) — but the split is worth having
+/// either way, because "the Core is running" and "this thread is blocked
+/// until it stops" are separate facts.
+pub struct Daemon {
+    core: Arc<Core>,
+    serving: tokio::task::JoinHandle<()>,
+}
+
+impl Daemon {
+    pub fn core(&self) -> &Arc<Core> {
+        &self.core
+    }
+
+    /// Waits for the Core to finish shutting down.
+    pub async fn join(self) {
+        let _ = self.serving.await;
+    }
+}
+
+/// Brings the Core up without blocking the caller.
+pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon> {
     // The startup lock covers exactly the check-and-bind window, so two
     // launches racing to clean a stale socket cannot both believe they won.
     // It is released immediately afterwards: holding it for the process
@@ -62,8 +87,20 @@ pub async fn run_daemon(shutdown: CancellationToken) -> anyhow::Result<()> {
     let server_shutdown = shutdown.clone();
     let server_task = tokio::spawn(server.run(events_rx, server_shutdown));
 
-    transport::serve(listener, events_tx, shutdown).await;
-    let _ = server_task.await;
-    let _ = mirror_task.await;
+    let serving = tokio::spawn(async move {
+        transport::serve(listener, events_tx, shutdown).await;
+        let _ = server_task.await;
+        let _ = mirror_task.await;
+    });
+
+    Ok(Daemon {
+        core: Arc::clone(&core),
+        serving,
+    })
+}
+
+/// Brings the Core up and blocks until it stops.
+pub async fn run_daemon(shutdown: CancellationToken) -> anyhow::Result<()> {
+    start_daemon(shutdown).await?.join().await;
     Ok(())
 }

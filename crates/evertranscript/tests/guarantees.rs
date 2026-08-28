@@ -130,6 +130,19 @@ fn the_binary_links_no_screen_capture_or_calendar_framework() {
         linked.contains("CoreAudio") || linked.contains("AudioToolbox"),
         "microphone capture should link CoreAudio:\n{linked}"
     );
+
+    // AppKit, for the menu bar item (ADR-0023), brings CloudKit and CoreData
+    // with it. Anyone auditing this binary's frameworks will see them and
+    // should know why: they arrive as AppKit's own dependencies and nothing
+    // here calls into them. Linking is not using, and the claim that matters
+    // is proved by `a_full_recording_cycle_opens_no_network_connections`
+    // below, which watches actual sockets rather than the linker.
+    if linked.contains("CloudKit") {
+        assert!(
+            linked.contains("AppKit"),
+            "CloudKit is tolerated only as AppKit's dependency, and AppKit is absent:\n{linked}"
+        );
+    }
 }
 
 #[test]
@@ -145,6 +158,9 @@ fn a_full_recording_cycle_opens_no_network_connections() {
         .arg("daemon")
         .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
         .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
+        // No menu bar item: these tests assert on a binary, and they also
+        // stand in as the regression test for the headless daemon path.
+        .env(evertranscript_core::tray::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -192,6 +208,9 @@ fn nothing_key_shaped_reaches_the_record_or_the_logs() {
         .arg("daemon")
         .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
         .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
+        // No menu bar item: these tests assert on a binary, and they also
+        // stand in as the regression test for the headless daemon path.
+        .env(evertranscript_core::tray::DISABLE_ENV, "1")
         .env("EVERTRANSCRIPT_LOG", "evertranscript_core=debug")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -245,6 +264,9 @@ fn a_recording_survives_the_core_being_killed() {
         .arg("daemon")
         .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
         .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
+        // No menu bar item: these tests assert on a binary, and they also
+        // stand in as the regression test for the headless daemon path.
+        .env(evertranscript_core::tray::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -264,6 +286,9 @@ fn a_recording_survives_the_core_being_killed() {
         .arg("daemon")
         .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
         .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
+        // No menu bar item: these tests assert on a binary, and they also
+        // stand in as the regression test for the headless daemon path.
+        .env(evertranscript_core::tray::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -291,6 +316,9 @@ fn the_history_folder_holds_only_notes_and_a_hidden_store() {
         .arg("daemon")
         .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
         .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
+        // No menu bar item: these tests assert on a binary, and they also
+        // stand in as the regression test for the headless daemon path.
+        .env(evertranscript_core::tray::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

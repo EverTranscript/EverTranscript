@@ -4,16 +4,27 @@
 
 **Blocked by:** 03.
 
-**Status:** partly done — the tray UI itself is not built
+**Status:** done — the tray is built; the icon itself is not visually confirmed
 
-- [ ] **Not done, and deliberately not built blind.** A tray needs the macOS main-thread event loop, which
-      restructures how the daemon starts — the most load-bearing path there is — in exchange for a control
-      nobody here can see. This machine has no reachable GUI session: `screencapture` fails with "could not
-      create image from display", so neither the icon nor a menu click could be verified, and "it compiles"
-      is not evidence that a menu bar item works. Everything it would display is already on the protocol
-      (`status`, `core/stateChanged`, `models/status`, and now a Meeting's `audioNotes`), so this is
-      presentation over a finished interface and is the right work for someone at a screen. No bundle is
-      needed — a bare binary can take an accessory activation policy — so packaging is not the blocker.
+- [x] **Built.** An `NSStatusItem` with an accessory activation policy, so no app bundle is needed and no Dock
+      icon appears — which matters because the Core is installed as a LaunchAgent running the binary directly
+      (ADR-0026). The daemon now hands the main thread to AppKit and runs the Core on the runtime's threads.
+      Record/stop, transitional `Starting…`/`Stopping…` items that are deliberately unclickable, a status line,
+      and an explicit Quit that stops the Core rather than hiding the icon.
+
+      **A correction to what this ticket said before:** the claim that there was "no reachable GUI session" was
+      wrong. `CGSessionCopyCurrentDictionary` returns a session here; `screencapture` fails on a *permission*,
+      which is a different thing. The tray runs on this machine and was verified doing so.
+
+      **Verified:** the state machine and every click path, driven against a real Core in `tray_control.rs` —
+      clicking starts a real Meeting, clicking again stops it, a Meeting started from the CLI or the client
+      shows up, a refused start restores the previous state with the reason, and Quit cancels the Core's
+      shutdown token. Live: the daemon logs the item up, serves normally with it running, and exits cleanly on
+      SIGTERM. **Not verified:** that the icon is visible and that a human's click lands. That needs eyes.
+
+      The state machine lives in `tray/mod.rs` with tests; `tray/macos.rs` only draws. A GUI session is checked
+      before AppKit is touched, and `EVERTRANSCRIPT_NO_TRAY` turns it off — a Core with no tray serves exactly
+      as it did before, which the guarantee suite now exercises on every run.
 - [~] The not-ready signal exists and is correct (`models/status` reports `ready`); nothing renders it yet.
       What a recording *lost* now renders in three places that do exist: the Mirror, `evertranscript show`,
       and the Electron client, carried on the Meeting as `audioNotes`.
@@ -28,4 +39,6 @@
       answers differ, since a tap is granted whether or not audio recording is allowed and a refused one is silent
       but successful. Asking would report a working system-audio leg on a machine that will record nothing.
       Requesting permission is still implicit: capture triggers the prompt, and no explicit request API is called.
-- [~] Autostart is implemented for both platforms; the tray is implemented for neither.
+- [x] Autostart is implemented for both platforms; the tray is implemented for macOS. Windows keeps the
+      headless path, which is a real path rather than a stub — the fallback is what runs on any machine
+      without a menu bar.

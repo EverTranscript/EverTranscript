@@ -5,6 +5,8 @@
 //! a running Core over the local protocol (ADR-0026): the CLI never touches
 //! the record directly.
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use clap::Parser;
 use clap::Subcommand;
@@ -149,12 +151,63 @@ fn main() -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
+    // The daemon is the one command that does not simply block on a future.
+    // A menu bar item has to own the main thread (ADR-0023), so the Core
+    // runs on the runtime's threads and this one goes to the platform.
+    if matches!(cli.command, Command::Daemon) {
+        return run_daemon_owning_the_main_thread(runtime);
+    }
     runtime.block_on(run(cli))
+}
+
+/// Starts the Core, then gives the main thread to the tray.
+///
+/// If there is no tray to run — a headless machine, a CI runner, or
+/// `EVERTRANSCRIPT_NO_TRAY` — this blocks on the Core instead and behaves
+/// exactly as it did before the tray existed. That fallback is the point:
+/// the menu bar is an addition to the daemon, never a requirement of it.
+fn run_daemon_owning_the_main_thread(runtime: tokio::runtime::Runtime) -> Result<()> {
+    use evertranscript_core::tray;
+
+    init_tracing();
+    let shutdown = CancellationToken::new();
+    let signal_shutdown = shutdown.clone();
+    runtime.spawn(async move {
+        if let Err(err) = wait_for_shutdown_signal().await {
+            tracing::warn!(%err, "signal handling failed; the Core will run until killed");
+            return;
+        }
+        tracing::info!("shutdown signal received");
+        signal_shutdown.cancel();
+    });
+
+    let daemon = runtime.block_on(evertranscript_core::start_daemon(shutdown.clone()))?;
+    let controller = tray::TrayController::new(
+        Arc::clone(daemon.core()),
+        runtime.handle().clone(),
+        shutdown.clone(),
+    );
+    runtime.spawn(tray::poll(Arc::clone(&controller)));
+
+    match tray::run(controller) {
+        // The tray's run loop returning means the Operator chose Quit, or
+        // shutdown was signalled elsewhere. Either way the Core is done.
+        Ok(()) => shutdown.cancel(),
+        // No tray on this machine. Serve until a signal says otherwise —
+        // exactly what the daemon did before the menu bar existed. Ending
+        // here instead would turn every headless Core into one that starts
+        // and immediately exits.
+        Err(reason) => tracing::info!(%reason, "running without a menu bar item"),
+    }
+    runtime.block_on(daemon.join());
+    Ok(())
 }
 
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Daemon => run_daemon().await,
+        // Handled in main(): the daemon needs the main thread for the tray,
+        // so it never reaches this dispatch.
+        Command::Daemon => unreachable!("the daemon is started before this point"),
         Command::Status { json } => run_status(json).await,
         Command::Paths { json } => {
             print_paths(json);
@@ -655,22 +708,6 @@ fn display_title(meeting: &Meeting) -> String {
             Some(app) => format!("({app}, untitled)"),
             None => "(untitled)".to_string(),
         })
-}
-
-async fn run_daemon() -> Result<()> {
-    init_tracing();
-    let shutdown = CancellationToken::new();
-    let signal_shutdown = shutdown.clone();
-    tokio::spawn(async move {
-        if let Err(err) = wait_for_shutdown_signal().await {
-            tracing::warn!(%err, "signal handling failed; the Core will run until killed");
-            return;
-        }
-        tracing::info!("shutdown signal received");
-        signal_shutdown.cancel();
-    });
-
-    evertranscript_core::run_daemon(shutdown).await
 }
 
 async fn wait_for_shutdown_signal() -> Result<()> {
