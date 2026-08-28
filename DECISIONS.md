@@ -79,3 +79,51 @@
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q6 — m1/11-guarantee-tests-closeout — deviation
+
+**Question:** The workspace comment claims "Metal on Apple Silicon", but `whisper-rs` is pinned with `default-features = false` and that crate's `default` feature set is empty, so Metal was never compiled in. Leave the CPU build, or enable the GPU the comment already promised?
+
+**Options considered:** leave it on CPU and correct the comment / enable `metal` for every target that has it / enable it only where the target can be tested, and say so.
+
+**Chosen:** Enable the `metal` feature from `evertranscript-core` under `cfg(all(target_os = "macos", target_arch = "aarch64"))`, and rewrite the workspace comment to describe what the build actually does.
+
+**Decided-by:** agent
+
+**Justification:** Not a preference — a correctness threshold. On CPU this machine decoded a padded 30 s window in ~10 s, so transcription ran about 3.5x slower than real time; because decoding then blocked the capture drain (Q7), the shortfall was paid in dropped capture frames rather than in late captions. Metal takes the same window to ~2.4 s, which is what puts the pipeline under real time and stops the loss. The feature is scoped to the target it was measured on rather than to `macos` generally, because Intel Macs were not tested here and the workspace ships Windows too. Verified: `english_speech_transcribes_with_a_reported_error_rate` reports 0.0% WER with the Metal build, so the speedup costs no accuracy.
+
+**Outcome:** applied
+
+**Ref:** (pending)
+
+## Q7 — m1/11-guarantee-tests-closeout — deviation
+
+**Question:** Transcription ran synchronously inside the loop that drains the capture channel. Leave it inline and accept that a slow decode stalls capture, or move it off the loop — a change neither ticket asked for?
+
+**Options considered:** leave it inline and rely on the model being fast enough / enlarge the capture channel so bursts fit / run transcription on its own thread and let the queue, not the recording, absorb the pressure.
+
+**Chosen:** Transcription runs on a dedicated thread fed by a bounded queue; the capture loop hands blocks over and never waits. Blocks that will not fit are counted and reported as a degraded note.
+
+**Decided-by:** agent
+
+**Justification:** The recorder already stated this contract in a comment — "Audio to disk first: the recording must survive even if transcription is slow or broken" — but did not keep it: `pipeline.push` blocked the same task that drains the 256-slot capture channel, and both capture callbacks `try_send` and drop frames when it fills. Measured before the change: 8.7 s of speech replaced by digital silence in the finished m4a, with the Mirror reporting nothing, because `audio_notes` tracks a leg *ending* and not frames lost mid-leg. Enlarging the channel only moves the cliff, since the deficit is per-decode and cumulative. Making the ordering structural is what makes ADR-0019's priority true rather than merely intended. Verified after: the same script records with the system leg continuous and no gaps.
+
+**Outcome:** applied
+
+**Ref:** (pending)
+
+## Q8 — m1/11-guarantee-tests-closeout — tradeoff
+
+**Question:** `ThreadStream::stop` joins the microphone thread unconditionally, but that thread can be stuck inside `AudioOutputUnitStart` — before the loop that reads the stop flag. Wait for a thread that may never return, or abandon it?
+
+**Options considered:** keep the unbounded join / wait a bounded time and then abandon the thread / restructure capture start so the flag is checked before `play()`.
+
+**Chosen:** Wait up to 5 s for the thread to signal it has finished, then abandon it and let the Meeting finalize.
+
+**Decided-by:** human
+
+**Justification:** Observed twice on this machine: the capture thread parked in `AudioOutputUnitStart` — plugging in AirPods changes the default input under a starting stream — and the join then never returned. The cost is not one lost recording but the whole Core: `record stop` never completed, `status` stopped answering, and only SIGKILL recovered it. Abandoning the thread risks a stream that lingers briefly after stop, which is bounded and invisible, against a hang that is neither. Five seconds is far beyond healthy teardown, so a normal stop is unaffected. Regression test: `a_capture_thread_that_never_notices_the_flag_does_not_hang_the_stop`.
+
+**Outcome:** applied
+
+**Ref:** (pending)
