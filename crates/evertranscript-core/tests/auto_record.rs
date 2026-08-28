@@ -250,3 +250,40 @@ async fn a_meeting_auto_record_started_recovers_from_a_crash_like_any_other() {
     assert_eq!(meetings.len(), 1, "the auto-started Meeting must survive");
     assert_eq!(meetings[0].id, started, "and be the same one");
 }
+
+#[tokio::test]
+async fn every_shipped_watchlist_row_triggers_a_meeting() {
+    // Ticket 09 asks for each shipped entry to be observed triggering. Zoom,
+    // Teams and VooV are not installed on the machine this was written on,
+    // so the half that does not need them present is asserted here: each
+    // row, driven through the real Core, produces a Meeting attributed to
+    // itself. What a live run would add is whether the platform reports
+    // that application holding the microphone at all — which is ticket 04's
+    // mechanism, already proven separately against a real one.
+    for (id, label) in [
+        ("us.zoom.xos", "Zoom"),
+        ("com.microsoft.teams2", "Microsoft Teams"),
+        ("com.tencent.meeting", "VooV Meeting"),
+        ("com.tencent.tencentmeeting", "腾讯会议"),
+        ("com.google.Chrome", "Browser Meetings"),
+    ] {
+        let timeline = Timeline::new()
+            .mic_held(id)
+            .wait(120_000)
+            .mic_released(id)
+            .wait(30_000)
+            .fragmented(5_000);
+        let (core, _dir, shutdown) = core_watching(timeline).await;
+        settle().await;
+        shutdown.cancel();
+
+        let meetings = core.list_meetings(10, 0).await.expect("list");
+        assert_eq!(meetings.len(), 1, "{label} ({id}) recorded nothing");
+        assert_eq!(
+            meetings[0].detected_app.as_deref(),
+            Some(id),
+            "{label} should be attributed to itself"
+        );
+        assert!(meetings[0].ended_at.is_some(), "{label} never stopped");
+    }
+}
