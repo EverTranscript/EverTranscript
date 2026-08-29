@@ -37,7 +37,13 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Tests
-        run: cargo test --workspace
+        # Windows runs one test at a time. Two reasons, both real: these
+        # tests open capture devices, and a runner with no audio hardware is
+        # the worst case for doing that concurrently — and when a crash does
+        # happen, sixteen threads dying together makes it unattributable,
+        # which is exactly the position this repo was in. Serialised, the
+        # last test to report is the one that died.
+        run: cargo test --workspace ${{ runner.os == 'Windows' && '-- --test-threads=1' || '' }}
 
       # `cargo test` regenerates the TypeScript bindings and JSON schemas.
       # If they differ from what is committed, the protocol changed without
