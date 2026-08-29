@@ -85,13 +85,26 @@ Send me that table plus the `status` output. The process name it prints is the
 fix.
 
 I have since added a `WINDOWS_EXECUTABLES` table mapping `zoom.exe`,
-`ms-teams.exe`, `teams.exe` and `wemeetapp.exe` to the rows those apps ship
-under — without it, Zoom, Teams and VooV could not match anything on Windows
-at all, because their rows hold macOS bundle ids. **Those four names are the
-only identifiers in the project I have not read off a running machine**, so
-the table above is what confirms or corrects them. If a name is wrong it
-simply matches nothing, which is what happened before, so nothing is worse
-for having guessed — but nothing is fixed either until you run this.
+`ms-teams.exe`, `teams.exe` and `voovmeetingapp.exe` to the rows those apps
+ship under — without it, Zoom, Teams and VooV could not match anything on
+Windows at all, because their rows hold macOS bundle ids.
+
+I wrote those names from memory first and then checked them against the
+equivalent table in Granola's shipped bundle. Three survived. **VooV did
+not**: I had written `wemeetapp.exe → com.tencent.meeting`, and it is
+`voovmeetingapp.exe → com.tencent.tencentmeeting` — wrong in both halves.
+So the table is now checked rather than recalled, which is a real
+improvement and still not the same as seeing your machine report them.
+
+Two things I specifically cannot settle from here:
+
+1. **Whether the detector reports these names at all.** That is the whole
+   point of the command above.
+2. **The Chinese 腾讯会议 build.** Granola's table has only the international
+   VooV executable. If you run 腾讯会议 rather than VooV Meeting, its
+   executable may differ and I have deliberately not guessed at it — that
+   would repeat the exact mistake above. The `Get-Process` output would
+   settle it.
 
 ## 3. Two Cores at once
 

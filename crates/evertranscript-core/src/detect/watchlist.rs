@@ -120,7 +120,12 @@ pub fn known_browsers() -> Vec<&'static str> {
         "com.brave.Browser",
         "com.vivaldi.Vivaldi",
         "com.operasoftware.Opera",
+        // Two ids for Comet: ours and the one Granola's table carries. No
+        // machine here has Comet to settle which is current, and an extra
+        // browser id can only ever over-match a browser, which is what the
+        // Browser Meetings row wants anyway.
         "com.perplexity.comet",
+        "ai.perplexity.comet",
         // Windows executables, so one list serves both platforms.
         "chrome.exe",
         "msedge.exe",
@@ -183,19 +188,31 @@ const WEBKIT_PREFIX: &str = "com.apple.WebKit";
 /// without any mapping. Those names deliberately stay out of this table so
 /// the two mechanisms cannot disagree about a browser.
 ///
-/// **These names are unverified.** Every macOS id here was read off a
-/// running machine; none of these were, because there is no Windows machine
-/// to read them from — that run is the open criterion in ticket 05, and it
-/// is asked for by name in `windows-check.md`. A wrong name here fails
-/// exactly as today's absence does, matching nothing, so the table cannot
-/// regress the platform while it waits to be confirmed.
+/// **Checked against a shipping product, not read off a running machine.**
+/// These were first written from memory, which is the mistake the whole
+/// module is a record of, so they were then checked against the exe→bundle
+/// table in Granola's shipped bundle — the source the absorption catalog
+/// names for exactly this. Three survived. One did not: VooV was written
+/// here as `wemeetapp.exe → com.tencent.meeting` and is wrong in both
+/// halves. Only identifiers for rows this product already watches were
+/// taken; nothing else from that table is reproduced.
+///
+/// That is a stronger provenance than memory and still weaker than
+/// observation, and the difference matters: it establishes what the names
+/// are, not that the Windows detector reports them. That is the open
+/// criterion in ticket 05, and `windows-check.md` asks for it. A wrong name
+/// fails exactly as today's absence does, matching nothing, so the table
+/// cannot regress the platform while it waits.
 const WINDOWS_EXECUTABLES: &[(&str, &str)] = &[
     ("zoom.exe", "us.zoom.xos"),
     // New Teams ships as `ms-teams.exe`; classic Teams as `teams.exe`. Both
     // map, since which one an Operator runs is not ours to choose.
     ("ms-teams.exe", "com.microsoft.teams2"),
     ("teams.exe", "com.microsoft.teams2"),
-    ("wemeetapp.exe", "com.tencent.meeting"),
+    // The corrected one. Note it resolves to `com.tencent.tencentmeeting`
+    // and not `com.tencent.meeting` — which is also the id VooV was
+    // observed under live on macOS, so the two agree.
+    ("voovmeetingapp.exe", "com.tencent.tencentmeeting"),
 ];
 
 /// One application identifier, in the form ids are compared in.
@@ -537,7 +554,7 @@ mod tests {
             ("zoom.exe", "us.zoom.xos"),
             ("ms-teams.exe", "com.microsoft.teams2"),
             ("teams.exe", "com.microsoft.teams2"),
-            ("wemeetapp.exe", "com.tencent.meeting"),
+            ("voovmeetingapp.exe", "com.tencent.tencentmeeting"),
         ] {
             let responsible = responsible_app(executable);
             assert_eq!(responsible, expected, "attributing {executable}");
