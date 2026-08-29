@@ -161,18 +161,31 @@ impl LiveSource {
     /// it cannot. Asks the platform rather than guessing from the OS version,
     /// because the usual answer is an ungranted permission.
     pub fn system_audio_available() -> std::result::Result<(), String> {
-        #[cfg(target_os = "macos")]
-        {
-            system::macos_available()
-        }
-        #[cfg(target_os = "windows")]
-        {
-            system::windows_available()
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-        {
-            Err("system-audio capture is not implemented on this platform".to_string())
-        }
+        // Asking must never be able to take the Core down with it.
+        //
+        // The preflight calls this before a Meeting, and the audio stack
+        // underneath is entitled to be in a state nobody anticipated: a
+        // Windows runner with no audio device and the audio service stopped
+        // made cpal's host initialisation abort the whole process — in the
+        // test whose name is precisely this promise. A machine that cannot
+        // answer is a machine whose answer is no.
+        std::panic::catch_unwind(|| {
+            #[cfg(target_os = "macos")]
+            {
+                system::macos_available()
+            }
+            #[cfg(target_os = "windows")]
+            {
+                system::windows_available()
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+            {
+                Err("system-audio capture is not implemented on this platform".to_string())
+            }
+        })
+        .unwrap_or_else(|_| {
+            Err("this machine's audio system could not be asked about system audio".to_string())
+        })
     }
 }
 
