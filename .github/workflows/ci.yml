@@ -57,9 +57,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No `version:` here on purpose. `clients/electron/package.json` names
+      # the version in `packageManager`, and specifying it twice is an error
+      # rather than a redundancy — the action refuses with
+      # ERR_PNPM_BAD_PM_VERSION. One source of truth, and it is the manifest.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:

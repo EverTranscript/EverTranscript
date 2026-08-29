@@ -265,9 +265,9 @@ mod tests {
         let mut mic = Vec::new();
         let mut system = Vec::new();
         for block in blocks {
-            for pair in block.samples.chunks_exact(2) {
-                mic.push(pair[0]);
-                system.push(pair[1]);
+            for [left, right] in block.samples.as_chunks::<2>().0 {
+                mic.push(*left);
+                system.push(*right);
             }
         }
         (mic, system)

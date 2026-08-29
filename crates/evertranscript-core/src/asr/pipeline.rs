@@ -252,9 +252,9 @@ fn split(block: &StereoBlock) -> (Vec<f32>, Vec<f32>) {
     let frames = block.frame_count();
     let mut mic = Vec::with_capacity(frames);
     let mut system = Vec::with_capacity(frames);
-    for pair in block.samples.chunks_exact(2) {
-        mic.push(pair[0]);
-        system.push(pair[1]);
+    for [left, right] in block.samples.as_chunks::<2>().0 {
+        mic.push(*left);
+        system.push(*right);
     }
     (mic, system)
 }
@@ -268,7 +268,9 @@ fn resample(resampler: Option<&mut dsp::StreamResampler>, input: &[f32]) -> Vec<
     match resampler {
         Some(resampler) => resampler.process(input),
         None => input
-            .chunks_exact(FACTOR)
+            .as_chunks::<FACTOR>()
+            .0
+            .iter()
             .map(|group| group.iter().sum::<f32>() / FACTOR as f32)
             .collect(),
     }
