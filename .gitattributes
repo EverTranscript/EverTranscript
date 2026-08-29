@@ -1,0 +1,12 @@
+# Generated artifacts are compared byte for byte by the drift tests, so they
+# must arrive identical on every platform. Without this, git hands Windows a
+# CRLF checkout, the schema fixtures no longer match what the generator
+# produces, and the protocol-drift gate fails for a reason that has nothing
+# to do with the protocol.
+*.json  text eol=lf
+*.ts    text eol=lf
+*.rs    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.sh    text eol=lf
