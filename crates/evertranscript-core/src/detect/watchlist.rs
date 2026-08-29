@@ -198,6 +198,26 @@ const WINDOWS_EXECUTABLES: &[(&str, &str)] = &[
     ("wemeetapp.exe", "com.tencent.meeting"),
 ];
 
+/// One application identifier, in the form ids are compared in.
+///
+/// Bundle ids are case-insensitive to LaunchServices, and Windows executable
+/// names are case-insensitive to Windows, so comparing them exactly was a
+/// defect rather than a strictness. It cost Arc: the app ships as
+/// `company.thebrowser.Browser` and every one of its helper processes as
+/// `company.thebrowser.browser.*`, so stripping at `.helper` produced an id
+/// that differed from the Watchlist row in one letter and matched nothing.
+///
+/// Chrome and Edge hid it by lowercasing nothing — `com.google.Chrome.helper`
+/// and `com.microsoft.edgemac.helper` are exactly their apps plus a suffix,
+/// and both were observed live under those ids. An alias row for Arc would
+/// have fixed Arc and left the next vendor to do this undiscovered, so the
+/// comparison is what changes.
+fn normalized(id: &str) -> String {
+    // ASCII-only on purpose: it is length-preserving, which is what lets
+    // `responsible_app` search a lowercased copy and slice the original.
+    id.to_ascii_lowercase()
+}
+
 /// The app responsible for a process.
 ///
 /// A rule first, a table second. Chromium and Electron name their helpers by
@@ -207,20 +227,21 @@ const WINDOWS_EXECUTABLES: &[(&str, &str)] = &[
 /// table is only for the cases the rule cannot reach, which is why it is
 /// short rather than long.
 pub fn responsible_app(process_id: &str) -> String {
+    let lowered = normalized(process_id);
     for (helper, app) in HELPER_EXCEPTIONS {
-        if process_id == *helper {
+        if lowered == normalized(helper) {
             return (*app).to_string();
         }
     }
-    if process_id.starts_with(WEBKIT_PREFIX) {
+    if lowered.starts_with(&normalized(WEBKIT_PREFIX)) {
         return "com.apple.Safari".to_string();
     }
     for (executable, app) in WINDOWS_EXECUTABLES {
-        if process_id == *executable {
+        if lowered == normalized(executable) {
             return (*app).to_string();
         }
     }
-    match process_id.find(".helper") {
+    match lowered.find(".helper") {
         Some(cut) => process_id[..cut].to_string(),
         None => process_id.to_string(),
     }
@@ -249,8 +270,8 @@ impl Watchlist {
     pub fn from_entries(entries: Vec<WatchlistEntry>) -> Self {
         Self {
             entries,
-            blocked: blocklist().into_iter().map(str::to_string).collect(),
-            browsers: known_browsers().into_iter().map(str::to_string).collect(),
+            blocked: blocklist().into_iter().map(normalized).collect(),
+            browsers: known_browsers().into_iter().map(normalized).collect(),
         }
     }
 
@@ -267,7 +288,8 @@ impl Watchlist {
     }
 
     pub fn contains(&self, id: &str) -> bool {
-        self.entries.iter().any(|entry| entry.id == id)
+        let id = normalized(id);
+        self.entries.iter().any(|entry| normalized(&entry.id) == id)
     }
 
     pub fn add(&mut self, entry: WatchlistEntry) -> bool {
@@ -281,7 +303,8 @@ impl Watchlist {
 
     pub fn remove(&mut self, id: &str) -> bool {
         let before = self.entries.len();
-        self.entries.retain(|entry| entry.id != id);
+        let id = normalized(id);
+        self.entries.retain(|entry| normalized(&entry.id) != id);
         self.entries.len() != before
     }
 
@@ -295,17 +318,18 @@ impl Watchlist {
     /// mechanism works using an application that actually exists on the
     /// machine running it.
     pub fn also_blocking(mut self, id: &str) -> Self {
-        self.blocked.insert(id.to_string());
+        self.blocked.insert(normalized(id));
         self
     }
 
     pub fn watches(&self, app: &AppIdentity) -> bool {
-        if self.blocked.contains(&app.id) {
+        let id = normalized(&app.id);
+        if self.blocked.contains(&id) {
             return false;
         }
         self.entries.iter().any(|entry| match entry.kind {
-            EntryKind::Process => entry.id == app.id,
-            EntryKind::BrowserMeetings => self.browsers.contains(&app.id),
+            EntryKind::Process => normalized(&entry.id) == id,
+            EntryKind::BrowserMeetings => self.browsers.contains(&id),
         })
     }
 }
@@ -529,6 +553,38 @@ mod tests {
             let responsible = responsible_app(browser);
             assert_eq!(responsible, browser, "{browser} is responsible for itself");
             assert!(list.watches(&app(&responsible)), "{browser} still matches");
+        }
+    }
+
+    #[test]
+    fn arc_ships_its_helpers_under_a_different_case_than_its_app() {
+        // Read off the installed Arc bundle, not assumed. Arc's app is
+        // `company.thebrowser.Browser` — capital B — and every one of its
+        // helpers is `company.thebrowser.browser.*`, lowercase. Stripping at
+        // `.helper` therefore yields `company.thebrowser.browser`, which is
+        // not the string `known_browsers` holds, and `watches` compares
+        // exactly. Arc could never have matched Browser Meetings.
+        //
+        // Chrome and Edge hid this because their vendors happen to lowercase
+        // nothing: `com.google.Chrome.helper`, `com.microsoft.edgemac.helper`.
+        // Both were observed live holding the microphone under exactly those
+        // ids, so the rule looked complete.
+        //
+        // Bundle ids are case-insensitive to LaunchServices, so matching them
+        // case-sensitively was the defect, and a lowercase alias for Arc
+        // would only have papered over the next vendor to do this.
+        let list = Watchlist::shipped();
+        for process in [
+            "company.thebrowser.browser.helper",
+            "company.thebrowser.browser.helper.renderer",
+            "company.thebrowser.Browser.helper.Renderer",
+            "company.thebrowser.Browser",
+        ] {
+            let responsible = responsible_app(process);
+            assert!(
+                list.watches(&app(&responsible)),
+                "{process} resolved to {responsible}, which should match Arc"
+            );
         }
     }
 
