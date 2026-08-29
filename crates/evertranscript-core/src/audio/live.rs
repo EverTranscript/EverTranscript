@@ -101,12 +101,41 @@ impl LiveSource {
     /// True when a default input device exists. Used to decide whether live
     /// capture is even possible before a Meeting starts.
     pub fn microphone_available() -> bool {
-        // Same hazard as `system_audio_available`: cpal's host
-        // initialisation can take the process down on a machine whose audio
-        // stack is not in a state it expects. A machine that cannot be asked
-        // has no usable microphone, which is the answer either way.
-        std::panic::catch_unwind(|| cpal::default_host().default_input_device().is_some())
-            .unwrap_or(false)
+        // On Windows this must not go through cpal at all. Its host
+        // initialisation *aborts* on a machine whose audio stack is not in a
+        // state it expects — not a panic, so `catch_unwind` was tried and
+        // could not help — and a question about whether a device exists has
+        // no business being able to end the process. WASAPI answers it
+        // directly, the same way the system-audio side does.
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::Media::Audio::IMMDeviceEnumerator;
+            use windows::Win32::Media::Audio::MMDeviceEnumerator;
+            use windows::Win32::Media::Audio::eCapture;
+            use windows::Win32::Media::Audio::eMultimedia;
+            use windows::Win32::System::Com::CLSCTX_ALL;
+            use windows::Win32::System::Com::COINIT_MULTITHREADED;
+            use windows::Win32::System::Com::CoCreateInstance;
+            use windows::Win32::System::Com::CoInitializeEx;
+
+            unsafe {
+                let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                let Ok(enumerator) = CoCreateInstance::<_, IMMDeviceEnumerator>(
+                    &MMDeviceEnumerator,
+                    None,
+                    CLSCTX_ALL,
+                ) else {
+                    return false;
+                };
+                enumerator
+                    .GetDefaultAudioEndpoint(eCapture, eMultimedia)
+                    .is_ok()
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            cpal::default_host().default_input_device().is_some()
+        }
     }
 
     /// Starts the microphone leg, returning the device's name.
