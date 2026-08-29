@@ -164,6 +164,20 @@ impl AutoRecord {
         }
     }
 
+    /// The Meeting the policy asked for could not be started.
+    ///
+    /// Distinct from the Operator stopping one, and the difference matters:
+    /// a Stop is a decision to respect for the rest of the meeting, while a
+    /// failed start is a thing that did not happen. Treating the second as
+    /// the first suppressed Auto-Record for the rest of the meeting because
+    /// of a transient error — observed, with a stale Meeting row left by a
+    /// killed Core making every subsequent start fail.
+    pub fn recording_failed(&mut self) {
+        if matches!(self.state, State::Recording { .. } | State::Closing { .. }) {
+            self.state = State::Idle;
+        }
+    }
+
     /// Feeds one detection event and returns what should happen.
     pub fn on_event(&mut self, event: &DetectionEvent) -> Vec<Action> {
         self.track(event);

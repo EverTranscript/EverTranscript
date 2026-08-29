@@ -325,14 +325,24 @@ mod tests {
             eprintln!("skipping: this machine cannot open a microphone");
             return;
         }
-        std::thread::sleep(std::time::Duration::from_millis(1_200));
-        let during = recording_process_count();
+        // Polled rather than sampled once. Opening a device is not
+        // instantaneous, and the suite runs in parallel with other tests
+        // that want the same microphone, so a single reading a fixed moment
+        // later measures contention as much as the detector.
+        let mut during = 0;
+        for _ in 0..25 {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            during = recording_process_count();
+            if during >= 1 {
+                break;
+            }
+        }
         source.stop();
 
         assert!(
             during >= 1,
-            "a capture stream was open and the detector saw no process \
-             recording at all — it cannot see a live microphone"
+            "a capture stream was open for five seconds and the detector saw \
+             no process recording at all — it cannot see a live microphone"
         );
     }
 

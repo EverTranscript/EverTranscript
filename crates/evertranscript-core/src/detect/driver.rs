@@ -94,7 +94,13 @@ pub async fn run(
         }
 
         for action in policy.on_event(&event) {
-            act(&core, &*notifier, action).await;
+            if !act(&core, &*notifier, action).await {
+                // The Meeting never started, so the policy must not go on
+                // believing it did — otherwise the next pass sees the Core
+                // not recording, reads that as the Operator's Stop, and
+                // suppresses Auto-Record for a meeting it never captured.
+                policy.recording_failed();
+            }
         }
         policy_thought_recording = policy.is_recording();
     }
@@ -105,7 +111,9 @@ pub async fn run(
     info!("Meeting Detection stopped");
 }
 
-async fn act(core: &Arc<Core>, notifier: &dyn Notifier, action: Action) {
+/// Carries out one action. `false` when a Meeting was asked for and did not
+/// start.
+async fn act(core: &Arc<Core>, notifier: &dyn Notifier, action: Action) -> bool {
     match action {
         Action::StartRecording { app, armed } => {
             // The title chain (ADR-0030 as amended): the calendar names the
@@ -116,15 +124,21 @@ async fn act(core: &Arc<Core>, notifier: &dyn Notifier, action: Action) {
                 .start_meeting_armed(title, Some(app.name.clone()), armed)
                 .await
             {
-                Ok(meeting) => info!(
-                    meeting = meeting.id,
-                    app = app.id,
-                    "Auto-Record started a Meeting"
-                ),
+                Ok(meeting) => {
+                    info!(
+                        meeting = meeting.id,
+                        app = app.id,
+                        "Auto-Record started a Meeting"
+                    );
+                    return true;
+                }
                 // Never fatal: the commonest reason is the Briefing, and a
                 // Core that died because a meeting could not start would be
                 // worse than one that missed it.
-                Err(error) => warn!(%error, app = app.id, "Auto-Record could not start a Meeting"),
+                Err(error) => {
+                    warn!(%error, app = app.id, "Auto-Record could not start a Meeting");
+                    return false;
+                }
             }
         }
         Action::StopRecording => match core.stop_meeting().await {
@@ -143,4 +157,5 @@ async fn act(core: &Arc<Core>, notifier: &dyn Notifier, action: Action) {
             notifier.armed_meeting_never_started(&event).await;
         }
     }
+    true
 }
