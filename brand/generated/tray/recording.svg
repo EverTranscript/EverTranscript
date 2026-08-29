@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18"><defs><mask id="knock"><rect width="18" height="18" fill="#fff"/><circle cx="14.5" cy="14.5" r="4.75" fill="#000"/></mask></defs><g mask="url(#knock)"><g color="#000000" transform="translate(-1.25 -0.75) scale(0.0703125)"><!-- The mark for 32 px and under: the same e, a heavier stroke, and a
-       bowl kept wide so the counter survives at 16 px. -->
-  <g fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M50,128 H218"/>
-    <path d="M170,128 A62,62 0 1 0 155.5,167.8"/>
-  </g></g></g><circle cx="14.5" cy="14.5" r="3.25" fill="#000000"/></svg>

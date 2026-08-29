@@ -329,3 +329,14 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Justification:** A plain copy would be reverted by the next `pnpm -C brand render`, silently — the invariant that the script produces every committed output is what makes the assets trustworthy, so the new art has to enter as a master, not as an output. Redrawing as SVG was not asked for and would change the art. Fixed en route: the icns writer's 16/32 @1x entries (`icp4`/`icp5`) round-tripped to noise under Apple's own tooling — Apple ships those sizes as raw ARGB or not at all — so the container now carries exactly the PNG types Apple's icons use and lets macOS derive the 1x smalls. The vector e remains the mark everywhere not asked about: tray templates, favicon/web, iOS, Android, lockups — a split state, flagged to the Operator.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q21 — brand-identity/raster-rebrand — deviation
+
+**Question:** With the seahorse raster as the desktop icon, the tray, web set, iOS, Android and lockups still carried the teal e — a split identity. Propagate the seahorse everywhere, or hold the split?
+**Options considered:** propagate the raster identity to every surface / keep the split and let each future milestone decide / redraw the seahorse as a vector master first and then propagate
+**Chosen:** Propagate: every consumer in `render.mjs` gained a raster branch — the tray templates are the glyph tinted black with the same badge system, iOS light is the tile full-bleed over its own gradient (dark/tinted are the glyph alone), Android's adaptive foreground is the glyph in the safe circle over a coral colour resource with clipped-tile legacy icons, the web set and manifest theme follow, and the lockups set the glyph beside the outlined wordmark. The vector e remains intact as the fallback the pipeline returns to if the two `src/appicon-*.png` masters are deleted.
+**Decided-by:** human (the rebrand — "update other logos accordingly"); agent (the per-surface mechanics)
+**Justification:** The split was flagged when the desktop icon changed, and the Operator's instruction resolved it. Vectorizing first was rejected as silent scope: tracing the AI art into paths changes it, and every surface here consumes rasters anyway. Fixed en route: an opacity passed through the progressive-halving resizer compounded per step (0.45 five times ≈ invisible), caught because the busy tray state vanished; tint and opacity now land exactly once, in the final render. Verified live: the seahorse template with the Attention and Recording badges photographed in the real menu bar.
+**Outcome:** applied
+**Supersedes:** Q15 — the letterform e chosen there is no longer the shipped mark; it remains the vector fallback, and everything else Q15 rested on (the review process, the tile discipline) carries forward.
+**Ref:** (pending)

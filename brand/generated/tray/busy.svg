@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18"><defs></defs><g color="#000000" opacity="0.45" transform="translate(-1.666666666666666 -1.666666666666666) scale(0.08333333333333333)"><!-- The mark for 32 px and under: the same e, a heavier stroke, and a
-       bowl kept wide so the counter survives at 16 px. -->
-  <g fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M50,128 H218"/>
-    <path d="M170,128 A62,62 0 1 0 155.5,167.8"/>
-  </g></g></svg>

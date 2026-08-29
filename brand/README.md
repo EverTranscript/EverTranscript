@@ -1,9 +1,12 @@
 # The EverTranscript mark
 
-One glyph — a monoline lowercase **e** whose crossbar runs out to the right —
-on a petrol-teal tile. The letter that keeps writing: *e* for Ever, the line
-for the Transcript. The same drawing is the app icon on every platform, the
-website favicon, and (as a monochrome template) the macOS menu bar item.
+One glyph — a white monoline **seahorse** — on a coral gradient tile
+(Operator-supplied art, `DECISIONS.md` Q20–Q21). The same drawing is the
+app icon on every platform, the website favicon, and (as a monochrome
+template) the macOS menu bar item. The earlier mark — a monoline lowercase
+*e* whose crossbar runs out to the right, the letter that keeps writing —
+remains in `src/` as the vector fallback the pipeline returns to if the
+raster masters are removed.
 
 Everything in `generated/`, plus `clients/electron/resources/` and
 `crates/evertranscript-core/src/tray/glyphs/`, is produced by one script:
@@ -14,20 +17,20 @@ pnpm -C brand render
 
 The outputs are committed, the script is the source of truth, and a re-run
 must produce no diff — it writes a file only when its bytes change, renders
-every size from vector, and never rasterizes text (the wordmark is outlined
-from the font first), so the results are byte-identical on any machine.
+every size from the masters (never by downscaling an output), and never
+rasterizes text (the wordmark is outlined from the font first), so the
+results are byte-identical on any machine.
 
 ## Palette
 
 | Token | Value | Used for |
 |---|---|---|
-| `teal-400` | `#158580` | tile gradient, top |
-| `teal-500` | `#0F6E6A` | the brand colour; Android icon background; theme colour |
-| `teal-700` | `#094F4C` | tile gradient, bottom; dark tile, top |
-| `teal-deep` | `#06302E` | dark tile, bottom |
+| `coral-300` | `#FC9E74` | tile gradient, top (sampled from the art) |
+| `coral-500` | `#ED6F62` | the brand colour; tile gradient, bottom; Android icon background; theme colour |
 | `paper` | `#F5F1E8` | the glyph on the tile; lockup on dark grounds |
-| `ink` | `#1F1D1B` | the glyph and lockup on light grounds |
+| `ink` | `#1F1D1B` | the lockup on light grounds; the tray template |
 | `record` | `#E5484D` | the recording accent in UI — never on the icon |
+| `teal-400/500/700/deep` | `#158580` `#0F6E6A` `#094F4C` `#06302E` | the vector-fallback tiles only |
 
 The machine-readable copy of this table is `COLOR` in `render.mjs`.
 
@@ -46,20 +49,20 @@ The machine-readable copy of this table is `COLOR` in `render.mjs`.
   given) get the same drawing as filled outlines, converted by the script —
   `generated/lockups/mark-outlined.svg` is that form on its own.
 
-## The desktop icon is raster art
+## The identity is raster art
 
-`src/appicon-1024.png` overrides the vector tiles for the desktop
-surfaces: when it exists, the macOS `.icns`, the Icon Composer package
-(via `src/appicon-glyph.png`, the white glyph lifted off the same art,
-and the sampled tile gradient in `render.mjs`), the Windows `.ico`, and
-the Electron copies are all built from it. It is authored art — a
-1024×1024 RGBA canvas, transparent margins, the tile square on Apple's
-grid at (100,100)–(924,924) — prepared once from the source image
-(background knocked out, tile squared, re-composed); the pipeline only
-ever resizes it, by progressive halving so 16 px still reads. Everything
-else — web, Android, iOS, tray, lockups — still renders from the vector
-masters. Delete the two `src/appicon-*.png` files to fall back to the
-vector *e* icon everywhere.
+`src/appicon-1024.png` is the master: a 1024×1024 RGBA canvas,
+transparent margins, the tile square on Apple's grid at
+(100,100)–(924,924), prepared once from the source image (background
+knocked out, tile squared, re-composed). `src/appicon-glyph.png` is the
+white glyph lifted off the same art (tile coordinates; ink box measured
+into `GLYPH_INK` in `render.mjs`). When these exist, **every** output is
+built from them — the `.icns` and Icon Composer package, the `.ico`, the
+iOS and Android sets, the web set, the tray templates (the glyph tinted
+black, badges drawn on), and the lockups. The pipeline only ever resizes
+(progressive halving, so 16 px still reads) and tints (flat colour over
+preserved alpha). Delete the two `src/appicon-*.png` files and every
+surface falls back to the vector *e*.
 
 ## What gets generated
 
@@ -83,9 +86,9 @@ name in another face.
 
 ## Do / don't
 
-- **Do** put the glyph in `paper` on teal, or in `ink`/`paper` alone on
-  plain grounds. **Don't** recolour it, outline it, or set it on another
-  colour.
+- **Do** put the glyph in white/`paper` on the coral tile, or in
+  `ink`/`paper` alone on plain grounds. **Don't** recolour it, outline
+  it, or set it on another colour.
 - **Do** use the tray templates for menu bars and the small-size drawing at
   16–32 px. **Don't** shrink the full-size icon below 32 px or use the
   colour icon as a tray image.
@@ -112,4 +115,6 @@ image model, with the identity constraints baked in.
 
 The three original candidates and the contact sheet that chose between
 them are kept in `explorations/` (`pnpm -C brand render:explorations`
-re-renders the sheet). The pick is logged in `DECISIONS.md`.
+re-renders the sheet). That pick — the *e* — is logged in `DECISIONS.md`
+Q15 and was later superseded by the supplied seahorse art (Q21); the *e*
+survives as the vector fallback.
