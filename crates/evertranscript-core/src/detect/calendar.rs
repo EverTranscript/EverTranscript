@@ -142,6 +142,8 @@ mod eventkit {
     use windows::ApplicationModel::Appointments::AppointmentStoreAccessType;
     use windows::Foundation::DateTime;
     use windows::Foundation::TimeSpan;
+    use windows::Win32::Foundation::APPMODEL_ERROR_NO_PACKAGE;
+    use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
     use windows::Win32::System::Com::COINIT_MULTITHREADED;
     use windows::Win32::System::Com::CoInitializeEx;
     use windows_future::AsyncStatus;
@@ -170,7 +172,23 @@ mod eventkit {
         ))
     }
 
+    /// Whether this process has a package identity.
+    ///
+    /// `AppointmentManager` is one of the WinRT APIs that requires one, and
+    /// an unpackaged process does not merely get an error from it — the
+    /// Windows CI runner exited abnormally rather than failing a test.
+    /// Asking first turns a crash into the honest answer, which is that the
+    /// appointment store is unavailable to a binary run from a folder.
+    fn is_packaged() -> bool {
+        let mut length: u32 = 0;
+        let code = unsafe { GetCurrentPackageFullName(&mut length, None) };
+        code != APPMODEL_ERROR_NO_PACKAGE
+    }
+
     fn store() -> Option<AppointmentStore> {
+        if !is_packaged() {
+            return None;
+        }
         // WinRT needs an apartment on this thread before anything else is
         // called. The detector does this and the calendar did not, which is
         // undefined rather than merely unsupported: on a CI runner the test

@@ -25,3 +25,19 @@ been read and no Meeting has ever been armed by a real calendar. The policy
 side is covered end to end by fixtures (`auto_record.rs`), which is a
 different claim and a weaker one. Granting access and watching a scheduled
 meeting arm and name a Meeting is what closes this.
+
+## A Windows constraint worth knowing before anyone relies on this
+
+`AppointmentManager` requires **package identity**. A binary run from a
+folder — which is what a `cargo` build, a CI runner, and a plain download
+all are — has none, and the API does not politely refuse: the Windows CI
+test binary exited abnormally. The reader now asks
+`GetCurrentPackageFullName` first and reports the calendar as unavailable
+when there is no package, which is the truthful answer rather than a
+workaround.
+
+The consequence for shipping is real and belongs to M5's distribution work:
+**calendar arming on Windows needs a packaged (MSIX) build.** An unpackaged
+Windows install gets the whole product minus calendar arming, which is the
+same posture ADR-0036 already gives an Operator who declines the grant — so
+nothing else has to change to accommodate it.
