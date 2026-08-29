@@ -46,6 +46,21 @@ The machine-readable copy of this table is `COLOR` in `render.mjs`.
   given) get the same drawing as filled outlines, converted by the script —
   `generated/lockups/mark-outlined.svg` is that form on its own.
 
+## The desktop icon is raster art
+
+`src/appicon-1024.png` overrides the vector tiles for the desktop
+surfaces: when it exists, the macOS `.icns`, the Icon Composer package
+(via `src/appicon-glyph.png`, the white glyph lifted off the same art,
+and the sampled tile gradient in `render.mjs`), the Windows `.ico`, and
+the Electron copies are all built from it. It is authored art — a
+1024×1024 RGBA canvas, transparent margins, the tile square on Apple's
+grid at (100,100)–(924,924) — prepared once from the source image
+(background knocked out, tile squared, re-composed); the pipeline only
+ever resizes it, by progressive halving so 16 px still reads. Everything
+else — web, Android, iOS, tray, lockups — still renders from the vector
+masters. Delete the two `src/appicon-*.png` files to fall back to the
+vector *e* icon everywhere.
+
 ## What gets generated
 
 | Family | Files |

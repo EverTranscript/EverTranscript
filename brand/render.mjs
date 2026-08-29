@@ -49,6 +49,24 @@ const INK = 192 / 256;
 /** How much of a tile's width the mark's ink takes. */
 const GLYPH_FRACTION = 0.56;
 
+/**
+ * Raster app-icon master. When this file exists, the desktop icons — the
+ * macOS `.icns`, the Icon Composer package, the Windows `.ico`, and the
+ * Electron copies — are built from it instead of from the vector tiles.
+ * It is authored art: a 1024×1024 RGBA canvas, transparent margins, the
+ * tile square at (100,100)–(924,924) — Apple's icon-grid inset.
+ * `appicon-glyph.png` is the white glyph lifted off the same art (tile
+ * coordinates, 824×824) for the Icon Composer layer, and RASTER_GRADIENT
+ * holds the tile's sampled top and bottom colours for its fill.
+ * Everything not listed above (web, Android, iOS, tray, lockups) still
+ * renders from the vector masters.
+ */
+const RASTER_ICON = join(SRC, "appicon-1024.png");
+const RASTER_GLYPH = join(SRC, "appicon-glyph.png");
+const RASTER_GRADIENT = ["#FC9E74", "#ED6F62"];
+/** Where the tile sits inside the raster master. */
+const RASTER_TILE = { x: 100, y: 100, side: 824, canvas: 1024 };
+
 // ---------------------------------------------------------------------------
 // Rasterizing
 // ---------------------------------------------------------------------------
@@ -75,6 +93,56 @@ function loadGlyph(path) {
   const inner = text.match(/<svg[^>]*>([\s\S]*)<\/svg>/);
   if (!inner) throw new Error(`${path}: not an SVG document`);
   return inner[1].trim();
+}
+
+const pngDataUri = (buffer) => `data:image/png;base64,${buffer.toString("base64")}`;
+
+/**
+ * Scales a PNG down by rendering it through resvg, halving until the last
+ * step so the big ratios (1024 → 16) act like a box filter instead of
+ * shedding detail in one bilinear jump. `crop` first cuts a square region
+ * of the source, in source pixels.
+ */
+function rasterAt(buffer, sourceSize, target, crop = null) {
+  let png = buffer;
+  let size = sourceSize;
+  const wrap = (href, viewBox, imageSize) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">` +
+    `<image href="${href}" width="${imageSize}" height="${imageSize}"/></svg>`;
+  if (crop) {
+    png = rasterize(wrap(pngDataUri(png), `${crop.x} ${crop.y} ${crop.side} ${crop.side}`, sourceSize), crop.side).asPng();
+    size = crop.side;
+  }
+  while (size > target) {
+    const next = Math.max(target, Math.ceil(size / 2));
+    png = rasterize(wrap(pngDataUri(png), `0 0 ${size} ${size}`, size), next).asPng();
+    size = next;
+  }
+  return png;
+}
+
+/**
+ * A macOS icon size from the raster master: the art resized, and — at the
+ * sizes where the vector tile carried one — the same soft shadow, cast
+ * from the art's own alpha.
+ */
+function rasterMacIcon(master, px) {
+  const content = rasterAt(master, RASTER_TILE.canvas, px);
+  if (px < 64) return content;
+  const blur = px * 0.0234;
+  const drop = px * 0.0117;
+  const href = pngDataUri(content);
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${px} ${px}">` +
+    `<defs><filter id="shadow" x="-25%" y="-25%" width="150%" height="150%">` +
+    `<feGaussianBlur in="SourceAlpha" stdDeviation="${blur}" result="blur"/>` +
+    `<feOffset in="blur" dy="${drop}" result="offset"/>` +
+    `<feFlood flood-color="#000000" flood-opacity="0.3" result="colour"/>` +
+    `<feComposite in="colour" in2="offset" operator="in"/></filter></defs>` +
+    `<g filter="url(#shadow)"><image href="${href}" width="${px}" height="${px}"/></g>` +
+    `<image href="${href}" width="${px}" height="${px}"/>` +
+    `</svg>`;
+  return rasterize(svg, px).asPng();
 }
 
 /**
@@ -436,11 +504,16 @@ function icns(entries) {
   return Buffer.concat([header, body]);
 }
 
-/** iconset name → icns OSType, as `iconutil` maps them. */
+/**
+ * iconset name → icns OSType. Only the types Apple stores as PNG: `icp4`
+ * and `icp5` (16/32 at 1x) look PNG-legal on paper, but Apple's decoders
+ * read them as raw data — round-tripping through `iconutil` turned them
+ * to noise — and Apple's own icons ship 16 px only as ARGB `ic04`. So the
+ * 1x small sizes are omitted, exactly as most system icons omit them, and
+ * macOS derives them from the @2x entries.
+ */
 const ICNS_TYPES = [
-  ["icon_16x16", 16, "icp4"],
   ["icon_16x16@2x", 32, "ic11"],
-  ["icon_32x32", 32, "icp5"],
   ["icon_32x32@2x", 64, "ic12"],
   ["icon_128x128", 128, "ic07"],
   ["icon_128x128@2x", 256, "ic13"],
@@ -625,6 +698,18 @@ const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 // ---------------------------------------------------------------------------
 
 function renderMacos(marks) {
+  if (existsSync(RASTER_ICON)) {
+    const master = readFileSync(RASTER_ICON);
+    const entries = ICNS_TYPES.map(([, px, type]) => ({ type, data: rasterMacIcon(master, px) }));
+    emit(join(OUT, "macos", "AppIcon.icns"), icns(entries));
+    const full = rasterMacIcon(master, 1024);
+    emit(join(OUT, "macos", "AppIcon-1024.png"), full);
+    // No dark variant has been authored for the raster art; shipping the
+    // same image keeps the file truthful rather than teal.
+    emit(join(OUT, "macos", "AppIcon-1024-dark.png"), full);
+    renderIconComposerRaster(master);
+    return;
+  }
   const forSize = (px) => macosTile(marks.at(px), { shadow: px >= 64 });
   const entries = ICNS_TYPES.map(([, px, type]) => ({ type, data: png(forSize(px), px) }));
   emit(join(OUT, "macos", "AppIcon.icns"), icns(entries));
@@ -633,6 +718,45 @@ function renderMacos(marks) {
   emit(join(OUT, "macos", "AppIcon-1024.png"), png(forSize(1024), 1024));
   emit(join(OUT, "macos", "AppIcon-1024-dark.png"), png(macosTile(marks.at(1024), { dark: true }), 1024));
   renderIconComposer(marks);
+}
+
+/**
+ * The Icon Composer package from the raster art: the sampled tile
+ * gradient as the fill, the lifted white glyph as the one layer. The
+ * glyph PNG is in tile coordinates, so covering the canvas places it.
+ */
+function renderIconComposerRaster(master) {
+  void master;
+  const pkg = join(OUT, "macos", "EverTranscript.icon");
+  const rgb = (hex) => {
+    const n = parseInt(hex.slice(1), 16);
+    const c = (v) => (v / 255).toFixed(5);
+    return `srgb:${c(n >> 16)},${c((n >> 8) & 255)},${c(n & 255)},1.00000`;
+  };
+  emit(join(pkg, "Assets", "Glyph.png"), readFileSync(RASTER_GLYPH));
+  emit(
+    join(pkg, "icon.json"),
+    json({
+      fill: {
+        "linear-gradient": [rgb(RASTER_GRADIENT[0]), rgb(RASTER_GRADIENT[1])],
+        orientation: { start: { x: 0.5, y: 0 }, stop: { x: 0.5, y: 1 } },
+      },
+      groups: [
+        {
+          layers: [
+            {
+              "image-name": "Glyph.png",
+              name: "Glyph",
+              position: { scale: 1, "translation-in-points": [0, 0] },
+            },
+          ],
+          shadow: { kind: "neutral", opacity: 0.5 },
+          translucency: { enabled: true, value: 0.5 },
+        },
+      ],
+      "supported-platforms": { circles: ["watchOS"], squares: "shared" },
+    }),
+  );
 }
 
 /**
@@ -752,7 +876,14 @@ function renderAndroid(marks) {
 
 function renderWindows(marks) {
   const sizes = [16, 24, 32, 48, 64, 128, 256];
-  const images = sizes.map((size) => ({ size, data: png(roundedTile(marks.at(size)), size) }));
+  const images = existsSync(RASTER_ICON)
+    ? (() => {
+        // Full bleed, as Windows wants it: the tile cut out of the master
+        // and scaled edge to edge, no margin, no shadow.
+        const master = readFileSync(RASTER_ICON);
+        return sizes.map((size) => ({ size, data: rasterAt(master, RASTER_TILE.canvas, size, RASTER_TILE) }));
+      })()
+    : sizes.map((size) => ({ size, data: png(roundedTile(marks.at(size)), size) }));
   emit(join(OUT, "windows", "EverTranscript.ico"), ico(images));
   emit(join(OUT, "windows", "EverTranscript-256.png"), images[images.length - 1].data);
 }

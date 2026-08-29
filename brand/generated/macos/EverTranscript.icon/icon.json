@@ -1,8 +1,8 @@
 {
   "fill": {
     "linear-gradient": [
-      "srgb:0.08235,0.52157,0.50196,1.00000",
-      "srgb:0.03529,0.30980,0.29804,1.00000"
+      "srgb:0.98824,0.61961,0.45490,1.00000",
+      "srgb:0.92941,0.43529,0.38431,1.00000"
     ],
     "orientation": {
       "start": {
@@ -19,21 +19,8 @@
     {
       "layers": [
         {
-          "fill-specializations": [
-            {
-              "value": {
-                "solid": "srgb:0.96078,0.94510,0.90980,1.00000"
-              }
-            },
-            {
-              "appearance": "dark",
-              "value": {
-                "solid": "srgb:0.96078,0.94510,0.90980,1.00000"
-              }
-            }
-          ],
-          "image-name": "Mark.svg",
-          "name": "Mark",
+          "image-name": "Glyph.png",
+          "name": "Glyph",
           "position": {
             "scale": 1,
             "translation-in-points": [
