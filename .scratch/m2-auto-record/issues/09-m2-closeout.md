@@ -6,7 +6,7 @@
 
 Status: blocked — CI is green both platforms; the live browser matrix needs grants this machine lacks
 
-- [x] **Helper attribution is covered for all four**: a renderer belonging to Chrome, Edge or Arc resolves to its browser, Safari's content process is already responsible for itself, and each matches Browser Meetings. That is the half that does not need the app running.
+- [x] **Helper attribution is covered for all four, and fixing Safari's found a real defect.** With Safari open, this machine's audio process list holds `com.apple.WebKit.GPU` and never `com.apple.Safari` — so Safari could not have triggered a Browser Meeting at all, and no test said so because every test asked about the name Safari does not use. WebKit's children now resolve to Safari; Chrome, Edge and Arc resolve through the `.helper` rule.
 - [ ] **Observed live for Chrome only, and blocked there.** Chrome was observed triggering Browser Meetings for real, with its renderer helper correctly attributed. Safari, Arc and Edge each need a microphone grant that only a person can click — TCC shows a grant for Chrome and none for the others — so they cannot be driven unattended. Untested, and ADR-0030 is explicit that one browser cannot be extrapolated to the rest — that is why it named this a matrix
 - [x] **Every shipped row triggers a Meeting attributed to itself**, driven through the real Core. Zoom, Teams and VooV are not installed here, so what a live run would add is only whether the platform reports *that application* holding the microphone — the mechanism itself is proven against a real one in ticket 04.
 - [ ] **Blocked:** none of Zoom, Teams or VooV has been observed triggering on real hardware

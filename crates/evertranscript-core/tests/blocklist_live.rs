@@ -62,3 +62,22 @@ fn whatever_currently_holds_this_machines_microphone_is_judged_the_same_way() {
         );
     }
 }
+
+#[test]
+fn safari_is_reachable_by_the_name_its_audio_processes_actually_use() {
+    // Found by looking at this machine rather than by reasoning: with
+    // Safari open, the audio process list holds `com.apple.WebKit.GPU` and
+    // never `com.apple.Safari`. Before this mapping existed, Safari — one
+    // of the four browsers ADR-0030 names in the M2 matrix — could not
+    // trigger a Browser Meeting at all, and no test would have said so
+    // because every test asked about the name Safari does not use.
+    let list = Watchlist::shipped();
+    for observed in ["com.apple.WebKit.GPU", "com.apple.WebKit.WebContent"] {
+        let responsible = evertranscript_core::detect::watchlist::responsible_app(observed);
+        assert_eq!(responsible, "com.apple.Safari", "attributing {observed}");
+        assert!(
+            list.watches(&AppIdentity::bare(&responsible)),
+            "{observed} should reach Browser Meetings"
+        );
+    }
+}

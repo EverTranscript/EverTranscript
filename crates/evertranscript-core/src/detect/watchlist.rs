@@ -147,6 +147,22 @@ const HELPER_EXCEPTIONS: &[(&str, &str)] = &[
     ("com.microsoft.teams2.helper", "com.microsoft.teams2"),
 ];
 
+/// WebKit's out-of-process children, which carry no hint of their host.
+///
+/// Observed on this machine: with Safari open, the audio process list holds
+/// `com.apple.WebKit.GPU` and never `com.apple.Safari`. Nothing in the
+/// `.helper` rule reaches that, so **Safari would never have triggered a
+/// Browser Meeting** — one of the four browsers ADR-0030 names in the M2
+/// matrix, silently missed.
+///
+/// The cost of the fix is a known, bounded false positive: any WKWebView
+/// app holding the microphone is attributed to Safari. ADR-0030 already
+/// accepts that shape — "a browser voice app that isn't a meeting can
+/// trigger", with the removable row and whole-Meeting delete as the triage
+/// — and missing Safari entirely is far worse than labelling a rare
+/// non-Safari WebView as Safari.
+const WEBKIT_PREFIX: &str = "com.apple.WebKit";
+
 /// The app responsible for a process.
 ///
 /// A rule first, a table second. Chromium and Electron name their helpers by
@@ -160,6 +176,9 @@ pub fn responsible_app(process_id: &str) -> String {
         if process_id == *helper {
             return (*app).to_string();
         }
+    }
+    if process_id.starts_with(WEBKIT_PREFIX) {
+        return "com.apple.Safari".to_string();
     }
     match process_id.find(".helper") {
         Some(cut) => process_id[..cut].to_string(),
@@ -385,9 +404,11 @@ mod tests {
                 "company.thebrowser.Browser.helper.Renderer",
                 "company.thebrowser.Browser",
             ),
-            // Safari's content process is a separate bundle rather than a
-            // `.helper` suffix, so it is already responsible for itself and
-            // the rule must leave it alone.
+            // Safari never appears under its own bundle id in the audio
+            // process list — its children do, and they say only "WebKit".
+            // Observed on a real machine with Safari open.
+            ("com.apple.WebKit.GPU", "com.apple.Safari"),
+            ("com.apple.WebKit.WebContent", "com.apple.Safari"),
             ("com.apple.Safari", "com.apple.Safari"),
         ] {
             let responsible = responsible_app(helper);

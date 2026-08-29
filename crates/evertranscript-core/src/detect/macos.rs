@@ -171,6 +171,13 @@ pub fn microphone_holders() -> BTreeSet<String> {
 /// macOS label this Core's own status item with its process id. This counts
 /// the unfiltered truth, so the mechanism can be verified against a real
 /// microphone on a machine where the only thing recording is us.
+pub fn audio_process_bundles() -> Vec<String> {
+    process_objects()
+        .into_iter()
+        .filter_map(bundle_id)
+        .collect()
+}
+
 pub fn recording_process_count() -> usize {
     process_objects()
         .into_iter()
