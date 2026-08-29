@@ -101,7 +101,12 @@ impl LiveSource {
     /// True when a default input device exists. Used to decide whether live
     /// capture is even possible before a Meeting starts.
     pub fn microphone_available() -> bool {
-        cpal::default_host().default_input_device().is_some()
+        // Same hazard as `system_audio_available`: cpal's host
+        // initialisation can take the process down on a machine whose audio
+        // stack is not in a state it expects. A machine that cannot be asked
+        // has no usable microphone, which is the answer either way.
+        std::panic::catch_unwind(|| cpal::default_host().default_input_device().is_some())
+            .unwrap_or(false)
     }
 
     /// Starts the microphone leg, returning the device's name.
@@ -415,12 +420,16 @@ mod tests {
         // The whole point of independent legs. This machine has exactly one
         // working leg, which makes it the case worth asserting: a recording
         // still starts, and the missing half is reported rather than fatal.
-        let microphone = {
+        let microphone = if LiveSource::microphone_available() {
             let (tx, _rx) = mpsc::channel(4);
             let mut probe = LiveSource::new();
             let started = probe.start_microphone(CaptureClock::start(), tx).is_ok();
             probe.stop();
             started
+        } else {
+            // Opening a device this machine has already said it does not
+            // have is how a headless runner ends up aborting mid-suite.
+            false
         };
         let system = LiveSource::system_audio_available().is_ok();
         if !(microphone ^ system) {
