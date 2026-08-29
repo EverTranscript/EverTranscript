@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 02.
 
-Status: blocked on hardware — compiles and lints clean for the target; never executed
+Status: blocked on hardware — builds and its tests pass on real Windows in CI; the detector's live behaviour is unobserved
 
 - [x] Process enumeration for the Watchlist's exe entries, and audio-session state for the microphone condition — no permission prompt required on this platform
 - [x] The exe→app table twin (the rule, derived rather than ported — see ticket 02) of the macOS helper table, ported as seed data with attribution and a `PORTS.md` entry
@@ -12,7 +12,8 @@ Status: blocked on hardware — compiles and lints clean for the target; never e
 - [x] Browser Meetings works here too: any browser holding a hot microphone, helpers attributed to the responsible app
 - [x] The same DetectionSource contract as macOS, proven by the same seam tests running on both targets in CI — a per-platform dialect of the trait is a failure of this ticket
 - [x] **Compiles as part of the real workspace for `x86_64-pc-windows-msvc`, and passes `clippy -D warnings` there.** Not an isolated crate any more: `cargo-xwin` plus LLVM cross-builds the whole thing on this Mac, and `scripts/check.sh` runs it whenever the toolchain is present. It immediately found two unused imports that exist only on Windows — the class of defect a macOS-only loop cannot see at all.
-- [ ] **Still blocked on hardware:** The code is typechecked against `x86_64-pc-windows-msvc` and has never been run: it was written on an Apple Silicon Mac. The crate itself cannot be cross-checked — `ring` needs an MSVC C toolchain — so the API usage was verified in an isolated crate against the real target and then ported in. Verification needs a real Windows 10+ x64 machine with the per-browser matrix from ticket 09 run there, not extrapolated from macOS
+- [x] **It runs on real Windows.** `windows-latest` in CI compiles, links and passes the whole suite, which took six rounds of fixing genuine Windows defects — a WinRT call with no apartment, an API needing package identity, one global pipe for every Core, cpal aborting where no audio device exists, and a CRLF checkout breaking the drift fixtures. Every one of those was invisible from macOS.
+- [ ] **Still unobserved:** the detector's *behaviour* — a Windows machine with browsers and meeting apps, holding a microphone. CI has no audio device and no browsers, so what is proven is that the code is sound, not that it detects. The crate itself cannot be cross-checked — `ring` needs an MSVC C toolchain — so the API usage was verified in an isolated crate against the real target and then ported in. Verification needs a real Windows 10+ x64 machine with the per-browser matrix from ticket 09 run there, not extrapolated from macOS
 
 ## How far the Windows build is actually verified, and where it stops
 

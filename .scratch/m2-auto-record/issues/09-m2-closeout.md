@@ -4,7 +4,7 @@
 
 **Blocked by:** 03, 04, 05, 06, 07, 08.
 
-Status: blocked — the cycle is proven and measured; the rest needs apps and grants this machine lacks
+Status: blocked — CI is green both platforms; the live browser matrix needs grants this machine lacks
 
 - [x] **Helper attribution is covered for all four**: a renderer belonging to Chrome, Edge or Arc resolves to its browser, Safari's content process is already responsible for itself, and each matches Browser Meetings. That is the half that does not need the app running.
 - [ ] **Observed live for Chrome only, and blocked there.** Chrome was observed triggering Browser Meetings for real, with its renderer helper correctly attributed. Safari, Arc and Edge each need a microphone grant that only a person can click — TCC shows a grant for Chrome and none for the others — so they cannot be driven unattended. Untested, and ADR-0030 is explicit that one browser cannot be extrapolated to the rest — that is why it named this a matrix
@@ -16,4 +16,4 @@ Status: blocked — the cycle is proven and measured; the rest needs apps and gr
 - [x] The crash suite covers an auto-started Meeting: one is opened by the detector, the Core is dropped with it still running, and a new Core over the same History recovers the same Meeting: kill mid-recording, kill mid-stop, and confirm the auto-started Meeting recovers exactly as a manual one does
 - [x] **The dogfood proof.** Chrome took the microphone on a localhost page; the live detector triggered Browser Meetings; Auto-Record started a Meeting attributed to `com.google.Chrome`; releasing the microphone ran the continuity window out and Auto-Record stopped it. 3m 20s, Mirror written, `Idle` again afterwards, and nobody pressed Record
 - [x] **The compile half of the parity gate is green on both targets, locally.** `scripts/check.sh` now cross-builds and lints `x86_64-pc-windows-msvc` beside the macOS run.
-- [ ] The CI half still needs a push: `.github/workflows/ci.yml` gates `macos-14` and `windows-latest`, nothing here has been pushed, and pushing is the Operator's call
+- [x] **Both platforms are green in CI** (run 33230566682): `macos-14`, `windows-latest`, the Electron client and the ports ledger. CI had been red for at least three runs before this milestone, so the gate had never actually been met
