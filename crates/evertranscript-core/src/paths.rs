@@ -77,7 +77,31 @@ pub fn socket_path() -> PathBuf {
 pub fn pipe_name() -> String {
     // Namespaced per user so two logged-in accounts never collide.
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
-    format!(r"\\.\pipe\evertranscript-{user}")
+
+    // And per runtime directory when one is named, which is what gives
+    // Windows the isolation unix has had all along: there the socket *is* a
+    // path inside that directory, so two Cores with different runtime
+    // directories cannot collide. A single global pipe meant they always
+    // did — the second Core failed to bind, `status` was answered by the
+    // first, and a test then blamed its own History folder for being empty.
+    pipe_name_for(std::env::var_os(RUNTIME_DIR_ENV).as_deref(), &user)
+}
+
+/// The derivation, split out so it can be tested on any platform — a
+/// regression here is invisible until two Cores fight over one pipe.
+pub(crate) fn pipe_name_for(runtime_dir: Option<&std::ffi::OsStr>, user: &str) -> String {
+    match runtime_dir {
+        Some(dir) => {
+            // A path cannot go in a pipe name; a stable digest of it can.
+            let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+            for byte in dir.as_encoded_bytes() {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x1000_0000_01b3);
+            }
+            format!(r"\\.\pipe\evertranscript-{user}-{hash:016x}")
+        }
+        None => format!(r"\\.\pipe\evertranscript-{user}"),
+    }
 }
 
 /// Serializes competing Core startups (ported lock discipline, ADR-0028).
@@ -163,6 +187,24 @@ fn set_hidden(_path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_runtime_directory_gives_windows_its_own_pipe() {
+        // The isolation unix gets for free from the socket being a path.
+        // Asserted on both platforms because the derivation is shared and a
+        // regression here is invisible until two Cores fight over one pipe.
+        let a = pipe_name_for(Some("/tmp/one".as_ref()), "frank");
+        let b = pipe_name_for(Some("/tmp/two".as_ref()), "frank");
+        let none = pipe_name_for(None, "frank");
+        assert_ne!(a, b, "different runtime directories must not share a pipe");
+        assert_ne!(a, none, "a named directory must not reuse the default pipe");
+        assert_eq!(
+            a,
+            pipe_name_for(Some("/tmp/one".as_ref()), "frank"),
+            "the same directory must always produce the same pipe"
+        );
+        assert!(!a.contains('/'), "a path cannot appear in a pipe name: {a}");
+    }
 
     #[test]
     fn a_fresh_folder_is_not_an_incomplete_copy() {
