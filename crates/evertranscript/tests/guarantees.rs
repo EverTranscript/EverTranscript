@@ -34,6 +34,60 @@ fn run(history: &Path, runtime: &Path, args: &[&str]) -> std::process::Output {
         .expect("running the CLI")
 }
 
+/// Waits until the Core is answering, rather than guessing how long it takes.
+///
+/// These tests used a fixed 1500 ms sleep, which is a claim about how fast
+/// the machine is: true on a warm laptop and false on a cold CI runner,
+/// where the Core had not bound its socket yet, every following command
+/// failed quietly, and the assertion blamed the History folder for being
+/// empty. Polling asks the question the sleep was standing in for.
+fn wait_for_core(history: &Path, runtime: &Path) {
+    for _ in 0..120 {
+        if run(history, runtime, &["status"]).status.success() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    panic!("the Core never started answering");
+}
+
+/// Which network connections a process holds, as this platform reports them.
+///
+/// `lsof` does not exist on Windows, and the guarantee it serves — that a
+/// full recording cycle opens nothing — matters equally on both platforms,
+/// so it is asked for in each platform's own dialect rather than skipped on
+/// one of them.
+fn open_sockets(pid: u32) -> String {
+    #[cfg(windows)]
+    let output = Command::new("netstat").args(["-ano"]).output();
+    #[cfg(not(windows))]
+    let output = Command::new("lsof")
+        .args(["-p", &pid.to_string(), "-i", "-a", "-n", "-P"])
+        .output();
+
+    let Ok(output) = output else {
+        // A missing tool must not read as "no connections": that would turn
+        // a guarantee into a tautology on any machine without it.
+        panic!("could not ask this platform what sockets are open");
+    };
+    let text = String::from_utf8_lossy(&output.stdout).to_string();
+
+    #[cfg(windows)]
+    {
+        // netstat reports the whole machine; keep only our own rows.
+        let needle = format!(" {pid}");
+        text.lines()
+            .filter(|line| line.ends_with(&needle))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pid;
+        text
+    }
+}
+
 /// Every string that would betray an analytics or crash-reporting SDK.
 ///
 /// All three competitors ship at least one of these. "No analytics SDK
@@ -173,7 +227,7 @@ fn a_full_recording_cycle_opens_no_network_connections() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("starting the Core");
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    wait_for_core(&history, &runtime);
 
     run(&history, &runtime, &["acknowledge"]);
     run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
@@ -182,11 +236,7 @@ fn a_full_recording_cycle_opens_no_network_connections() {
 
     // lsof is the ground truth for what this process actually has open —
     // read while the Core is still alive, before it is killed below.
-    let sockets = Command::new("lsof")
-        .args(["-p", &daemon.id().to_string(), "-i", "-a", "-n", "-P"])
-        .output()
-        .expect("running lsof");
-    let outcome = String::from_utf8_lossy(&sockets.stdout).to_string();
+    let outcome = open_sockets(daemon.id());
 
     let _ = daemon.kill();
     let _ = daemon.wait();
@@ -224,7 +274,7 @@ fn nothing_key_shaped_reaches_the_record_or_the_logs() {
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("starting the Core");
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    wait_for_core(&history, &runtime);
     run(&history, &runtime, &["acknowledge"]);
     run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
     std::thread::sleep(std::time::Duration::from_millis(400));
@@ -279,7 +329,7 @@ fn a_recording_survives_the_core_being_killed() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("starting the Core");
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    wait_for_core(&history, &runtime);
     run(&history, &runtime, &["acknowledge"]);
     run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -301,7 +351,7 @@ fn a_recording_survives_the_core_being_killed() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("restarting the Core");
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    wait_for_core(&history, &runtime);
 
     let listed = run(&history, &runtime, &["list", "--json"]);
     let _ = restarted.kill();
@@ -331,7 +381,7 @@ fn the_history_folder_holds_only_notes_and_a_hidden_store() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("starting the Core");
-    std::thread::sleep(std::time::Duration::from_millis(1500));
+    wait_for_core(&history, &runtime);
     run(&history, &runtime, &["acknowledge"]);
     run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
     std::thread::sleep(std::time::Duration::from_millis(300));

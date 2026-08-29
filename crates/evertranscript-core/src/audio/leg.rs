@@ -143,17 +143,32 @@ mod tests {
     fn the_stamp_accounts_for_the_buffer_that_produced_it() {
         // A frame stamped at "now" would place its audio one buffer late,
         // and that error is what desyncs a transcript from its recording.
-        let mut encoder = LegEncoder::new(AudioChannel::Mic, 1, SAMPLE_RATE, CaptureClock::start())
-            .expect("encoder");
+        //
+        // Stated as "the audio does not end in the future" rather than as a
+        // fixed offset. The original form allowed 60 ms after a 120 ms
+        // sleep, which is a claim about how promptly the machine wakes a
+        // thread — true on a quiet laptop and false on a loaded CI runner,
+        // where it failed. This form scales with whatever the delay
+        // actually was, and still catches the bug it was written for:
+        // stamping at `now` puts the frame's end a whole buffer past the
+        // moment it was handed over.
+        let clock = CaptureClock::start();
+        let mut encoder =
+            LegEncoder::new(AudioChannel::Mic, 1, SAMPLE_RATE, clock.clone()).expect("encoder");
         std::thread::sleep(std::time::Duration::from_millis(120));
-        // 100 ms of audio.
+
+        // 100 ms of audio, handed over at whatever "now" turns out to be.
         let frame = encoder.encode(&vec![0.1; 4_800]).expect("a frame");
-        assert!(
-            frame.offset.millis() <= 60,
-            "a 100 ms buffer delivered at ~120 ms starts at ~20 ms, got {}",
-            frame.offset.millis()
-        );
+        let elapsed = clock.now().millis();
+
         assert_eq!(frame.duration_ms(), 100);
+        assert!(
+            frame.offset.millis() + frame.duration_ms() <= elapsed + 20,
+            "the frame covers {}..{} ms but was only handed over at {elapsed} ms — \
+             audio that has not happened yet is a stamp taken at the wrong end",
+            frame.offset.millis(),
+            frame.offset.millis() + frame.duration_ms()
+        );
     }
 
     #[test]
