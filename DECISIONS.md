@@ -330,7 +330,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Outcome:** applied
 **Ref:** (pending)
 
-## Q21 — brand-identity/raster-rebrand — deviation
+## Q25 — brand-identity/raster-rebrand — deviation
 
 **Question:** With the seahorse raster as the desktop icon, the tray, web set, iOS, Android and lockups still carried the teal e — a split identity. Propagate the seahorse everywhere, or hold the split?
 **Options considered:** propagate the raster identity to every surface / keep the split and let each future milestone decide / redraw the seahorse as a vector master first and then propagate
@@ -339,4 +339,15 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Justification:** The split was flagged when the desktop icon changed, and the Operator's instruction resolved it. Vectorizing first was rejected as silent scope: tracing the AI art into paths changes it, and every surface here consumes rasters anyway. Fixed en route: an opacity passed through the progressive-halving resizer compounded per step (0.45 five times ≈ invisible), caught because the busy tray state vanished; tint and opacity now land exactly once, in the final render. Verified live: the seahorse template with the Attention and Recording badges photographed in the real menu bar.
 **Outcome:** applied
 **Supersedes:** Q15 — the letterform e chosen there is no longer the shipped mark; it remains the vector fallback, and everything else Q15 rested on (the review process, the tile discipline) carries forward.
+**Ref:** (pending)
+
+## Q26 — brand-identity/vectorize-the-seahorse — deviation
+
+**Question:** The seahorse existed only as AI-generated raster masters, which meant raster-resize machinery in the pipeline, soft small sizes, and an unusable-for-strokes Icon Composer layer. Keep the raster masters, or redraw the mark as vector?
+**Options considered:** keep the raster masters and their resize/tint machinery / hand-trace the seahorse into SVG strokes and return the pipeline to vector-first / keep both paths behind a raster-override switch
+**Chosen:** Hand-traced. `src/mark.svg` is the seahorse as two monoline stroked paths plus two filled dots, drawn against a measured ink map of the raster and iterated under an overlay diff until the residue was sub-stroke-width; `src/mark-small.svg` is the simplified heavy-stroke variant for 32 px and under. Masters now declare their ink box (`data-ink`), placement is portrait-aware, and the raster masters, the progressive-halving resizer, the tint filter and every raster branch were deleted — `render.mjs` is vector-first again with the coral palette (including new dark-tile tokens) and no fallback switch.
+**Decided-by:** human (option 4 of the offered set); agent (the tracing and mechanics)
+**Justification:** The Operator chose redrawing over keeping the raster or deleting the fallback. The trace was verified by overlaying the vector on the raster at 1:1 (differences below one stroke width), and it strictly improved the outputs the raster struggled with: the 16 px favicon and tray render from curves instead of five halvings, the Icon Composer layer is a true outline again, and the lockup's mark finally matches the wordmark's weight. The e is gone from the masters — the fallback story ended where the traced vector made it unnecessary — and survives in `explorations/` and history.
+**Outcome:** applied
+**Supersedes:** Q24 — the raster-master mechanism it introduced is retired; the art it carried is what the trace preserves.
 **Ref:** (pending)

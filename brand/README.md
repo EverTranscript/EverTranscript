@@ -1,12 +1,11 @@
 # The EverTranscript mark
 
-One glyph — a white monoline **seahorse** — on a coral gradient tile
-(Operator-supplied art, `DECISIONS.md` Q20–Q21). The same drawing is the
+One glyph — a white monoline **seahorse** — on a coral gradient tile.
+The art arrived as an AI-generated raster (`DECISIONS.md` Q24–Q25) and was
+then hand-traced into the vector masters that now drive everything
+(Q26), so every size renders crisp from curves. The same drawing is the
 app icon on every platform, the website favicon, and (as a monochrome
-template) the macOS menu bar item. The earlier mark — a monoline lowercase
-*e* whose crossbar runs out to the right, the letter that keeps writing —
-remains in `src/` as the vector fallback the pipeline returns to if the
-raster masters are removed.
+template) the macOS menu bar item.
 
 Everything in `generated/`, plus `clients/electron/resources/` and
 `crates/evertranscript-core/src/tray/glyphs/`, is produced by one script:
@@ -29,40 +28,28 @@ results are byte-identical on any machine.
 | `coral-500` | `#ED6F62` | the brand colour; tile gradient, bottom; Android icon background; theme colour |
 | `paper` | `#F5F1E8` | the glyph on the tile; lockup on dark grounds |
 | `ink` | `#1F1D1B` | the lockup on light grounds; the tray template |
+| `coral-700` / `coral-deep` | `#B54A3F` / `#702D26` | the dark-appearance tile |
 | `record` | `#E5484D` | the recording accent in UI — never on the icon |
-| `teal-400/500/700/deep` | `#158580` `#0F6E6A` `#094F4C` `#06302E` | the vector-fallback tiles only |
 
 The machine-readable copy of this table is `COLOR` in `render.mjs`.
 
 ## Construction
 
-- Masters are drawn on a 256-unit grid, ink within 32…224, as **strokes**:
-  one width (32), round caps and joins, `currentColor`. `src/mark.svg` is
-  the drawing; `src/mark-small.svg`, when present, replaces it in anything
-  rendered at 32 px or less (thicker stroke, less detail).
-- The tile is a vertical `teal-400 → teal-700` gradient; the glyph takes
-  56 % of the tile's width. No text, no gradient on the glyph, and none of
-  the things the product's guarantees forbid the brand to suggest — no
+- Masters are drawn on a 256-unit grid as **strokes** — one width (17 for
+  `src/mark.svg`, 24 for `src/mark-small.svg`, which takes over at 32 px
+  and under), round caps and joins, `currentColor` — plus two filled dots
+  (the eye and the coronet ball). Each master declares its ink box on the
+  svg root (`data-ink="x y w h"`); the mark is portrait, and placement
+  aligns that box, not the canvas.
+- The tile is a vertical `coral-300 → coral-500` gradient (`coral-700 →
+  coral-deep` in the dark appearance); the mark's ink stands 75 % of the
+  tile's height. No text, no gradient on the glyph, and none of the
+  things the product's guarantees forbid the brand to suggest — no
   clouds, no sync arrows, no globes, no padlocks, no sparkles
   (ADR-0001/0020/0034: local-only, inert, provable).
 - Consumers that cannot stroke a path (Icon Composer fills whatever it is
   given) get the same drawing as filled outlines, converted by the script —
   `generated/lockups/mark-outlined.svg` is that form on its own.
-
-## The identity is raster art
-
-`src/appicon-1024.png` is the master: a 1024×1024 RGBA canvas,
-transparent margins, the tile square on Apple's grid at
-(100,100)–(924,924), prepared once from the source image (background
-knocked out, tile squared, re-composed). `src/appicon-glyph.png` is the
-white glyph lifted off the same art (tile coordinates; ink box measured
-into `GLYPH_INK` in `render.mjs`). When these exist, **every** output is
-built from them — the `.icns` and Icon Composer package, the `.ico`, the
-iOS and Android sets, the web set, the tray templates (the glyph tinted
-black, badges drawn on), and the lockups. The pipeline only ever resizes
-(progressive halving, so 16 px still reads) and tints (flat colour over
-preserved alpha). Delete the two `src/appicon-*.png` files and every
-surface falls back to the vector *e*.
 
 ## What gets generated
 
@@ -116,5 +103,5 @@ image model, with the identity constraints baked in.
 The three original candidates and the contact sheet that chose between
 them are kept in `explorations/` (`pnpm -C brand render:explorations`
 re-renders the sheet). That pick — the *e* — is logged in `DECISIONS.md`
-Q15 and was later superseded by the supplied seahorse art (Q21); the *e*
-survives as the vector fallback.
+Q15 and was superseded by the seahorse (Q25, vectorized in Q26); the *e*
+survives only in `explorations/` and the git history.

@@ -1,9 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" data-ink="44 32 168 192">
-  <g fill="none" stroke="currentColor" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18"><defs><mask id="knock"><rect width="18" height="18" fill="#fff"/><circle cx="14.5" cy="14.5" r="4.75" fill="#000"/></mask></defs><g mask="url(#knock)"><g color="#000000" transform="translate(-1.666666666666666 -1.166666666666666) scale(0.07552083333333333)"><g fill="none" stroke="currentColor" stroke-width="24" stroke-linecap="round" stroke-linejoin="round">
     <!-- body arc into a single-turn curl -->
     <path d="M114,52 C100,54 90,62 80,76 C64,96 55,116 55,138 C55,164 60,186 72,200 C86,216 108,222 126,216 C144,210 156,198 157,184 C158,170 148,160 136,162 C128,164 124,170 125,178"/>
     <!-- head, snout, mouth line -->
     <path d="M114,52 C132,54 148,62 158,74 C164,80 167,86 168,92 C178,94 192,98 198,104 C203,109 202,116 197,120 C189,125 122,121 98,121 C86,121 80,132 77,148"/>
     <circle cx="136" cy="80" r="11" fill="currentColor" stroke="none"/>
-  </g>
-</svg>
+  </g></g></g><circle cx="14.5" cy="14.5" r="3.25" fill="#000000"/></svg>

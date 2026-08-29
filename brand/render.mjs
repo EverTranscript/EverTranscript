@@ -2,14 +2,21 @@
 /**
  * Renders the EverTranscript brand masters into every platform format.
  *
- * One mark (`src/mark.svg`, with `src/mark-small.svg` for anything 32 px and
- * under) becomes: the macOS `.icns`, the Windows `.ico`, the iOS
+ * One mark — `src/mark.svg`, a hand-traced vector of the seahorse, with
+ * `src/mark-small.svg` taking over at 32 px and under — becomes: the macOS
+ * `.icns` and Icon Composer package, the Windows `.ico`, the iOS
  * `AppIcon.appiconset` (with the iOS 18 dark and tinted appearances), the
  * Android adaptive icon, the web favicon set, the four template glyphs the
  * menu bar shows, and the lockups. Nothing here needs a tool outside this
  * repo's toolchain: resvg rasterizes, and the containers that have no npm
  * writer worth taking (`.icns`, `.ico`, the menu bar's multi-representation
  * `.tiff`) are written by hand below — each is a header and a table.
+ *
+ * Masters declare their ink box (`data-ink="x y w h"` on the svg root) so
+ * a portrait mark places as deliberately as a landscape one. They draw in
+ * `currentColor` strokes; the one consumer that cannot stroke (Icon
+ * Composer fills whatever it is given) gets the same drawing as filled
+ * outlines, converted by the code below.
  *
  * Deterministic on purpose: no text is ever rendered (`loadSystemFonts` is
  * off — the wordmark is outlined before it gets here), every size is
@@ -21,9 +28,9 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { deflateSync } from "node:zlib";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { deflateSync } from "node:zlib";
 
 import { Resvg } from "@resvg/resvg-js";
 import opentype from "opentype.js";
@@ -35,44 +42,21 @@ const OUT = join(BRAND, "generated");
 
 /** The palette. `brand/README.md` is the human-readable copy of this table. */
 export const COLOR = {
-  // The identity: the coral of the raster tile (sampled from the art).
   coral300: "#FC9E74",
   coral500: "#ED6F62",
-  // The vector fallback tiles (the e mark), kept for the day the raster
-  // masters are removed.
-  teal400: "#158580",
-  teal500: "#0F6E6A",
-  teal700: "#094F4C",
-  tealDeep: "#06302E",
+  coral700: "#B54A3F",
+  coralDeep: "#702D26",
   paper: "#F5F1E8",
   ink: "#1F1D1B",
   record: "#E5484D",
 };
 
-/** The mark's ink spans 32..224 of its 256 grid: three quarters of the box. */
-const INK = 192 / 256;
-/** How much of a tile's width the mark's ink takes. */
-const GLYPH_FRACTION = 0.56;
+/** The tile gradient, top to bottom. */
+const TILE_GRADIENT = [COLOR.coral300, COLOR.coral500];
+const TILE_GRADIENT_DARK = [COLOR.coral700, COLOR.coralDeep];
 
-/**
- * Raster app-icon master. When this file exists, the desktop icons — the
- * macOS `.icns`, the Icon Composer package, the Windows `.ico`, and the
- * Electron copies — are built from it instead of from the vector tiles.
- * It is authored art: a 1024×1024 RGBA canvas, transparent margins, the
- * tile square at (100,100)–(924,924) — Apple's icon-grid inset.
- * `appicon-glyph.png` is the white glyph lifted off the same art (tile
- * coordinates, 824×824) for the Icon Composer layer, and RASTER_GRADIENT
- * holds the tile's sampled top and bottom colours for its fill.
- * Everything not listed above (web, Android, iOS, tray, lockups) still
- * renders from the vector masters.
- */
-const RASTER_ICON = join(SRC, "appicon-1024.png");
-const RASTER_GLYPH = join(SRC, "appicon-glyph.png");
-const RASTER_GRADIENT = [COLOR.coral300, COLOR.coral500];
-/** Where the tile sits inside the raster master. */
-const RASTER_TILE = { x: 100, y: 100, side: 824, canvas: 1024 };
-/** The glyph's ink box inside `appicon-glyph.png` (824×824), measured. */
-const GLYPH_INK = { x: 162, y: 112, w: 511, h: 616, canvas: 824 };
+/** How much of a tile's height the mark's ink takes (the mark is portrait). */
+const GLYPH_HEIGHT_FRACTION = 0.75;
 
 // ---------------------------------------------------------------------------
 // Rasterizing
@@ -90,8 +74,13 @@ function rasterize(svg, width, options = {}) {
 }
 
 const png = (svg, width) => rasterize(svg, width).asPng();
+const pngDataUri = (buffer) => `data:image/png;base64,${buffer.toString("base64")}`;
 
-/** Reads a mark master and returns its inner markup, ready to be placed. */
+/**
+ * Reads a mark master: its inner markup, and the ink box it declares —
+ * the rectangle its drawing actually covers, which is what placement
+ * aligns, so a portrait mark centres as correctly as a square one.
+ */
 function loadGlyph(path) {
   const text = readFileSync(path, "utf8");
   if (/<text[\s>]/.test(text)) {
@@ -99,104 +88,23 @@ function loadGlyph(path) {
   }
   const inner = text.match(/<svg[^>]*>([\s\S]*)<\/svg>/);
   if (!inner) throw new Error(`${path}: not an SVG document`);
-  return inner[1].trim();
-}
-
-const pngDataUri = (buffer) => `data:image/png;base64,${buffer.toString("base64")}`;
-
-/**
- * Scales a PNG down by rendering it through resvg, halving until the last
- * step so the big ratios (1024 → 16) act like a box filter instead of
- * shedding detail in one bilinear jump. `crop` first cuts a region of the
- * source in source pixels; `tint` recolours every pixel to one flat colour
- * (alpha preserved — how a white glyph becomes a template or an ink mark)
- * and `opacity` scales the alpha, both applied in the final render.
- */
-function rasterAt(buffer, sourceSize, target, { crop = null, tint = null, opacity = 1 } = {}) {
-  // Intermediate halving steps are plain copies; tint and opacity land
-  // exactly once, in the final render — an opacity repeated per step
-  // compounds (0.45 five times is invisible).
-  const wrap = (href, viewBox, imageSize, { filter = "", fade = 1 } = {}) =>
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${viewBox}">${filter}` +
-    (filter
-      ? `<g filter="url(#tint)"${fade === 1 ? "" : ` opacity="${fade}"`}><image href="${href}" width="${imageSize}" height="${imageSize}"/></g>`
-      : `<image href="${href}" width="${imageSize}" height="${imageSize}"${fade === 1 ? "" : ` opacity="${fade}"`}/>`) +
-    `</svg>`;
-  const tintFilter = () => {
-    if (!tint) return "";
-    const n = parseInt(tint.slice(1), 16);
-    const c = (v) => (v / 255).toFixed(4);
-    return (
-      `<defs><filter id="tint" x="0%" y="0%" width="100%" height="100%">` +
-      `<feColorMatrix type="matrix" values="0 0 0 0 ${c(n >> 16)}  0 0 0 0 ${c((n >> 8) & 255)}  0 0 0 0 ${c(n & 255)}  0 0 0 1 0"/>` +
-      `</filter></defs>`
-    );
-  };
-  let png = buffer;
-  let width = sourceSize;
-  let height = sourceSize;
-  if (crop) {
-    png = rasterize(wrap(pngDataUri(png), `${crop.x} ${crop.y} ${crop.w} ${crop.h}`, sourceSize), crop.w).asPng();
-    width = crop.w;
-    height = crop.h;
-  }
-  const finish = (w) => {
-    const svg = wrap(pngDataUri(png), `0 0 ${width} ${height}`, width, { filter: tintFilter(), fade: opacity });
-    return rasterize(svg, w).asPng();
-  };
-  while (Math.ceil(width / 2) > target) {
-    const next = Math.ceil(width / 2);
-    png = rasterize(wrap(pngDataUri(png), `0 0 ${width} ${height}`, width), next).asPng();
-    height = Math.round((height * next) / width);
-    width = next;
-  }
-  return width === target && !tint && opacity === 1 ? png : finish(target);
-}
-
-/** The glyph's ink, cropped tight and scaled so the ink is `inkWidth` wide. */
-function glyphInk(glyph, inkWidth, options = {}) {
-  return rasterAt(glyph, GLYPH_INK.canvas, Math.round(inkWidth), { ...options, crop: GLYPH_INK });
-}
-
-/** Ink height for a given ink width, from the measured box. */
-const glyphHeightFor = (inkWidth) => (inkWidth * GLYPH_INK.h) / GLYPH_INK.w;
-
-/**
- * A macOS icon size from the raster master: the art resized, and — at the
- * sizes where the vector tile carried one — the same soft shadow, cast
- * from the art's own alpha.
- */
-function rasterMacIcon(master, px) {
-  const content = rasterAt(master, RASTER_TILE.canvas, px);
-  if (px < 64) return content;
-  const blur = px * 0.0234;
-  const drop = px * 0.0117;
-  const href = pngDataUri(content);
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${px} ${px}">` +
-    `<defs><filter id="shadow" x="-25%" y="-25%" width="150%" height="150%">` +
-    `<feGaussianBlur in="SourceAlpha" stdDeviation="${blur}" result="blur"/>` +
-    `<feOffset in="blur" dy="${drop}" result="offset"/>` +
-    `<feFlood flood-color="#000000" flood-opacity="0.3" result="colour"/>` +
-    `<feComposite in="colour" in2="offset" operator="in"/></filter></defs>` +
-    `<g filter="url(#shadow)"><image href="${href}" width="${px}" height="${px}"/></g>` +
-    `<image href="${href}" width="${px}" height="${px}"/>` +
-    `</svg>`;
-  return rasterize(svg, px).asPng();
+  const declared = text.match(/data-ink="([\d. ]+)"/);
+  const [x, y, w, h] = declared ? declared[1].split(/\s+/).map(Number) : [32, 32, 192, 192];
+  return { markup: inner[1].trim(), ink: { x, y, w, h } };
 }
 
 /**
- * Places a 256-grid glyph so that its ink is `inkWidth` wide, centred at
- * (cx, cy). Masters draw in `currentColor`, which is what makes one drawing
- * serve as paper on teal, ink on paper, and a template.
+ * Places a glyph so that its ink is `inkHeight` tall (or `inkWidth` wide),
+ * centred at (cx, cy). Masters draw in `currentColor`, which is what makes
+ * one drawing serve as paper on coral, ink on paper, and a template.
  */
-function place(glyph, { cx, cy, inkWidth, color, opacity = 1 }) {
-  const box = inkWidth / INK;
-  const scale = box / 256;
-  const x = cx - box / 2;
-  const y = cy - box / 2;
+function place(glyph, { cx, cy, inkWidth, inkHeight, color, opacity = 1 }) {
+  const { ink } = glyph;
+  const scale = inkHeight ? inkHeight / ink.h : inkWidth / ink.w;
+  const x = cx - (ink.x + ink.w / 2) * scale;
+  const y = cy - (ink.y + ink.h / 2) * scale;
   const alpha = opacity === 1 ? "" : ` opacity="${opacity}"`;
-  return `<g color="${color}"${alpha} transform="translate(${x} ${y}) scale(${scale})">${glyph}</g>`;
+  return `<g color="${color}"${alpha} transform="translate(${x} ${y}) scale(${scale})">${glyph.markup}</g>`;
 }
 
 const gradient = (id, top, bottom) =>
@@ -219,14 +127,14 @@ function tile(glyph, options = {}) {
     shadow = false,
     background = true,
     dark = false,
-    glyphFraction = GLYPH_FRACTION,
-    glyphColor = COLOR.paper,
+    heightFraction = GLYPH_HEIGHT_FRACTION,
+    glyphColor = "#FFFFFF",
     glyphOpacity = 1,
   } = options;
   const edge = size * inset;
   const side = size - 2 * edge;
   const rx = side * radius;
-  const [top, bottom] = dark ? [COLOR.teal700, COLOR.tealDeep] : [COLOR.teal400, COLOR.teal700];
+  const [top, bottom] = dark ? TILE_GRADIENT_DARK : TILE_GRADIENT;
   const blur = size * 0.0234;
   const drop = size * 0.0117;
   const defs =
@@ -247,7 +155,7 @@ function tile(glyph, options = {}) {
     place(glyph, {
       cx: size / 2,
       cy: size / 2,
-      inkWidth: side * glyphFraction,
+      inkHeight: side * heightFraction,
       color: glyphColor,
       opacity: glyphOpacity,
     }) +
@@ -258,49 +166,243 @@ function tile(glyph, options = {}) {
 /** The macOS icon: Apple's inset rounded square with its soft shadow. */
 const macosTile = (glyph, extra = {}) => tile(glyph, { inset: 100 / 1024, radius: 185 / 824, shadow: true, ...extra });
 /** Full-bleed rounded square: Windows, the favicon, PWA icons. */
-const roundedTile = (glyph, extra = {}) => tile(glyph, { radius: 0.2, ...extra });
+const roundedTile = (glyph, extra = {}) => tile(glyph, { radius: 0.22, ...extra });
 /** Full-bleed square, the platform masks it: iOS, apple-touch-icon, Play Store. */
 const squareTile = (glyph, extra = {}) => tile(glyph, { radius: 0, ...extra });
 /** A circle: Android's round legacy launcher icon. */
 const circleTile = (glyph, extra = {}) => tile(glyph, { radius: 0.5, ...extra });
 
+/** The mark alone on a transparent square canvas — iOS dark and tinted. */
+function glyphOnly(glyph, size, { color, heightFraction = GLYPH_HEIGHT_FRACTION } = {}) {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">` +
+    place(glyph, { cx: size / 2, cy: size / 2, inkHeight: size * heightFraction, color }) +
+    `</svg>`
+  );
+}
+
 /**
- * The menu bar glyph: black with alpha on an 18 pt canvas, ink 16 pt wide.
- * macOS renders a template image itself — black on a light bar, white on a
- * dark one, dimmed when the app is inactive — which is why there is no
- * colour here. States add a badge at the lower right.
+ * The menu bar glyph: black with alpha on an 18 pt canvas. macOS renders a
+ * template image itself — black on a light bar, white on a dark one,
+ * dimmed when the app is inactive — which is why there is no colour here.
+ * States add a badge at the lower right; the portrait mark is placed by
+ * height and steps back a little when a badge needs the corner.
  */
 function trayGlyph(glyph, { state = "ready", color = "#000000" } = {}) {
   const S = 18;
   const badge = {
     ready: "",
-    // Recording: a solid dot, with a clear ring so it separates from the
-    // mark instead of merging into it at 1x.
     recording: `<circle cx="14.5" cy="14.5" r="3.25" fill="${color}"/>`,
-    // Attention: the same dot, hollow — something needs the Operator.
-    attention:
-      `<circle cx="14.5" cy="14.5" r="2.75" fill="none" stroke="${color}" stroke-width="1.5"/>`,
+    attention: `<circle cx="14.5" cy="14.5" r="2.75" fill="none" stroke="${color}" stroke-width="1.5"/>`,
     busy: "",
   }[state];
   if (badge === undefined) throw new Error(`unknown tray state ${state}`);
   const opacity = state === "busy" ? 0.45 : 1;
-  // A badge needs room: the mark steps back a little when one is shown.
   const withBadge = state === "recording" || state === "attention";
-  const inkWidth = withBadge ? 13.5 : 16;
-  const cx = withBadge ? 7.75 : 9;
-  const cy = withBadge ? 8.25 : 9;
+  const inkHeight = withBadge ? 14.5 : 16;
+  const cx = withBadge ? 8 : 9;
+  const cy = withBadge ? 8.5 : 9;
   const knockout = withBadge
     ? `<mask id="knock"><rect width="${S}" height="${S}" fill="#fff"/><circle cx="14.5" cy="14.5" r="4.75" fill="#000"/></mask>`
     : "";
+  const mark = place(glyph, { cx, cy, inkHeight, color, opacity });
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${S} ${S}">` +
     `<defs>${knockout}</defs>` +
-    (withBadge ? `<g mask="url(#knock)">` : "") +
-    place(glyph, { cx, cy, inkWidth, color, opacity }) +
-    (withBadge ? `</g>` : "") +
+    (withBadge ? `<g mask="url(#knock)">${mark}</g>` : mark) +
     badge +
     `</svg>`
   );
+}
+
+// ---------------------------------------------------------------------------
+// Containers written by hand
+// ---------------------------------------------------------------------------
+
+/**
+ * `.icns`: a four-byte magic, a big-endian total length, then chunks of
+ * OSType + length + payload. Every chunk here is a PNG.
+ */
+function icns(entries) {
+  const chunks = entries.map(({ type, data }) => {
+    const header = Buffer.alloc(8);
+    header.write(type, 0, "ascii");
+    header.writeUInt32BE(8 + data.length, 4);
+    return Buffer.concat([header, data]);
+  });
+  const body = Buffer.concat(chunks);
+  const header = Buffer.alloc(8);
+  header.write("icns", 0, "ascii");
+  header.writeUInt32BE(8 + body.length, 4);
+  return Buffer.concat([header, body]);
+}
+
+/**
+ * iconset name → icns OSType. Only the types Apple stores as PNG: `icp4`
+ * and `icp5` (16/32 at 1x) look PNG-legal on paper, but Apple's decoders
+ * read them as raw data — round-tripping through `iconutil` turned them
+ * to noise — and Apple's own icons ship 16 px only as ARGB `ic04`. So the
+ * 1x small sizes are omitted, exactly as most system icons omit them, and
+ * macOS derives them from the @2x entries.
+ */
+const ICNS_TYPES = [
+  ["icon_16x16@2x", 32, "ic11"],
+  ["icon_32x32@2x", 64, "ic12"],
+  ["icon_128x128", 128, "ic07"],
+  ["icon_128x128@2x", 256, "ic13"],
+  ["icon_256x256", 256, "ic08"],
+  ["icon_256x256@2x", 512, "ic14"],
+  ["icon_512x512", 512, "ic09"],
+  ["icon_512x512@2x", 1024, "ic10"],
+];
+
+/**
+ * `.ico`: a six-byte directory header, a 16-byte entry per image, then the
+ * images. PNG payloads are allowed at every size since Windows Vista.
+ */
+function ico(images) {
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(images.length, 4);
+  const directory = Buffer.alloc(16 * images.length);
+  let offset = header.length + directory.length;
+  images.forEach(({ size, data }, index) => {
+    const at = index * 16;
+    directory[at] = size >= 256 ? 0 : size;
+    directory[at + 1] = size >= 256 ? 0 : size;
+    directory[at + 2] = 0;
+    directory[at + 3] = 0;
+    directory.writeUInt16LE(1, at + 4);
+    directory.writeUInt16LE(32, at + 6);
+    directory.writeUInt32LE(data.length, at + 8);
+    directory.writeUInt32LE(offset, at + 12);
+    offset += data.length;
+  });
+  return Buffer.concat([header, directory, ...images.map((image) => image.data)]);
+}
+
+const CRC_TABLE = new Uint32Array(256).map((_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+const crc32 = (bytes) => {
+  let c = 0xffffffff;
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+};
+const pngChunk = (type, data) => {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([length, body, crc]);
+};
+const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+/**
+ * A PNG with no alpha channel at all — colour type 2 — for the places that
+ * refuse one: the App Store's 1024 icon, the Play Store's 512. resvg always
+ * writes RGBA, so this composites its premultiplied pixels over `ground`
+ * and encodes the three channels by hand. Unfiltered scanlines, deflated.
+ */
+function opaquePng(image, ground) {
+  const { width, height, pixels } = image;
+  const [gr, gg, gb] = hexToRgb(ground);
+  const stride = width * 3 + 1;
+  const rows = Buffer.alloc(stride * height);
+  for (let y = 0; y < height; y += 1) {
+    rows[y * stride] = 0;
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4;
+      const o = y * stride + 1 + x * 3;
+      const under = 1 - pixels[i + 3] / 255;
+      rows[o] = Math.round(pixels[i] + gr * under);
+      rows[o + 1] = Math.round(pixels[i + 1] + gg * under);
+      rows[o + 2] = Math.round(pixels[i + 2] + gb * under);
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk("IHDR", ihdr),
+    pngChunk("IDAT", deflateSync(rows, { level: 9 })),
+    pngChunk("IEND", Buffer.alloc(0)),
+  ]);
+}
+
+/**
+ * A multi-representation TIFF: one image per screen scale, distinguished
+ * by resolution, which is how `NSImage` picks the 2x drawing on a Retina
+ * display. Little-endian, uncompressed RGBA with associated alpha, one
+ * strip per image.
+ */
+function tiff(reps) {
+  const SHORT = 3;
+  const LONG = 4;
+  const RATIONAL = 5;
+  const header = Buffer.alloc(8);
+  header.write("II", 0, "ascii");
+  header.writeUInt16LE(42, 2);
+  header.writeUInt32LE(8, 4);
+  const chunks = [header];
+  let position = 8;
+  reps.forEach(({ width, height, pixels, dpi }, index) => {
+    const tags = 14;
+    const ifdLength = 2 + tags * 12 + 4;
+    const aux = position + ifdLength;
+    const bitsAt = aux;
+    const xresAt = aux + 8;
+    const yresAt = aux + 16;
+    const stripAt = aux + 24;
+    const stripLength = width * height * 4;
+    const padding = stripLength % 2;
+    const next = index === reps.length - 1 ? 0 : stripAt + stripLength + padding;
+
+    const ifd = Buffer.alloc(ifdLength);
+    ifd.writeUInt16LE(tags, 0);
+    let at = 2;
+    const entry = (tag, type, count, value) => {
+      ifd.writeUInt16LE(tag, at);
+      ifd.writeUInt16LE(type, at + 2);
+      ifd.writeUInt32LE(count, at + 4);
+      if (type === SHORT && count === 1) ifd.writeUInt16LE(value, at + 8);
+      else ifd.writeUInt32LE(value, at + 8);
+      at += 12;
+    };
+    entry(256, LONG, 1, width);
+    entry(257, LONG, 1, height);
+    entry(258, SHORT, 4, bitsAt);
+    entry(259, SHORT, 1, 1);
+    entry(262, SHORT, 1, 2);
+    entry(273, LONG, 1, stripAt);
+    entry(277, SHORT, 1, 4);
+    entry(278, LONG, 1, height);
+    entry(279, LONG, 1, stripLength);
+    entry(282, RATIONAL, 1, xresAt);
+    entry(283, RATIONAL, 1, yresAt);
+    entry(284, SHORT, 1, 1);
+    entry(296, SHORT, 1, 2);
+    entry(338, SHORT, 1, 1);
+    ifd.writeUInt32LE(next, at);
+
+    const extra = Buffer.alloc(24);
+    [8, 8, 8, 8].forEach((bits, i) => extra.writeUInt16LE(bits, i * 2));
+    extra.writeUInt32LE(dpi, 8);
+    extra.writeUInt32LE(1, 12);
+    extra.writeUInt32LE(dpi, 16);
+    extra.writeUInt32LE(1, 20);
+
+    chunks.push(ifd, extra, Buffer.from(pixels), Buffer.alloc(padding));
+    position = stripAt + stripLength + padding;
+  });
+  return Buffer.concat(chunks);
 }
 
 // ---------------------------------------------------------------------------
@@ -308,11 +410,13 @@ function trayGlyph(glyph, { state = "ready", color = "#000000" } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * The masters are drawn as strokes — one width, round caps and joins — which
- * is the honest way to author a monoline mark. Not every consumer renders
- * strokes (Icon Composer fills the path instead), so the same drawing is
- * also produced as filled outlines: each subpath is sampled, offset to both
- * sides, closed with round caps, and filled nonzero so overlaps merge.
+ * The masters are drawn as strokes — one width, round caps and joins —
+ * which is the honest way to author a monoline mark. Not every consumer
+ * renders strokes (Icon Composer fills the path instead), so the same
+ * drawing is also produced as filled outlines: each subpath is sampled,
+ * offset to both sides, closed with round caps, and filled nonzero so
+ * overlaps merge. Filled elements (the eye, the coronet ball) pass
+ * through unchanged.
  */
 
 /** Parses the SVG path commands the masters use into sampled polylines. */
@@ -347,7 +451,6 @@ function samplePath(d, step = 1) {
     control = c2;
     current = to;
   };
-  // SVG's endpoint-to-centre arc conversion (implementation notes F.6.5).
   const arcTo = (rx, ry, rotation, large, sweep, to) => {
     const [x1, y1] = current;
     const [x2, y2] = to;
@@ -455,7 +558,6 @@ function outlinePolyline(points, width) {
   const left = [];
   const right = [];
   const arc = (centre, from, to, steps) => {
-    // Points on the circle around `centre` sweeping from unit vector `from` to `to` the short way.
     const out = [];
     const a0 = Math.atan2(from[1], from[0]);
     let a1 = Math.atan2(to[1], to[0]);
@@ -471,7 +573,6 @@ function outlinePolyline(points, width) {
     const [tx, ty] = dir(k);
     const n = [-ty, tx];
     if (k > 0) {
-      // Round join: on the outer side of a turn the offsets fan apart.
       const [px, py] = dir(k - 1);
       const pn = [-py, px];
       const turn = px * ty - py * tx;
@@ -486,7 +587,6 @@ function outlinePolyline(points, width) {
   }
   const capSteps = Math.max(8, Math.ceil((Math.PI * r) / 1));
   const [tx, ty] = dir(segments - 1);
-  // `arc` takes the short way; a cap is exactly half a turn, so sweep it via the tangent.
   const half = (centre, from, via, steps) => {
     const out = [];
     for (let k = 0; k <= steps; k += 1) {
@@ -509,211 +609,22 @@ function outlinePolyline(points, width) {
 
 /**
  * The master's inner markup with every stroked path replaced by its filled
- * outline. Reads the stroke width the masters declare on their group.
+ * outline; already-filled circles (the eye, the coronet ball) are kept.
+ * Reads the stroke width the masters declare on their group.
  */
-function outlineGlyph(inner) {
+function outlineGlyph(glyph) {
+  const inner = glyph.markup;
   const width = Number((inner.match(/stroke-width="([\d.]+)"/) ?? [])[1]);
   if (!width) throw new Error("outline: the master declares no stroke-width");
   const fills = [];
   for (const [, d] of inner.matchAll(/<path[^>]*\sd="([^"]+)"/g)) {
     for (const polyline of samplePath(d)) fills.push(outlinePolyline(polyline, width));
   }
-  return `<path fill="currentColor" fill-rule="nonzero" d="${fills.join("")}"/>`;
-}
-
-// ---------------------------------------------------------------------------
-// Containers written by hand
-// ---------------------------------------------------------------------------
-
-/**
- * `.icns`: a four-byte magic, a big-endian total length, then chunks of
- * OSType + length + payload. Every chunk here is a PNG; the OSTypes below
- * are the ones a modern `iconutil` writes, verified against real files.
- */
-function icns(entries) {
-  const chunks = entries.map(({ type, data }) => {
-    const header = Buffer.alloc(8);
-    header.write(type, 0, "ascii");
-    header.writeUInt32BE(8 + data.length, 4);
-    return Buffer.concat([header, data]);
-  });
-  const body = Buffer.concat(chunks);
-  const header = Buffer.alloc(8);
-  header.write("icns", 0, "ascii");
-  header.writeUInt32BE(8 + body.length, 4);
-  return Buffer.concat([header, body]);
-}
-
-/**
- * iconset name → icns OSType. Only the types Apple stores as PNG: `icp4`
- * and `icp5` (16/32 at 1x) look PNG-legal on paper, but Apple's decoders
- * read them as raw data — round-tripping through `iconutil` turned them
- * to noise — and Apple's own icons ship 16 px only as ARGB `ic04`. So the
- * 1x small sizes are omitted, exactly as most system icons omit them, and
- * macOS derives them from the @2x entries.
- */
-const ICNS_TYPES = [
-  ["icon_16x16@2x", 32, "ic11"],
-  ["icon_32x32@2x", 64, "ic12"],
-  ["icon_128x128", 128, "ic07"],
-  ["icon_128x128@2x", 256, "ic13"],
-  ["icon_256x256", 256, "ic08"],
-  ["icon_256x256@2x", 512, "ic14"],
-  ["icon_512x512", 512, "ic09"],
-  ["icon_512x512@2x", 1024, "ic10"],
-];
-
-/**
- * `.ico`: a six-byte directory header, a 16-byte entry per image, then the
- * images. PNG payloads are allowed at every size since Windows Vista, which
- * is what Granola's own `win-tray.ico` does.
- */
-function ico(images) {
-  const header = Buffer.alloc(6);
-  header.writeUInt16LE(0, 0);
-  header.writeUInt16LE(1, 2);
-  header.writeUInt16LE(images.length, 4);
-  const directory = Buffer.alloc(16 * images.length);
-  let offset = header.length + directory.length;
-  images.forEach(({ size, data }, index) => {
-    const at = index * 16;
-    directory[at] = size >= 256 ? 0 : size;
-    directory[at + 1] = size >= 256 ? 0 : size;
-    directory[at + 2] = 0; // colours in palette: none
-    directory[at + 3] = 0; // reserved
-    directory.writeUInt16LE(1, at + 4); // colour planes
-    directory.writeUInt16LE(32, at + 6); // bits per pixel
-    directory.writeUInt32LE(data.length, at + 8);
-    directory.writeUInt32LE(offset, at + 12);
-    offset += data.length;
-  });
-  return Buffer.concat([header, directory, ...images.map((image) => image.data)]);
-}
-
-const CRC_TABLE = new Uint32Array(256).map((_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
-const crc32 = (bytes) => {
-  let c = 0xffffffff;
-  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-};
-const pngChunk = (type, data) => {
-  const length = Buffer.alloc(4);
-  length.writeUInt32BE(data.length, 0);
-  const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
-  const crc = Buffer.alloc(4);
-  crc.writeUInt32BE(crc32(body), 0);
-  return Buffer.concat([length, body, crc]);
-};
-const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
-
-/**
- * A PNG with no alpha channel at all — colour type 2 — for the places that
- * refuse one: the App Store's 1024 icon, the Play Store's 512. resvg always
- * writes RGBA, so this composites its premultiplied pixels over `ground`
- * and encodes the three channels by hand. Unfiltered scanlines, deflated.
- */
-function opaquePng(image, ground) {
-  const { width, height, pixels } = image;
-  const [gr, gg, gb] = hexToRgb(ground);
-  const stride = width * 3 + 1;
-  const rows = Buffer.alloc(stride * height);
-  for (let y = 0; y < height; y += 1) {
-    rows[y * stride] = 0;
-    for (let x = 0; x < width; x += 1) {
-      const i = (y * width + x) * 4;
-      const o = y * stride + 1 + x * 3;
-      const under = 1 - pixels[i + 3] / 255;
-      rows[o] = Math.round(pixels[i] + gr * under);
-      rows[o + 1] = Math.round(pixels[i + 1] + gg * under);
-      rows[o + 2] = Math.round(pixels[i + 2] + gb * under);
-    }
-  }
-  const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(width, 0);
-  ihdr.writeUInt32BE(height, 4);
-  ihdr[8] = 8; // bit depth
-  ihdr[9] = 2; // truecolour, no alpha
-  return Buffer.concat([
-    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    pngChunk("IHDR", ihdr),
-    pngChunk("IDAT", deflateSync(rows, { level: 9 })),
-    pngChunk("IEND", Buffer.alloc(0)),
-  ]);
-}
-
-/**
- * A multi-representation TIFF: one image per screen scale, distinguished
- * by resolution, which is how `NSImage` picks the 2x drawing on a Retina
- * display. Apple's own recipe for this is `tiffutil -cathidpicheck`; this
- * writes the same thing without needing macOS to build on.
- *
- * Little-endian, uncompressed RGBA with associated (premultiplied) alpha —
- * which is what resvg hands over — one strip per image.
- */
-function tiff(reps) {
-  const SHORT = 3;
-  const LONG = 4;
-  const RATIONAL = 5;
-  const header = Buffer.alloc(8);
-  header.write("II", 0, "ascii");
-  header.writeUInt16LE(42, 2);
-  header.writeUInt32LE(8, 4);
-  const chunks = [header];
-  let position = 8;
-  reps.forEach(({ width, height, pixels, dpi }, index) => {
-    const tags = 14;
-    const ifdLength = 2 + tags * 12 + 4;
-    const aux = position + ifdLength;
-    const bitsAt = aux;
-    const xresAt = aux + 8;
-    const yresAt = aux + 16;
-    const stripAt = aux + 24;
-    const stripLength = width * height * 4;
-    const padding = stripLength % 2;
-    const next = index === reps.length - 1 ? 0 : stripAt + stripLength + padding;
-
-    const ifd = Buffer.alloc(ifdLength);
-    ifd.writeUInt16LE(tags, 0);
-    let at = 2;
-    const entry = (tag, type, count, value) => {
-      ifd.writeUInt16LE(tag, at);
-      ifd.writeUInt16LE(type, at + 2);
-      ifd.writeUInt32LE(count, at + 4);
-      if (type === SHORT && count === 1) ifd.writeUInt16LE(value, at + 8);
-      else ifd.writeUInt32LE(value, at + 8);
-      at += 12;
-    };
-    entry(256, LONG, 1, width);
-    entry(257, LONG, 1, height);
-    entry(258, SHORT, 4, bitsAt);
-    entry(259, SHORT, 1, 1); // uncompressed
-    entry(262, SHORT, 1, 2); // RGB
-    entry(273, LONG, 1, stripAt);
-    entry(277, SHORT, 1, 4); // samples per pixel
-    entry(278, LONG, 1, height); // rows per strip
-    entry(279, LONG, 1, stripLength);
-    entry(282, RATIONAL, 1, xresAt);
-    entry(283, RATIONAL, 1, yresAt);
-    entry(284, SHORT, 1, 1); // chunky
-    entry(296, SHORT, 1, 2); // inches
-    entry(338, SHORT, 1, 1); // associated alpha
-    ifd.writeUInt32LE(next, at);
-
-    const extra = Buffer.alloc(24);
-    [8, 8, 8, 8].forEach((bits, i) => extra.writeUInt16LE(bits, i * 2));
-    extra.writeUInt32LE(dpi, 8);
-    extra.writeUInt32LE(1, 12);
-    extra.writeUInt32LE(dpi, 16);
-    extra.writeUInt32LE(1, 20);
-
-    chunks.push(ifd, extra, Buffer.from(pixels), Buffer.alloc(padding));
-    position = stripAt + stripLength + padding;
-  });
-  return Buffer.concat(chunks);
+  const circles = [...inner.matchAll(/<circle[^>]*\/>/g)]
+    .map(([tag]) => tag)
+    .filter((tag) => /fill="currentColor"/.test(tag))
+    .join("");
+  return `<path fill="currentColor" fill-rule="nonzero" d="${fills.join("")}"/>${circles}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -738,18 +649,6 @@ const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 // ---------------------------------------------------------------------------
 
 function renderMacos(marks) {
-  if (existsSync(RASTER_ICON)) {
-    const master = readFileSync(RASTER_ICON);
-    const entries = ICNS_TYPES.map(([, px, type]) => ({ type, data: rasterMacIcon(master, px) }));
-    emit(join(OUT, "macos", "AppIcon.icns"), icns(entries));
-    const full = rasterMacIcon(master, 1024);
-    emit(join(OUT, "macos", "AppIcon-1024.png"), full);
-    // No dark variant has been authored for the raster art; shipping the
-    // same image keeps the file truthful rather than teal.
-    emit(join(OUT, "macos", "AppIcon-1024-dark.png"), full);
-    renderIconComposerRaster(master);
-    return;
-  }
   const forSize = (px) => macosTile(marks.at(px), { shadow: px >= 64 });
   const entries = ICNS_TYPES.map(([, px, type]) => ({ type, data: png(forSize(px), px) }));
   emit(join(OUT, "macos", "AppIcon.icns"), icns(entries));
@@ -761,48 +660,11 @@ function renderMacos(marks) {
 }
 
 /**
- * The Icon Composer package from the raster art: the sampled tile
- * gradient as the fill, the lifted white glyph as the one layer. The
- * glyph PNG is in tile coordinates, so covering the canvas places it.
- */
-function renderIconComposerRaster(master) {
-  void master;
-  const pkg = join(OUT, "macos", "EverTranscript.icon");
-  const rgb = (hex) => {
-    const n = parseInt(hex.slice(1), 16);
-    const c = (v) => (v / 255).toFixed(5);
-    return `srgb:${c(n >> 16)},${c((n >> 8) & 255)},${c(n & 255)},1.00000`;
-  };
-  emit(join(pkg, "Assets", "Glyph.png"), readFileSync(RASTER_GLYPH));
-  emit(
-    join(pkg, "icon.json"),
-    json({
-      fill: {
-        "linear-gradient": [rgb(RASTER_GRADIENT[0]), rgb(RASTER_GRADIENT[1])],
-        orientation: { start: { x: 0.5, y: 0 }, stop: { x: 0.5, y: 1 } },
-      },
-      groups: [
-        {
-          layers: [
-            {
-              "image-name": "Glyph.png",
-              name: "Glyph",
-              position: { scale: 1, "translation-in-points": [0, 0] },
-            },
-          ],
-          shadow: { kind: "neutral", opacity: 0.5 },
-          translucency: { enabled: true, value: 0.5 },
-        },
-      ],
-      "supported-platforms": { circles: ["watchOS"], squares: "shared" },
-    }),
-  );
-}
-
-/**
  * The macOS 26 icon as Icon Composer's document: a fill and one glyph
  * layer, from which the system derives the light, dark, clear and tinted
- * renditions itself. The schema follows the packages Icon Composer writes.
+ * renditions itself. The glyph is filled outlines, because Icon Composer
+ * fills whatever path it is given and would turn a stroked mark into a
+ * disc.
  */
 function renderIconComposer(marks) {
   const pkg = join(OUT, "macos", "EverTranscript.icon");
@@ -811,20 +673,17 @@ function renderIconComposer(marks) {
     const c = (v) => (v / 255).toFixed(5);
     return `srgb:${c(n >> 16)},${c((n >> 8) & 255)},${c(n & 255)},1.00000`;
   };
-  // The glyph as its own document, drawn at the size it should appear on
-  // the 1024-point canvas, so the layer imports at scale 1.
-  // Filled outlines, not strokes: Icon Composer fills whatever path it is
-  // given and ignores the stroke, which turned a stroked mark into a disc.
+  const outlined = { markup: outlineGlyph(marks.big), ink: marks.big.ink };
   const glyphDocument =
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">` +
-    place(outlineGlyph(marks.at(1024)), { cx: 512, cy: 512, inkWidth: 1024 * GLYPH_FRACTION, color: COLOR.paper }) +
+    place(outlined, { cx: 512, cy: 512, inkHeight: 1024 * GLYPH_HEIGHT_FRACTION, color: COLOR.paper }) +
     `</svg>`;
   emit(join(pkg, "Assets", "Mark.svg"), glyphDocument);
   emit(
     join(pkg, "icon.json"),
     json({
       fill: {
-        "linear-gradient": [rgb(COLOR.teal400), rgb(COLOR.teal700)],
+        "linear-gradient": [rgb(TILE_GRADIENT[0]), rgb(TILE_GRADIENT[1])],
         orientation: { start: { x: 0.5, y: 0 }, stop: { x: 0.5, y: 1 } },
       },
       groups: [
@@ -832,8 +691,8 @@ function renderIconComposer(marks) {
           layers: [
             {
               "fill-specializations": [
-                { value: { solid: rgb(COLOR.paper) } },
-                { appearance: "dark", value: { solid: rgb(COLOR.paper) } },
+                { value: { solid: rgb("#FFFFFF") } },
+                { appearance: "dark", value: { solid: rgb("#FFFFFF") } },
               ],
               "image-name": "Mark.svg",
               name: "Mark",
@@ -849,60 +708,15 @@ function renderIconComposer(marks) {
   );
 }
 
-/**
- * The raster tile, full bleed on a `size` canvas over its own gradient so
- * the tile's rounded corners disappear into the same colours — what iOS,
- * the touch icon and the store tiles want.
- */
-function rasterFullBleed(master, size) {
-  const tile = rasterAt(master, RASTER_TILE.canvas, size, {
-    crop: { x: RASTER_TILE.x, y: RASTER_TILE.y, w: RASTER_TILE.side, h: RASTER_TILE.side },
-  });
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">` +
-    `<defs>${gradient("g", ...RASTER_GRADIENT)}</defs>` +
-    `<rect width="${size}" height="${size}" fill="url(#g)"/>` +
-    `<image href="${pngDataUri(tile)}" width="${size}" height="${size}"/>` +
-    `</svg>`;
-  return rasterize(svg, size);
-}
-
-/** The white glyph alone on a transparent `size` canvas, ink centred. */
-function rasterGlyphOnly(glyph, size, inkWidth, tint = null) {
-  const ink = glyphInk(glyph, inkWidth, tint ? { tint } : {});
-  const h = glyphHeightFor(inkWidth);
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">` +
-    `<image href="${pngDataUri(ink)}" x="${(size - inkWidth) / 2}" y="${(size - h) / 2}" width="${inkWidth}" height="${h}"/>` +
-    `</svg>`;
-  return rasterize(svg, size).asPng();
-}
-
 function renderIos(marks) {
   const set = join(OUT, "ios", "Assets.xcassets", "AppIcon.appiconset");
-  if (existsSync(RASTER_ICON)) {
-    const master = readFileSync(RASTER_ICON);
-    const glyph = readFileSync(RASTER_GLYPH);
-    // The ink at the proportion it has on the tile, scaled to a full-bleed
-    // canvas: 511 of 824 tile units.
-    const inkWidth = Math.round((1024 * GLYPH_INK.w) / RASTER_TILE.side);
-    emit(join(set, "AppIcon-1024.png"), opaquePng(rasterFullBleed(master, 1024), COLOR.coral500));
-    emit(join(set, "AppIcon-1024-dark.png"), rasterGlyphOnly(glyph, 1024, inkWidth));
-    emit(join(set, "AppIcon-1024-tinted.png"), rasterGlyphOnly(glyph, 1024, inkWidth, "#E6E6E6"));
-    writeIosContents(set);
-    return;
-  }
   const glyph = marks.at(1024);
   // No alpha channel: App Store Connect rejects a 1024 icon that has one.
-  emit(join(set, "AppIcon-1024.png"), opaquePng(rasterize(squareTile(glyph), 1024), COLOR.teal500));
+  emit(join(set, "AppIcon-1024.png"), opaquePng(rasterize(squareTile(glyph), 1024), COLOR.coral500));
   // Dark: the system supplies the dark background; only the mark is drawn.
-  emit(join(set, "AppIcon-1024-dark.png"), png(squareTile(glyph, { background: false }), 1024));
+  emit(join(set, "AppIcon-1024-dark.png"), png(glyphOnly(glyph, 1024, { color: "#FFFFFF" }), 1024));
   // Tinted: a grayscale image the system colours. Lighter means more tint.
-  emit(join(set, "AppIcon-1024-tinted.png"), png(squareTile(glyph, { background: false, glyphColor: "#E6E6E6" }), 1024));
-  writeIosContents(set);
-}
-
-function writeIosContents(set) {
+  emit(join(set, "AppIcon-1024-tinted.png"), png(glyphOnly(glyph, 1024, { color: "#E6E6E6" }), 1024));
   const entry = (filename, appearance) => ({
     ...(appearance ? { appearances: [{ appearance: "luminosity", value: appearance }] } : {}),
     filename,
@@ -929,46 +743,17 @@ function renderAndroid(marks) {
     ["xxhdpi", 3],
     ["xxxhdpi", 4],
   ];
-  const raster = existsSync(RASTER_ICON)
-    ? { master: readFileSync(RASTER_ICON), glyph: readFileSync(RASTER_GLYPH) }
-    : null;
   // Adaptive icon foreground: a 108 dp canvas whose outer 21 dp the
-  // launcher may mask away; the mark stays inside the 66 dp safe circle —
-  // the portrait glyph is constrained by height there.
-  const foreground = (glyph) =>
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108">` +
-    place(glyph, { cx: 54, cy: 54, inkWidth: 44, color: COLOR.paper }) +
-    `</svg>`;
-  // The tile full bleed under a launcher-shaped clip, for pre-adaptive
-  // launchers.
-  const clippedTile = (size, shape) => {
-    const tile = rasterFullBleed(raster.master, size).asPng();
-    const clip =
-      shape === "circle"
-        ? `<circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}"/>`
-        : `<rect width="${size}" height="${size}" rx="${size * 0.2}"/>`;
-    const svg =
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}">` +
-      `<defs><clipPath id="c">${clip}</clipPath></defs>` +
-      `<g clip-path="url(#c)"><image href="${pngDataUri(tile)}" width="${size}" height="${size}"/></g>` +
-      `</svg>`;
-    return rasterize(svg, size).asPng();
-  };
+  // launcher may mask away; the portrait mark is height-constrained inside
+  // the 66 dp safe circle.
+  const foreground = (glyph, size) => png(glyphOnly(glyph, size, { color: "#FFFFFF", heightFraction: 46 / 108 }), size);
   for (const [density, scale] of densities) {
     const dir = join(res, `mipmap-${density}`);
     const fg = Math.round(108 * scale);
     const legacy = Math.round(48 * scale);
-    if (raster) {
-      const inkHeight = (46 / 108) * fg;
-      const inkWidth = (inkHeight * GLYPH_INK.w) / GLYPH_INK.h;
-      emit(join(dir, "ic_launcher_foreground.png"), rasterGlyphOnly(raster.glyph, fg, inkWidth));
-      emit(join(dir, "ic_launcher.png"), clippedTile(legacy, "rounded"));
-      emit(join(dir, "ic_launcher_round.png"), clippedTile(legacy, "circle"));
-    } else {
-      emit(join(dir, "ic_launcher_foreground.png"), png(foreground(marks.at(fg)), fg));
-      emit(join(dir, "ic_launcher.png"), png(roundedTile(marks.at(legacy)), legacy));
-      emit(join(dir, "ic_launcher_round.png"), png(circleTile(marks.at(legacy)), legacy));
-    }
+    emit(join(dir, "ic_launcher_foreground.png"), foreground(marks.at(fg), fg));
+    emit(join(dir, "ic_launcher.png"), png(roundedTile(marks.at(legacy)), legacy));
+    emit(join(dir, "ic_launcher_round.png"), png(circleTile(marks.at(legacy)), legacy));
   }
   const adaptive =
     `<?xml version="1.0" encoding="utf-8"?>\n` +
@@ -979,83 +764,32 @@ function renderAndroid(marks) {
     `</adaptive-icon>\n`;
   emit(join(res, "mipmap-anydpi-v26", "ic_launcher.xml"), adaptive);
   emit(join(res, "mipmap-anydpi-v26", "ic_launcher_round.xml"), adaptive);
-  const background = raster ? COLOR.coral500 : COLOR.teal500;
   emit(
     join(res, "values", "ic_launcher_background.xml"),
-    `<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">${background}</color>\n</resources>\n`,
+    `<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <color name="ic_launcher_background">${COLOR.coral500}</color>\n</resources>\n`,
   );
-  emit(
-    join(OUT, "android", "playstore-512.png"),
-    raster
-      ? opaquePng(rasterFullBleed(raster.master, 512), COLOR.coral500)
-      : opaquePng(rasterize(squareTile(marks.at(512)), 512), COLOR.teal500),
-  );
+  emit(join(OUT, "android", "playstore-512.png"), opaquePng(rasterize(squareTile(marks.at(512)), 512), COLOR.coral500));
 }
 
 function renderWindows(marks) {
   const sizes = [16, 24, 32, 48, 64, 128, 256];
-  const images = existsSync(RASTER_ICON)
-    ? (() => {
-        // Full bleed, as Windows wants it: the tile cut out of the master
-        // and scaled edge to edge, no margin, no shadow.
-        const master = readFileSync(RASTER_ICON);
-        return sizes.map((size) => ({
-          size,
-          data: rasterAt(master, RASTER_TILE.canvas, size, { crop: { x: RASTER_TILE.x, y: RASTER_TILE.y, w: RASTER_TILE.side, h: RASTER_TILE.side } }),
-        }));
-      })()
-    : sizes.map((size) => ({ size, data: png(roundedTile(marks.at(size)), size) }));
+  const images = sizes.map((size) => ({ size, data: png(roundedTile(marks.at(size)), size) }));
   emit(join(OUT, "windows", "EverTranscript.ico"), ico(images));
   emit(join(OUT, "windows", "EverTranscript-256.png"), images[images.length - 1].data);
 }
 
 function renderWeb(marks) {
   const web = join(OUT, "web");
-  if (existsSync(RASTER_ICON)) {
-    const master = readFileSync(RASTER_ICON);
-    const glyph = readFileSync(RASTER_GLYPH);
-    const tileCrop = { crop: { x: RASTER_TILE.x, y: RASTER_TILE.y, w: RASTER_TILE.side, h: RASTER_TILE.side } };
-    const tileAt = (size) => rasterAt(master, RASTER_TILE.canvas, size, tileCrop);
-    // The SVG favicon carries the tile as an embedded 256 px raster —
-    // enough for anything a browser draws it at.
-    emit(
-      join(web, "favicon.svg"),
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><image href="${pngDataUri(tileAt(256))}" width="64" height="64"/></svg>\n`,
-    );
-    emit(join(web, "favicon.ico"), ico([16, 32, 48].map((size) => ({ size, data: tileAt(size) }))));
-    emit(join(web, "favicon-32.png"), tileAt(32));
-    emit(join(web, "apple-touch-icon.png"), opaquePng(rasterFullBleed(master, 180), COLOR.coral500));
-    emit(join(web, "icon-192.png"), tileAt(192));
-    emit(join(web, "icon-512.png"), tileAt(512));
-    // Maskable: the gradient full bleed, the glyph inside the 80% safe
-    // circle (a portrait glyph is height-constrained there).
-    const inkHeight = 512 * 0.48;
-    const inkWidth = (inkHeight * GLYPH_INK.w) / GLYPH_INK.h;
-    const ink = glyphInk(glyph, Math.round(inkWidth));
-    const maskable =
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">` +
-      `<defs>${gradient("g", ...RASTER_GRADIENT)}</defs>` +
-      `<rect width="512" height="512" fill="url(#g)"/>` +
-      `<image href="${pngDataUri(ink)}" x="${(512 - inkWidth) / 2}" y="${(512 - inkHeight) / 2}" width="${inkWidth}" height="${inkHeight}"/>` +
-      `</svg>`;
-    emit(join(web, "maskable-512.png"), rasterize(maskable, 512).asPng());
-    writeWebManifest(web, COLOR.coral500);
-    return;
-  }
-  // The SVG favicon is the one file that stays vector: the small mark on
-  // the rounded tile, at any size the browser wants.
+  // The SVG favicon stays vector: the small mark on the rounded tile, at
+  // any size the browser wants.
   emit(join(web, "favicon.svg"), `${roundedTile(marks.at(16), { size: 64 })}\n`);
   emit(join(web, "favicon.ico"), ico([16, 32, 48].map((size) => ({ size, data: png(roundedTile(marks.at(size)), size) }))));
   emit(join(web, "favicon-32.png"), png(roundedTile(marks.at(32)), 32));
-  emit(join(web, "apple-touch-icon.png"), opaquePng(rasterize(squareTile(marks.at(180)), 180), COLOR.teal500));
+  emit(join(web, "apple-touch-icon.png"), opaquePng(rasterize(squareTile(marks.at(180)), 180), COLOR.coral500));
   emit(join(web, "icon-192.png"), png(roundedTile(marks.at(192)), 192));
   emit(join(web, "icon-512.png"), png(roundedTile(marks.at(512)), 512));
-  // Maskable: full bleed, the mark inside the 80% safe zone.
-  emit(join(web, "maskable-512.png"), png(squareTile(marks.at(512), { glyphFraction: GLYPH_FRACTION * 0.8 }), 512));
-  writeWebManifest(web, COLOR.teal500);
-}
-
-function writeWebManifest(web, theme) {
+  // Maskable: full bleed, the mark inside the 80% safe circle.
+  emit(join(web, "maskable-512.png"), png(squareTile(marks.at(512), { heightFraction: 0.48 }), 512));
   emit(
     join(web, "site.webmanifest"),
     json({
@@ -1067,64 +801,17 @@ function writeWebManifest(web, theme) {
         { src: "/icon-512.png", sizes: "512x512", type: "image/png" },
         { src: "/maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
       ],
-      theme_color: theme,
+      theme_color: COLOR.coral500,
       background_color: COLOR.paper,
       display: "standalone",
     }),
   );
 }
 
-/**
- * A tray state drawn from the raster glyph at one scale (1 or 2): the ink
- * tinted flat (black for the template, white for the dark preview), the
- * same badge geometry the vector states use.
- */
-function trayGlyphRaster(glyph, state, scale, color) {
-  const S = 18 * scale;
-  const withBadge = state === "recording" || state === "attention";
-  const inkHeight = (withBadge ? 14.5 : 16) * scale;
-  const inkWidth = (inkHeight * GLYPH_INK.w) / GLYPH_INK.h;
-  const cx = (withBadge ? 8 : 9) * scale;
-  const cy = (withBadge ? 8.5 : 9) * scale;
-  const ink = glyphInk(glyph, Math.round(inkWidth * 2), { tint: color, opacity: state === "busy" ? 0.45 : 1 });
-  const badge = {
-    ready: "",
-    recording: `<circle cx="${14.5 * scale}" cy="${14.5 * scale}" r="${3.25 * scale}" fill="${color}"/>`,
-    attention: `<circle cx="${14.5 * scale}" cy="${14.5 * scale}" r="${2.75 * scale}" fill="none" stroke="${color}" stroke-width="${1.5 * scale}"/>`,
-    busy: "",
-  }[state];
-  const knockout = withBadge
-    ? `<mask id="knock"><rect width="${S}" height="${S}" fill="#fff"/><circle cx="${14.5 * scale}" cy="${14.5 * scale}" r="${4.75 * scale}" fill="#000"/></mask>`
-    : "";
-  const image = `<image href="${pngDataUri(ink)}" x="${cx - inkWidth / 2}" y="${cy - inkHeight / 2}" width="${inkWidth}" height="${inkHeight}"/>`;
-  const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${S} ${S}">` +
-    `<defs>${knockout}</defs>` +
-    (withBadge ? `<g mask="url(#knock)">${image}</g>` : image) +
-    badge +
-    `</svg>`;
-  return rasterize(svg, S);
-}
-
 /** The menu bar's four states, as the TIFFs `tray/macos.rs` embeds. */
 function renderTray(marks) {
   const glyphs = join(REPO, "crates", "evertranscript-core", "src", "tray", "glyphs");
-  const raster = existsSync(RASTER_GLYPH) ? readFileSync(RASTER_GLYPH) : null;
   for (const state of ["ready", "recording", "busy", "attention"]) {
-    if (raster) {
-      const x1 = trayGlyphRaster(raster, state, 1, "#000000");
-      const x2 = trayGlyphRaster(raster, state, 2, "#000000");
-      emit(
-        join(glyphs, `${state}.tiff`),
-        tiff([
-          { width: x1.width, height: x1.height, pixels: x1.pixels, dpi: 72 },
-          { width: x2.width, height: x2.height, pixels: x2.pixels, dpi: 144 },
-        ]),
-      );
-      emit(join(OUT, "tray", `${state}@2x.png`), x2.asPng());
-      emit(join(OUT, "tray", `${state}-dark@2x.png`), trayGlyphRaster(raster, state, 2, "#FFFFFF").asPng());
-      continue;
-    }
     const svg = trayGlyph(marks.at(18), { state });
     const x1 = rasterize(svg, 18);
     const x2 = rasterize(svg, 36);
@@ -1203,28 +890,20 @@ function renderLockups(marks) {
 
   // The mark sits to the left, a little taller than the capitals and
   // centred on them; the baseline is y = 0, so the capitals span -capHeight..0.
-  const raster = existsSync(RASTER_GLYPH) ? readFileSync(RASTER_GLYPH) : null;
-  const inkHeight = raster ? capHeight * 1.3 : capHeight * 1.2;
-  const inkWidth = raster ? (inkHeight * GLYPH_INK.w) / GLYPH_INK.h : capHeight * 1.2;
+  const inkHeight = capHeight * 1.3;
+  const inkWidth = (inkHeight * marks.big.ink.w) / marks.big.ink.h;
   const gap = capHeight * 0.45;
   const cx = box.x1 - gap - inkWidth / 2;
   const cy = -capHeight / 2;
   const top = Math.min(box.y1, cy - inkHeight / 2) - pad;
   const bottom = Math.max(box.y2, cy + inkHeight / 2) + pad;
-  // The embedded glyph is rendered at 4x its display size so the preview
-  // rasters stay sharp.
-  const mark = (color) =>
-    raster
-      ? `<image href="${pngDataUri(glyphInk(raster, Math.round(inkWidth * 4), { tint: color }))}" ` +
-        `x="${f(cx - inkWidth / 2)}" y="${f(cy - inkHeight / 2)}" width="${f(inkWidth)}" height="${f(inkHeight)}"/>`
-      : place(marks.mark, { cx, cy, inkWidth, color });
   const lockup = (color) =>
     document(
       cx - inkWidth / 2 - pad,
       top,
       box.x2 + pad,
       bottom,
-      mark(color) + `<path d="${d}" fill="${color}"/>`,
+      place(marks.big, { cx, cy, inkHeight, color }) + `<path d="${d}" fill="${color}"/>`,
     );
   emit(join(OUT, "lockups", "lockup-light.svg"), lockup(COLOR.ink));
   emit(join(OUT, "lockups", "lockup-dark.svg"), lockup(COLOR.paper));
@@ -1236,7 +915,7 @@ function renderLockups(marks) {
   // The same drawing as filled outlines, for anything that cannot stroke.
   emit(
     join(OUT, "lockups", "mark-outlined.svg"),
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><g color="${COLOR.ink}">${outlineGlyph(marks.mark)}</g></svg>\n`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><g color="${COLOR.ink}">${outlineGlyph(marks.big)}</g></svg>\n`,
   );
 }
 
@@ -1250,9 +929,9 @@ function renderElectron() {
 
 /** The mark, with its small-size variant chosen by output size. */
 function loadMarks(markPath, smallPath) {
-  const mark = loadGlyph(markPath);
-  const small = smallPath && existsSync(smallPath) ? loadGlyph(smallPath) : mark;
-  return { at: (px) => (px <= 32 ? small : mark), mark, small };
+  const big = loadGlyph(markPath);
+  const small = smallPath && existsSync(smallPath) ? loadGlyph(smallPath) : big;
+  return { at: (px) => (px <= 32 ? small : big), big, small };
 }
 
 function renderAll() {
@@ -1292,8 +971,7 @@ function sheet(rows, { gap = 24, pad = 32, background = "#FFFFFF" } = {}) {
             `height="${h + 2 * cell.backdrop.pad}" rx="${cell.backdrop.radius ?? 0}" fill="${cell.backdrop.fill}"/>`,
         );
       }
-      const href = `data:image/png;base64,${cell.png.toString("base64")}`;
-      items.push(`<image x="${x}" y="${y}" width="${w}" height="${h}" image-rendering="optimizeSpeed" href="${href}"/>`);
+      items.push(`<image x="${x}" y="${y}" width="${w}" height="${h}" image-rendering="optimizeSpeed" href="${pngDataUri(cell.png)}"/>`);
       x += w + gap + (cell.backdrop ? 2 * cell.backdrop.pad : 0);
       tallest = Math.max(tallest, h + (cell.backdrop ? 2 * cell.backdrop.pad : 0));
     }
@@ -1312,7 +990,7 @@ const cell = (buffer, width, height, zoom = 1, backdrop) => ({ png: buffer, widt
 /**
  * Stand-ins for Dock neighbours: the colours of the apps next door, with a
  * letter or a stroke where their marks go. Not their icons — those are
- * theirs — just enough to see the teal against the blues and the green.
+ * theirs — just enough to see the tile against the blues and the green.
  */
 function neighbour(fill, shape) {
   const svg =
@@ -1373,7 +1051,7 @@ function renderExplorations(outDir) {
       cell(files["tray-dark@2x"], 36, 36, 3, { ...bar, fill: dark }),
       cell(files.favicon, 16, 16, 1, { pad: 8, radius: 6, fill: "#F3F3F3" }),
       cell(files.favicon, 16, 16, 4, { pad: 8, radius: 6, fill: "#F3F3F3" }),
-      ...NEIGHBOURS.map(([fill, letter]) => cell(neighbour(fill, letter), 64, 64)),
+      ...NEIGHBOURS.map(([fill, shape]) => cell(neighbour(fill, shape), 64, 64)),
       cell(files[64], 64, 64),
     ]);
   }

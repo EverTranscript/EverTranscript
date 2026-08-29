@@ -1,7 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-  <!-- B: a monoline lowercase e whose crossbar runs out to the right as a line. -->
-  <g fill="none" stroke="currentColor" stroke-width="32" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M48,128 H208"/>
-    <path d="M168,128 A60,60 0 1 0 154,166.6"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" data-ink="48 32 160 192">
+  <g fill="none" stroke="currentColor" stroke-width="17" stroke-linecap="round" stroke-linejoin="round">
+    <!-- body: coronet, back-of-head arc, belly, tail curl -->
+    <path d="M116,54 C104,56 92,62 82,74 C66,92 56,112 56,134 C56,162 60,187 72,202 C84,217 105,222 123,218 C142,214 156,205 159,191 C163,176 158,163 146,158 C136,154 125,158 122,168 C121,173 122,178 125,181"/>
+    <!-- head right side, snout, underside, chest -->
+    <path d="M116,54 C133,56 149,63 159,74 C166,81 169,87 170,93 C178,95 191,98 197,103 C202,108 202,115 197,119 C190,124 120,121 96,121 C84,121 78,132 74,150"/>
+    <!-- eye -->
+    <circle cx="135" cy="80" r="8" fill="currentColor" stroke="none"/>
+    <!-- coronet ball -->
+    <circle cx="116" cy="39" r="9.5" fill="currentColor" stroke="none"/>
   </g>
 </svg>
