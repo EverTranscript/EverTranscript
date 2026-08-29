@@ -89,6 +89,11 @@ pub fn pipe_name() -> String {
 
 /// The derivation, split out so it can be tested on any platform — a
 /// regression here is invisible until two Cores fight over one pipe.
+///
+/// Genuinely unused away from Windows, where there is no pipe to name; the
+/// tests still exercise it everywhere so the property is not asserted only
+/// on the platform that cannot easily run them.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn pipe_name_for(runtime_dir: Option<&std::ffi::OsStr>, user: &str) -> String {
     match runtime_dir {
         Some(dir) => {
