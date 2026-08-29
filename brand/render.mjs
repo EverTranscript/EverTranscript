@@ -1012,16 +1012,18 @@ const NEIGHBOURS = [
 
 function renderExplorations(outDir) {
   const dir = join(BRAND, "explorations");
+  // `<name>-small.svg` beside a concept is its small-size variant, used at
+  // 32 px and under exactly as the shipping pipeline would use it.
   const concepts = readdirSync(dir)
-    .filter((name) => name.endsWith(".svg"))
+    .filter((name) => name.endsWith(".svg") && !name.endsWith("-small.svg"))
     .sort();
   const rows = [];
   const light = "#ECECEC";
   const dark = "#1E1E1E";
   const bar = { pad: 6, radius: 4 };
   for (const name of concepts) {
-    const marks = loadMarks(join(dir, name));
     const slug = basename(name, ".svg");
+    const marks = loadMarks(join(dir, name), join(dir, `${slug}-small.svg`));
     const at = (px) => png(macosTile(marks.at(px), { shadow: px >= 64 }), px);
     const tray = (color, px) => png(trayGlyph(marks.at(18), { color }), px);
     const files = {

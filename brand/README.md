@@ -100,8 +100,11 @@ image model, with the identity constraints baked in.
 
 ## Exploring
 
-The three original candidates and the contact sheet that chose between
-them are kept in `explorations/` (`pnpm -C brand render:explorations`
-re-renders the sheet). That pick — the *e* — is logged in `DECISIONS.md`
-Q15 and was superseded by the seahorse (Q25, vectorized in Q26); the *e*
-survives only in `explorations/` and the git history.
+The three original candidates are kept in `explorations/`, and the
+contact sheet (`pnpm -C brand render:explorations`) renders them beside
+the shipped seahorse — a row per master, each with its `-small` variant
+at 32 px and under. The sheet always draws in the current palette, so
+the candidates now sit on coral although they were judged on teal; the
+teal renders live in the git history with the pick itself — the *e*,
+logged in `DECISIONS.md` Q15 and superseded by the seahorse (Q25,
+vectorized in Q26).
