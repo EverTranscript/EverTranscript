@@ -145,6 +145,12 @@ const HELPER_EXCEPTIONS: &[(&str, &str)] = &[
     ("us.zoom.ZoomHybridConf", "us.zoom.xos"),
     ("us.zoom.ZoomClips", "us.zoom.xos"),
     ("com.microsoft.teams2.helper", "com.microsoft.teams2"),
+    // Teams does not record from any of its `.helper` processes. Observed
+    // live during a Teams call: the only process reporting running input is
+    // `com.microsoft.teams2.modulehost`, which the `.helper` rule cannot
+    // reach — so the shipped Teams row never matched and Auto-Record never
+    // fired for it. Found the same way the WebKit case below was.
+    ("com.microsoft.teams2.modulehost", "com.microsoft.teams2"),
 ];
 
 /// WebKit's out-of-process children, which carry no hint of their host.
@@ -416,6 +422,33 @@ mod tests {
             assert!(
                 list.watches(&app(&responsible)),
                 "{browser} should match Browser Meetings"
+            );
+        }
+    }
+
+    #[test]
+    fn teams_holds_the_microphone_under_a_bundle_id_of_its_own() {
+        // Observed live: during a Microsoft Teams call the process holding
+        // the microphone is `com.microsoft.teams2.modulehost`. It carries no
+        // `.helper`, so the rule leaves it alone and the Watchlist row for
+        // `com.microsoft.teams2` never matches — Teams, one of the three
+        // named meeting apps ADR-0030 ships, would never have triggered.
+        //
+        // The sibling `.helper` processes exist too but are never the ones
+        // recording, which is why the table already having them was not
+        // enough. Both are asserted so a future rewrite cannot fix one and
+        // silently drop the other.
+        let list = Watchlist::shipped();
+        for process in [
+            "com.microsoft.teams2.modulehost",
+            "com.microsoft.teams2.helper",
+            "com.microsoft.teams2",
+        ] {
+            let responsible = responsible_app(process);
+            assert_eq!(responsible, "com.microsoft.teams2", "attributing {process}");
+            assert!(
+                list.watches(&app(&responsible)),
+                "{process} should reach the Teams row"
             );
         }
     }

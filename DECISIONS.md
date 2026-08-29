@@ -279,3 +279,14 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Justification:** They are other companies' copyrighted artwork and trademarks, and ADR-0033 makes this tree public at M2 — committing them would make the repo redistribute marks that are not ours (a different thing from *naming* the products, which `docs/competitive-facts-*.md` already does). Untracked-with-provenance keeps the requested local convenience and loses nothing that cannot be regenerated from the named paths. Easy to override: `git add -f brand/reference` if the Operator wants them tracked.
 **Outcome:** assumed
 **Ref:** (pending)
+
+## Q20 — m2-auto-record/09-m2-closeout — finding
+
+**Question:** Teams was installed, its bundle id verified against the real app, and every Watchlist row was proven through the Core — so was a live Teams run worth the Operator's sign-in, or was it confirmation of something already known?
+**Options considered:** close the row on the verified bundle id and the Core-level proof / ask the Operator to sign in and drive a real Teams call
+**Chosen:** Ran it live. Teams held the microphone and Auto-Record did nothing: the recording process is `com.microsoft.teams2.modulehost`, which has no `.helper` in it, so `responsible_app` passed it through unchanged and the shipped `com.microsoft.teams2` row never matched. Mapped it in `HELPER_EXCEPTIONS`; the same call then triggered in ~6 s and auto-stopped at ~45 s.
+**Decided-by:** human
+**Justification:** The closeout ticket had written down, in advance, that a live run "would add only whether the platform reports *that application* holding the microphone". That sentence names the entire failure mode and then dismisses it. It is the second time this milestone: Safari's audio processes report `com.apple.WebKit.*`, and that row was dead too. Both apps passed every unit test, because the tests and the code were written from the same wrong belief about the name — a fixture can only ever assert the id you already thought of. Before these two fixes, 2 of 6 Watchlist rows could not have triggered on macOS, in a product whose headline promise is never missing a meeting. The measured 0% false-negative rate was real and was measured on Chrome, which is why it caught neither. What remains unobserved is not reassuring by analogy: Arc and Edge (declined) and all of Windows are exactly where a third instance of this would hide.
+**Outcome:** applied
+**Ref:** (pending)
+
