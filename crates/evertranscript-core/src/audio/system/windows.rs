@@ -134,9 +134,34 @@ fn run(
 
 /// Whether loopback capture is possible. Windows needs no grant, so this
 /// only asks whether an output device exists.
+///
+/// Asked of WASAPI directly rather than through cpal. `default_host()`
+/// aborts the process on a machine with no audio device and the audio
+/// service stopped — not a Rust panic, so nothing can catch it — and a
+/// preflight that can kill the Core is worse than no preflight. Every step
+/// here fails into a plain `Err`, which is what the caller already handles.
 pub fn available() -> std::result::Result<(), String> {
-    match cpal::default_host().default_output_device() {
-        Some(_) => Ok(()),
-        None => Err("this machine has no audio output, so there is nothing to record".to_string()),
+    use windows::Win32::Media::Audio::IMMDeviceEnumerator;
+    use windows::Win32::Media::Audio::MMDeviceEnumerator;
+    use windows::Win32::Media::Audio::eMultimedia;
+    use windows::Win32::Media::Audio::eRender;
+    use windows::Win32::System::Com::CLSCTX_ALL;
+    use windows::Win32::System::Com::COINIT_MULTITHREADED;
+    use windows::Win32::System::Com::CoCreateInstance;
+    use windows::Win32::System::Com::CoInitializeEx;
+
+    const NO_OUTPUT: &str = "this machine has no audio output, so there is nothing to record";
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let Ok(enumerator) =
+            CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
+        else {
+            return Err("this machine's audio system could not be asked".to_string());
+        };
+        match enumerator.GetDefaultAudioEndpoint(eRender, eMultimedia) {
+            Ok(_) => Ok(()),
+            Err(_) => Err(NO_OUTPUT.to_string()),
+        }
     }
 }
