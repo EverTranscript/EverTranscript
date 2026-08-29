@@ -142,13 +142,21 @@ mod eventkit {
     use windows::ApplicationModel::Appointments::AppointmentStoreAccessType;
     use windows::Foundation::DateTime;
     use windows::Foundation::TimeSpan;
+    use windows::Win32::System::Com::COINIT_MULTITHREADED;
+    use windows::Win32::System::Com::CoInitializeEx;
     use windows_future::AsyncStatus;
     use windows_future::IAsyncOperation;
 
+    /// Blocks on a WinRT async operation, with a bound.
+    ///
+    /// Bounded because this runs on a polling thread with nothing waiting on
+    /// it, and an operation that never completes would otherwise spin for
+    /// the life of the Core — a calendar that hangs must degrade to a
+    /// calendar that is unavailable, which the product already handles.
     fn block_on<T: windows::core::RuntimeType + 'static>(
         operation: IAsyncOperation<T>,
     ) -> windows::core::Result<T> {
-        loop {
+        for _ in 0..250 {
             match operation.Status()? {
                 AsyncStatus::Started => {
                     std::thread::sleep(std::time::Duration::from_millis(20));
@@ -156,9 +164,22 @@ mod eventkit {
                 _ => return operation.GetResults(),
             }
         }
+        let _ = operation.Cancel();
+        Err(windows::core::Error::from(
+            windows::Win32::Foundation::E_ABORT,
+        ))
     }
 
     fn store() -> Option<AppointmentStore> {
+        // WinRT needs an apartment on this thread before anything else is
+        // called. The detector does this and the calendar did not, which is
+        // undefined rather than merely unsupported: on a CI runner the test
+        // binary did not fail an assertion, it exited abnormally.
+        // Already-initialised is not an error — the Core may have an
+        // apartment from capture already.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
         AppointmentManager::RequestStoreAsync(AppointmentStoreAccessType::AllCalendarsReadOnly)
             .and_then(block_on)
             .ok()
