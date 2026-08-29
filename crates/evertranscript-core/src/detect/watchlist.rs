@@ -435,6 +435,14 @@ mod tests {
         // the platform reports them at all.
         let list = Watchlist::shipped();
         for (helper, browser) in [
+            // Read off the shipped Chrome framework on this machine, not
+            // invented: the helper ids Chromium actually builds are
+            // `<bundle id>.helper` for the main and GPU helpers and
+            // `<bundle id>.helper.renderer` — lowercase — for renderers.
+            // `com.google.Chrome.helper` is the one observed holding the
+            // microphone during a live Browser Meetings trigger.
+            ("com.google.Chrome.helper", "com.google.Chrome"),
+            ("com.google.Chrome.helper.renderer", "com.google.Chrome"),
             ("com.google.Chrome.helper.Renderer", "com.google.Chrome"),
             (
                 "com.microsoft.edgemac.helper.Renderer",
