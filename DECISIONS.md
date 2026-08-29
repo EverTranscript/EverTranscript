@@ -290,3 +290,12 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Outcome:** applied
 **Ref:** (pending)
 
+## Q21 — m2-auto-record/05-windows-detection-vertical — finding
+
+**Question:** Q20 ended by naming Windows as where a third instance of the wrong-identifier bug would hide. Wait for the Operator's Windows run to find out, or go looking without a machine?
+**Options considered:** wait — the criterion is already open and honestly labelled / read the Windows path for the same shape and fix what reading can prove
+**Chosen:** Read it. The Windows detector reports a lowercased executable name, `Watchlist::watches` compares ids exactly, and the shipped rows for Zoom, Teams and VooV are macOS bundle ids — so all three could only ever have failed to match. Added `WINDOWS_EXECUTABLES` mapping the executables onto those row ids, through `responsible_app`, which the Windows detector already routes every holder through.
+**Decided-by:** agent
+**Justification:** Two of the three instances of this bug were found by running the app, which made the whole class feel like it needed hardware. It did not: this one is visible in the type of the thing being compared. Ticket 05's second criterion — "the exe→app table twin ... ported as seed data" — was already checked off, which is how it stayed hidden; the macOS `.helper` rule is platform-neutral code, so sharing the *function* read as having built the *table*. A twin of a table is a table. Notably, browsers were spared only by accident: `known_browsers` lists executables beside bundle ids, so two different mechanisms now cover the two kinds of row, and the new table deliberately omits browser executables so they cannot disagree. The four executable names are the only identifiers in this project asserted from memory rather than read off a running machine — the exact mistake Q20 is about — so they are marked unverified in the source, and `windows-check.md` asks for the real ones. A wrong name matches nothing, which is precisely the behaviour being replaced, so the table cannot regress the platform while it waits.
+**Outcome:** applied
+**Ref:** (pending)

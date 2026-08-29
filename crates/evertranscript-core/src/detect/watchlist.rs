@@ -169,6 +169,35 @@ const HELPER_EXCEPTIONS: &[(&str, &str)] = &[
 /// non-Safari WebView as Safari.
 const WEBKIT_PREFIX: &str = "com.apple.WebKit";
 
+/// Windows executables mapped to the row id their app ships under.
+///
+/// The absorption catalog calls for "a Windows exe→id twin" of the helper
+/// table above. It was never built, and nothing noticed: the Windows
+/// detector reports a lowercased executable name, [`Watchlist::watches`]
+/// compares ids exactly, and the shipped rows for Zoom, Teams and VooV are
+/// macOS bundle ids. Three of the four meeting rows could not match anything
+/// on Windows — the platform ADR-0025 makes a ship gate.
+///
+/// Browsers were unaffected only by accident: [`known_browsers`] lists
+/// executables beside bundle ids, so `chrome.exe` reaches Browser Meetings
+/// without any mapping. Those names deliberately stay out of this table so
+/// the two mechanisms cannot disagree about a browser.
+///
+/// **These names are unverified.** Every macOS id here was read off a
+/// running machine; none of these were, because there is no Windows machine
+/// to read them from — that run is the open criterion in ticket 05, and it
+/// is asked for by name in `windows-check.md`. A wrong name here fails
+/// exactly as today's absence does, matching nothing, so the table cannot
+/// regress the platform while it waits to be confirmed.
+const WINDOWS_EXECUTABLES: &[(&str, &str)] = &[
+    ("zoom.exe", "us.zoom.xos"),
+    // New Teams ships as `ms-teams.exe`; classic Teams as `teams.exe`. Both
+    // map, since which one an Operator runs is not ours to choose.
+    ("ms-teams.exe", "com.microsoft.teams2"),
+    ("teams.exe", "com.microsoft.teams2"),
+    ("wemeetapp.exe", "com.tencent.meeting"),
+];
+
 /// The app responsible for a process.
 ///
 /// A rule first, a table second. Chromium and Electron name their helpers by
@@ -185,6 +214,11 @@ pub fn responsible_app(process_id: &str) -> String {
     }
     if process_id.starts_with(WEBKIT_PREFIX) {
         return "com.apple.Safari".to_string();
+    }
+    for (executable, app) in WINDOWS_EXECUTABLES {
+        if process_id == *executable {
+            return (*app).to_string();
+        }
     }
     match process_id.find(".helper") {
         Some(cut) => process_id[..cut].to_string(),
@@ -450,6 +484,43 @@ mod tests {
                 list.watches(&app(&responsible)),
                 "{process} should reach the Teams row"
             );
+        }
+    }
+
+    #[test]
+    fn the_windows_executables_reach_the_rows_they_belong_to() {
+        // Found by reading, after Teams was found by running. The Windows
+        // detector reports a lowercased *executable name*, `watches` is an
+        // exact string match, and the shipped rows for Zoom, Teams and VooV
+        // are macOS bundle ids — so on Windows all three could never match
+        // anything, and the parity gate ADR-0025 sets would have shipped
+        // with three of its four meeting rows dead.
+        //
+        // Browsers escaped this only because `known_browsers` happens to
+        // list executables beside bundle ids. The meeting rows have no such
+        // list, so the mapping goes where the Windows detector already
+        // sends every holder: `responsible_app`.
+        let list = Watchlist::shipped();
+        for (executable, expected) in [
+            ("zoom.exe", "us.zoom.xos"),
+            ("ms-teams.exe", "com.microsoft.teams2"),
+            ("teams.exe", "com.microsoft.teams2"),
+            ("wemeetapp.exe", "com.tencent.meeting"),
+        ] {
+            let responsible = responsible_app(executable);
+            assert_eq!(responsible, expected, "attributing {executable}");
+            assert!(
+                list.watches(&app(&responsible)),
+                "{executable} should reach a shipped row"
+            );
+        }
+
+        // Browser executables must keep reaching Browser Meetings by the
+        // route they already use, not through the new table.
+        for browser in ["chrome.exe", "msedge.exe"] {
+            let responsible = responsible_app(browser);
+            assert_eq!(responsible, browser, "{browser} is responsible for itself");
+            assert!(list.watches(&app(&responsible)), "{browser} still matches");
         }
     }
 

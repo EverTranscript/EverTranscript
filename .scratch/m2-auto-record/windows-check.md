@@ -63,6 +63,36 @@ seconds, then close it and check again after ~25.
 
 **Expect:** the same start/stop pair, attributed to `zoom.exe` or `ms-teams.exe`.
 
+**Please do this step even if step 1 worked, and tell me what it says either
+way.** This is now the most valuable thing in this file. On macOS the same
+check has failed twice, in exactly the same shape: Safari records under
+`com.apple.WebKit.GPU` and Teams under `com.microsoft.teams2.modulehost`, not
+under the ids they ship as. Both rows were dead — those apps could never have
+triggered — and every unit test passed, because the tests asked about the id I
+had assumed. Windows Teams almost certainly does not record from `ms-teams.exe`
+either; it has a `msteams.exe`/`ms-teamsupdate.exe` family and I have not seen
+which one holds an audio session.
+
+So if nothing starts, **that is the expected result, not a broken setup**, and
+the useful output is the name. With the meeting app's microphone test running:
+
+```powershell
+Get-Process | Where-Object { $_.ProcessName -match 'teams|zoom' } |
+  Select-Object Id, ProcessName, Path | Format-Table -AutoSize
+```
+
+Send me that table plus the `status` output. The process name it prints is the
+fix.
+
+I have since added a `WINDOWS_EXECUTABLES` table mapping `zoom.exe`,
+`ms-teams.exe`, `teams.exe` and `wemeetapp.exe` to the rows those apps ship
+under — without it, Zoom, Teams and VooV could not match anything on Windows
+at all, because their rows hold macOS bundle ids. **Those four names are the
+only identifiers in the project I have not read off a running machine**, so
+the table above is what confirms or corrects them. If a name is wrong it
+simply matches nothing, which is what happened before, so nothing is worse
+for having guessed — but nothing is fixed either until you run this.
+
 ## 3. Two Cores at once
 
 This is the one I fixed blind and would most like confirmed:
