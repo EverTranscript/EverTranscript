@@ -56,11 +56,25 @@ pub struct Settings {
     /// a string that could drift from the real default.
     #[serde(default)]
     pub summary_prompt: Option<String>,
+    /// Whether the update check may run (ADR-0034: Sanctioned Traffic entry
+    /// one, disableable).
+    ///
+    /// Ships **on**, because a security fix nobody hears about is the worse
+    /// failure — and off is one switch away, with the guarantee test's final
+    /// form depending on it: updates off plus models downloaded means
+    /// literally zero traffic.
+    #[serde(default = "yes")]
+    pub check_for_updates: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            check_for_updates: true,
             summary_backend: None,
             summary_base_url: None,
             summary_strict: false,

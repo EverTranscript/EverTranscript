@@ -781,6 +781,12 @@
             "null"
           ]
         },
+        "checkForUpdates": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "chineseScript": {
           "description": "Which Han script Mandarin is written in. See [`ChineseScript`].",
           "anyOf": [

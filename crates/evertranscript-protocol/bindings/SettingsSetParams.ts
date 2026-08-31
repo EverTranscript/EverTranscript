@@ -16,7 +16,7 @@ summaryCloudWarningAccepted?: boolean,
  * The system prompt. An empty string resets to the default (story 42),
  * which keeps reset a deletion rather than a copy that could drift.
  */
-summaryPrompt?: string, 
+summaryPrompt?: string, checkForUpdates?: boolean, 
 /**
  * Records that the Operator acknowledged the Briefing. Once true it is
  * never set back to false by a Client: un-acknowledging consent is not

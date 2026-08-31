@@ -358,6 +358,7 @@ impl Core {
             // keeping its own copy, which would drift the first time this
             // one is edited.
             summary_prompt_default: summary::prompt::DEFAULT_SYSTEM_PROMPT.to_string(),
+            check_for_updates: settings.check_for_updates,
         }
     }
 
@@ -410,6 +411,9 @@ impl Core {
             }
             if let Some(base_url) = change.summary_base_url {
                 settings.summary_base_url = Some(base_url);
+            }
+            if let Some(check) = change.check_for_updates {
+                settings.check_for_updates = check;
             }
             if let Some(strict) = change.summary_strict {
                 settings.summary_strict = strict;

@@ -805,6 +805,9 @@ pub struct SettingsSetParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub summary_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub check_for_updates: Option<bool>,
     /// Records that the Operator acknowledged the Briefing. Once true it is
     /// never set back to false by a Client: un-acknowledging consent is not
     /// a thing that happens, and allowing it would make the pre-capture
@@ -873,6 +876,9 @@ pub struct SettingsResponse {
     /// The default, so a Client can show it and offer reset without keeping
     /// its own copy that could drift.
     pub summary_prompt_default: String,
+    /// Whether the update check may run. With this off and models present,
+    /// the product makes no network calls at all (ADR-0034).
+    pub check_for_updates: bool,
 }
 
 // ----------------------------------------------------------------- Watchlist

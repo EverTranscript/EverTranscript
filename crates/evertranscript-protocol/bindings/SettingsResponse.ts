@@ -25,4 +25,9 @@ summaryPrompt?: string,
  * The default, so a Client can show it and offer reset without keeping
  * its own copy that could drift.
  */
-summaryPromptDefault: string, };
+summaryPromptDefault: string, 
+/**
+ * Whether the update check may run. With this off and models present,
+ * the product makes no network calls at all (ADR-0034).
+ */
+checkForUpdates: boolean, };

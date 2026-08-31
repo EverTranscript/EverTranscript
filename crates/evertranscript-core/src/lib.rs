@@ -15,12 +15,14 @@ pub mod diarize;
 pub mod mirror;
 pub mod models;
 pub mod paths;
+pub mod posture;
 pub mod server;
 pub mod settings;
 pub mod store;
 pub mod summary;
 pub mod transport;
 pub mod tray;
+pub mod updates;
 
 pub use server::Core;
 pub use server::Server;
