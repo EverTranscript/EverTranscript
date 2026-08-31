@@ -234,6 +234,39 @@ const MIGRATIONS: &[&str] = &[
         ON CONFLICT (meeting_id) DO UPDATE SET generation = generation + 1;
     END;
     "#,
+    // 8 — Operator Notes and the Summary (M4).
+    //
+    // **These two columns are the only mutable content in the record, and
+    // the distinction is worth stating where it lives.** ADR-0009 makes the
+    // Transcript and its attribution immutable: they are what happened, and
+    // a record that edits itself is the opposite of a legible guarantee.
+    // ADR-0018 refines that rather than contradicting it — Notes are the
+    // Operator's *own writing*, not a claim about what occurred, so they
+    // stay editable forever. The Summary is likewise derived rather than
+    // observed: it can be regenerated, and regenerating it destroys nothing.
+    //
+    // Both live on the Meeting rather than in their own tables because
+    // there is exactly one of each per Meeting and neither is ever queried
+    // independently of it.
+    r#"
+    ALTER TABLE meetings ADD COLUMN notes TEXT;
+    ALTER TABLE meetings ADD COLUMN summary TEXT;
+    -- Which Backend produced the Summary, and when. An Operator who chose
+    -- Cloud and received local quality is owed the reason (story 38), and
+    -- one who chose Local is owed evidence that is what ran.
+    ALTER TABLE meetings ADD COLUMN summary_backend TEXT;
+    ALTER TABLE meetings ADD COLUMN summary_generated_at TEXT;
+
+    -- Editing either has to reach the folder the Operator actually reads.
+    -- `meetings_after_update` is scoped with UPDATE OF and does not list
+    -- these, deliberately: adding them there would also fire on the
+    -- projection worker's own writes.
+    CREATE TRIGGER meetings_after_notes_or_summary
+    AFTER UPDATE OF notes, summary ON meetings BEGIN
+        INSERT INTO mirror_dirty (meeting_id, generation) VALUES (NEW.id, 1)
+        ON CONFLICT (meeting_id) DO UPDATE SET generation = generation + 1;
+    END;
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.

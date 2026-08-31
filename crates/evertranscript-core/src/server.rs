@@ -402,6 +402,21 @@ impl Core {
         self.watchlist().await
     }
 
+    /// Replaces a Meeting's Notes (ADR-0018).
+    pub async fn set_notes(&self, id: &str, notes: &str) -> Result<Meeting> {
+        let id = id.to_string();
+        let notes = notes.to_string();
+        let meeting = self
+            .store
+            .write(move |connection| crate::store::meetings::set_notes(connection, &id, &notes))
+            .await?;
+        // The folder follows the database. Notes are the reason an Operator
+        // opens the Mirror at all, so a stale one here is worse than a stale
+        // transcript.
+        self.mirror_wake.notify_one();
+        Ok(meeting)
+    }
+
     // ---- Speakers and the Voice Registry (M3) ----
 
     /// Every Speaker the app holds (story 30).
@@ -1548,6 +1563,12 @@ impl Server {
             ClientRequest::WatchlistRemove(params) => Ok(serde_json::to_value(
                 self.core.watchlist_remove(&params.id).await?,
             )?),
+
+            ClientRequest::MeetingSetNotes(params) => {
+                let meeting = self.core.set_notes(&params.id, &params.notes).await?;
+                self.announce(MeetingChangeKind::Updated, &meeting).await;
+                Ok(serde_json::to_value(MeetingResponse { meeting })?)
+            }
 
             ClientRequest::SpeakerList(_) => Ok(serde_json::to_value(self.core.speakers().await?)?),
 

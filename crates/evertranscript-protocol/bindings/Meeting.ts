@@ -27,6 +27,24 @@ calendarEventId?: string,
  */
 calendarAttendees?: Array<string>, 
 /**
+ * The Operator's own writing (ADR-0018). **The one mutable thing here**
+ * — the Transcript and its attribution are what happened and never
+ * change, while Notes are what the Operator chose to write and stay
+ * editable forever.
+ */
+notes?: string, 
+/**
+ * The generated Summary, as markdown. Derived rather than observed, so
+ * regenerating it destroys nothing.
+ */
+summary?: string, 
+/**
+ * Which Backend produced the Summary. An Operator who chose Cloud and
+ * got local quality is owed the reason (story 38); one who chose Local
+ * is owed evidence that is what ran.
+ */
+summaryBackend?: string, summaryGeneratedAt?: string, 
+/**
  * The app detection attributed this Meeting to; the Mirror's slug
  * before a Title exists.
  */

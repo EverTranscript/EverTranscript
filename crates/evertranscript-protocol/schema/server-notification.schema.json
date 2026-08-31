@@ -263,8 +263,35 @@
             "null"
           ]
         },
+        "notes": {
+          "description": "The Operator's own writing (ADR-0018). **The one mutable thing here**\n— the Transcript and its attribution are what happened and never\nchange, while Notes are what the Operator chose to write and stay\neditable forever.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "startedAt": {
           "type": "string"
+        },
+        "summary": {
+          "description": "The generated Summary, as markdown. Derived rather than observed, so\nregenerating it destroys nothing.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summaryBackend": {
+          "description": "Which Backend produced the Summary. An Operator who chose Cloud and\ngot local quality is owed the reason (story 38); one who chose Local\nis owed evidence that is what ran.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summaryGeneratedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "title": {
           "description": "None until titled. Clients render the fallback rather than inventing\na title, so \"untitled\" never becomes a stored string.",

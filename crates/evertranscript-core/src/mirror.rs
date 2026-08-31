@@ -154,10 +154,35 @@ pub fn render(meeting: &Meeting, segments: &[TranscriptSegment], names: &Speaker
     }
 
     out.push_str("## Summary\n\n");
-    out.push_str("*Not generated yet.*\n\n");
+    match meeting
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(summary) => {
+            out.push_str(summary);
+            out.push_str("\n\n");
+        }
+        None => out.push_str("*Not generated yet.*\n\n"),
+    }
 
     out.push_str("## Notes\n\n");
-    out.push_str("*None yet.*\n\n");
+    // The Operator's own writing, reproduced exactly. No trimming beyond
+    // the edges, no reflowing, no fixing of their markdown: this is the one
+    // part of the file that is theirs rather than the product's.
+    match meeting
+        .notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(notes) => {
+            out.push_str(notes);
+            out.push_str("\n\n");
+        }
+        None => out.push_str("*None yet.*\n\n"),
+    }
 
     out.push_str("## Transcript\n\n");
     if segments.is_empty() {
@@ -465,6 +490,10 @@ mod tests {
 
     fn meeting() -> Meeting {
         Meeting {
+            notes: None,
+            summary: None,
+            summary_backend: None,
+            summary_generated_at: None,
             id: "0199a1b2-c3d4-7e5f-8901-234567890abc".to_string(),
             started_at: "2026-08-27T10:02:00+08:00".to_string(),
             ended_at: Some("2026-08-27T10:49:00+08:00".to_string()),
@@ -717,6 +746,40 @@ mod tests {
         }];
         let rendered = render(&meeting(), &segments, &SpeakerNames::default());
         assert!(rendered.contains("**You**"));
+    }
+
+    #[test]
+    fn notes_and_summary_replace_their_placeholders() {
+        // Both headings have said "*Not generated yet.*" and "*None yet.*"
+        // in every Mirror since M1. This is the milestone where they stop.
+        let mut meeting = meeting();
+        meeting.summary = Some("# Budget review\n\nWe deferred hiring.".into());
+        meeting.notes = Some("ask about the Q4 number".into());
+
+        let rendered = render(&meeting, &[], &SpeakerNames::default());
+        assert!(rendered.contains("We deferred hiring."));
+        assert!(rendered.contains("ask about the Q4 number"));
+        assert!(!rendered.contains("*Not generated yet.*"));
+        assert!(!rendered.contains("*None yet.*"));
+    }
+
+    #[test]
+    fn the_operators_notes_are_reproduced_exactly() {
+        // Their writing, not the product's. No reflowing, no tidying of
+        // their markdown, no "helpful" normalisation — a Mirror that edits
+        // someone's prose is a Mirror they stop trusting.
+        let awkward = "- one\n\n\n-   two   \n\t- three  *unclosed";
+        let mut meeting = meeting();
+        meeting.notes = Some(awkward.into());
+        assert!(render(&meeting, &[], &SpeakerNames::default()).contains(awkward));
+    }
+
+    #[test]
+    fn whitespace_only_notes_read_as_empty_rather_than_as_content() {
+        // An Operator who opened the pane and typed nothing has no notes.
+        let mut meeting = meeting();
+        meeting.notes = Some("   \n\t\n  ".into());
+        assert!(render(&meeting, &[], &SpeakerNames::default()).contains("*None yet.*"));
     }
 
     #[test]

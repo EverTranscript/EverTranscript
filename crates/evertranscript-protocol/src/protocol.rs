@@ -262,6 +262,12 @@ client_request_definitions! {
         params: WatchlistRemoveParams,
         response: WatchlistResponse,
     },
+    /// Replaces a Meeting's Notes. ADR-0018: the Operator's own writing,
+    /// editable during the call and forever after.
+    MeetingSetNotes => "meeting/setNotes" {
+        params: MeetingSetNotesParams,
+        response: MeetingResponse,
+    },
     /// Every Speaker the app holds — the Voice Registry's inventory
     /// (story 30). ADR-0008 makes this surface mandatory rather than
     /// optional: it is half of what was traded for storing Voiceprints
@@ -518,6 +524,27 @@ pub struct Meeting {
     /// attribution before Diarization exists would be inventing who spoke.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub calendar_attendees: Vec<String>,
+    /// The Operator's own writing (ADR-0018). **The one mutable thing here**
+    /// — the Transcript and its attribution are what happened and never
+    /// change, while Notes are what the Operator chose to write and stay
+    /// editable forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub notes: Option<String>,
+    /// The generated Summary, as markdown. Derived rather than observed, so
+    /// regenerating it destroys nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary: Option<String>,
+    /// Which Backend produced the Summary. An Operator who chose Cloud and
+    /// got local quality is owed the reason (story 38); one who chose Local
+    /// is owed evidence that is what ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_generated_at: Option<String>,
     /// The app detection attributed this Meeting to; the Mirror's slug
     /// before a Title exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1151,6 +1178,16 @@ pub struct DiarizeProgressParams {
     pub done_ms: i64,
     #[ts(type = "number")]
     pub total_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct MeetingSetNotesParams {
+    pub id: String,
+    /// Markdown. Replaces whatever was there — Notes are the Operator's, and
+    /// a merge would be the product having an opinion about their writing.
+    pub notes: String,
 }
 
 #[cfg(test)]

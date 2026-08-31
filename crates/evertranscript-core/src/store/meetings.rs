@@ -21,7 +21,8 @@ use super::now_rfc3339;
 
 const MEETING_COLUMNS: &str = "id, started_at, ended_at, title, detected_app, \
                                mirror_filename, audio_path, audio_notes, \
-                               calendar_event_id, calendar_attendees";
+                               calendar_event_id, calendar_attendees, notes, summary, \
+                               summary_backend, summary_generated_at";
 
 fn row_to_meeting(row: &Row<'_>) -> rusqlite::Result<Meeting> {
     let started_at: String = row.get(1)?;
@@ -48,7 +49,48 @@ fn row_to_meeting(row: &Row<'_>) -> rusqlite::Result<Meeting> {
             .get::<_, Option<String>>(9)?
             .and_then(|names| serde_json::from_str(&names).ok())
             .unwrap_or_default(),
+        notes: row.get(10)?,
+        summary: row.get(11)?,
+        summary_backend: row.get(12)?,
+        summary_generated_at: row.get(13)?,
     })
+}
+
+/// Replaces a Meeting's Notes (ADR-0018).
+///
+/// The only content in this module that overwrites rather than appends, and
+/// the exception is principled: the Transcript is a claim about what
+/// happened and must not be editable, while Notes are the Operator's own
+/// writing and are not a claim about anything. Replacing rather than merging
+/// is part of that — a merge would be the product having an opinion about
+/// someone's prose.
+pub fn set_notes(connection: &Connection, id: &str, notes: &str) -> Result<Meeting> {
+    let changed = connection.execute(
+        "UPDATE meetings SET notes = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, notes, now_rfc3339()],
+    )?;
+    if changed == 0 {
+        anyhow::bail!("no Meeting with id {id}");
+    }
+    get(connection, id)?.ok_or_else(|| anyhow::anyhow!("the Meeting vanished after setting notes"))
+}
+
+/// Records a generated Summary, and which Backend produced it.
+pub fn set_summary(
+    connection: &Connection,
+    id: &str,
+    summary: &str,
+    backend: &str,
+) -> Result<Meeting> {
+    let changed = connection.execute(
+        "UPDATE meetings SET summary = ?2, summary_backend = ?3, summary_generated_at = ?4, \
+         updated_at = ?4 WHERE id = ?1",
+        params![id, summary, backend, now_rfc3339()],
+    )?;
+    if changed == 0 {
+        anyhow::bail!("no Meeting with id {id}");
+    }
+    get(connection, id)?.ok_or_else(|| anyhow::anyhow!("the Meeting vanished after summarizing"))
 }
 
 /// Wall-clock length of a finished Meeting, or None while it runs.
@@ -568,5 +610,121 @@ mod tests {
         let connection = connection();
         let deleted = delete(&connection, "no-such-meeting").expect("delete");
         assert!(!deleted.existed);
+    }
+
+    #[test]
+    fn notes_are_editable_forever_while_the_transcript_is_not() {
+        // ADR-0018 refining ADR-0009, as an executable statement rather than
+        // a comment. The Transcript is a claim about what happened and this
+        // module offers no way to change one; Notes are the Operator's own
+        // writing and are replaced outright.
+        let connection = connection();
+        let meeting = start(&connection, Some("Standup"), None).expect("meeting");
+
+        let first = set_notes(&connection, &meeting.id, "ask about Q4").expect("notes");
+        assert_eq!(first.notes.as_deref(), Some("ask about Q4"));
+
+        let second = set_notes(&connection, &meeting.id, "rewritten entirely").expect("notes");
+        assert_eq!(
+            second.notes.as_deref(),
+            Some("rewritten entirely"),
+            "replaced, not merged — a merge would be the product having an \
+             opinion about someone's prose"
+        );
+    }
+
+    #[test]
+    fn writing_notes_marks_the_mirror_dirty() {
+        // Notes are the reason an Operator opens the folder at all, so a
+        // stale Mirror here is worse than a stale transcript.
+        let connection = connection();
+        let meeting = start(&connection, Some("Standup"), None).expect("meeting");
+        let generation: i64 = connection
+            .query_row(
+                "SELECT generation FROM mirror_dirty WHERE meeting_id = ?1",
+                params![meeting.id],
+                |row| row.get(0),
+            )
+            .expect("generation");
+        acknowledge(&connection, &meeting.id, generation).expect("ack");
+
+        set_notes(&connection, &meeting.id, "something worth keeping").expect("notes");
+
+        assert!(
+            dirty_meetings(&connection, 10)
+                .expect("dirty")
+                .iter()
+                .any(|(id, _)| id == &meeting.id)
+        );
+    }
+
+    #[test]
+    fn a_summary_records_which_backend_produced_it() {
+        // Story 38: an Operator who chose Cloud and received local quality
+        // is owed the reason, and one who chose Local is owed evidence.
+        let connection = connection();
+        let meeting = start(&connection, None, None).expect("meeting");
+        let after = set_summary(
+            &connection,
+            &meeting.id,
+            "# Budget\n\nDeferred.",
+            "Local (qwen2.5-3b)",
+        )
+        .expect("summary");
+
+        assert!(after.summary.as_deref().unwrap().contains("Deferred"));
+        assert_eq!(after.summary_backend.as_deref(), Some("Local (qwen2.5-3b)"));
+        assert!(after.summary_generated_at.is_some(), "and when");
+    }
+
+    #[test]
+    fn generating_a_summary_marks_the_mirror_dirty_too() {
+        let connection = connection();
+        let meeting = start(&connection, None, None).expect("meeting");
+        let generation: i64 = connection
+            .query_row(
+                "SELECT generation FROM mirror_dirty WHERE meeting_id = ?1",
+                params![meeting.id],
+                |row| row.get(0),
+            )
+            .expect("generation");
+        acknowledge(&connection, &meeting.id, generation).expect("ack");
+
+        set_summary(&connection, &meeting.id, "# Summary", "Local").expect("summary");
+        assert!(
+            dirty_meetings(&connection, 10)
+                .expect("dirty")
+                .iter()
+                .any(|(id, _)| id == &meeting.id)
+        );
+    }
+
+    #[test]
+    fn notes_survive_everything_the_record_does_around_them() {
+        // Retitling, transcript growth, diarization — none of it is allowed
+        // to disturb the Operator's writing.
+        let connection = connection();
+        let meeting = start(&connection, Some("Standup"), None).expect("meeting");
+        set_notes(&connection, &meeting.id, "the thing I must not forget").expect("notes");
+
+        retitle(&connection, &meeting.id, "Renamed").expect("retitle");
+        append_segment(
+            &connection,
+            &meeting.id,
+            AudioChannel::System,
+            0,
+            1_000,
+            "words",
+        )
+        .expect("segment");
+
+        assert_eq!(
+            get(&connection, &meeting.id)
+                .expect("get")
+                .expect("exists")
+                .notes
+                .as_deref(),
+            Some("the thing I must not forget")
+        );
     }
 }

@@ -327,6 +327,23 @@
       ]
     },
     {
+      "description": "Replaces a Meeting's Notes. ADR-0018: the Operator's own writing,\neditable during the call and forever after.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "meeting/setNotes"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingSetNotesParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Every Speaker the app holds — the Voice Registry's inventory\n(story 30). ADR-0008 makes this surface mandatory rather than\noptional: it is half of what was traded for storing Voiceprints\nat all.",
       "type": "object",
       "properties": {
@@ -612,6 +629,22 @@
       "required": [
         "id",
         "title"
+      ]
+    },
+    "MeetingSetNotesParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "notes": {
+          "description": "Markdown. Replaces whatever was there — Notes are the Operator's, and\na merge would be the product having an opinion about their writing.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "notes"
       ]
     },
     "MeetingStartParams": {
