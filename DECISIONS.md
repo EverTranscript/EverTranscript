@@ -549,7 +549,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 
 **Ref:** (pending)
 
-## Q37 — m4-summary/09-m4-closeout — finding
+## Q38 — m4-summary/09-m4-closeout — finding
 
 **Question:** M4 owes a quality number. The bundled local model is a 0.5B that the registry comment already calls too weak. Measure with it anyway, or download a larger one first so the number means something?
 **Options considered:** ship a bigger model and measure that / measure the model that is actually bundled and report what it does
@@ -559,7 +559,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Outcome:** applied
 **Ref:** (pending)
 
-## Q38 — m4-summary/07-the-knob — gate-resolution
+## Q39 — m4-summary/07-the-knob — gate-resolution
 
 **Question:** The one-way fallback is the property that stops a network blip becoming an exfiltration. Enforce it with a conditional, or arrange the code so the wrong direction cannot be written?
 **Options considered:** a `strict`/direction flag checked in the fallback path / a function signature in which no cloud Backend can be passed as a fallback
