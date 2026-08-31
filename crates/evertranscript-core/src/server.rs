@@ -16,6 +16,8 @@ use evertranscript_protocol::ClientNotification;
 use evertranscript_protocol::ClientRequest;
 use evertranscript_protocol::CoreState;
 use evertranscript_protocol::CoreStateChangedParams;
+use evertranscript_protocol::DiarizeState;
+use evertranscript_protocol::DiarizeStatusResponse;
 use evertranscript_protocol::HistorySearchResponse;
 use evertranscript_protocol::InitializeParams;
 use evertranscript_protocol::InitializeResponse;
@@ -39,8 +41,14 @@ use evertranscript_protocol::ServerInfo;
 use evertranscript_protocol::ServerNotification;
 use evertranscript_protocol::SettingsResponse;
 use evertranscript_protocol::SettingsSetParams;
+use evertranscript_protocol::Speaker;
+use evertranscript_protocol::SpeakerChangedParams;
+use evertranscript_protocol::SpeakerDetailResponse;
+use evertranscript_protocol::SpeakerListResponse;
+use evertranscript_protocol::SpeakerResponse;
 use evertranscript_protocol::StatusResponse;
 use evertranscript_protocol::TranscriptCaptionsDroppedParams;
+use evertranscript_protocol::TranscriptReassignResponse;
 use evertranscript_protocol::TranscriptSegment;
 use evertranscript_protocol::TranscriptSegmentAddedParams;
 use evertranscript_protocol::TranscriptSnapshotResponse;
@@ -113,6 +121,45 @@ pub struct Core {
     /// suite that is fast and silent on one laptop runs real inference on
     /// the next.
     models_dir: std::path::PathBuf,
+    /// The Diarization running now, if any.
+    ///
+    /// At most one: the catalog's batch policy is reject-don't-queue, and M1
+    /// already paid for the version of this where transcription starved
+    /// capture (DECISIONS Q7). Post-meeting work is the lowest-priority
+    /// thing this process does.
+    diarization: Mutex<Option<DiarizeJob>>,
+}
+
+/// A Diarization in progress.
+#[derive(Debug, Clone)]
+pub struct DiarizeJob {
+    pub meeting_id: String,
+    pub cancel: crate::diarize::Cancel,
+    pub done_ms: u64,
+    pub total_ms: u64,
+}
+
+/// A stored Speaker as the protocol shows it, with its appearance counts.
+///
+/// The counts are derived here rather than stored on the row, so they cannot
+/// drift from the segments they describe.
+fn speaker_to_wire(
+    connection: &rusqlite::Connection,
+    row: crate::store::speakers::Speaker,
+) -> Result<Speaker> {
+    let (meetings_seen_in, first_seen_at) =
+        crate::store::speakers::appearances(connection, &row.id)?;
+    Ok(Speaker {
+        id: row.id,
+        display_name: row.display_name,
+        is_operator: row.is_operator,
+        has_voiceprint: row.has_voiceprint,
+        confirmed: row.confirmed,
+        voiceprint_model: row.voiceprint_model,
+        meetings_seen_in,
+        first_seen_at,
+        created_at: row.created_at,
+    })
 }
 
 /// Produces a transcription engine for a new Meeting.
@@ -256,6 +303,7 @@ impl Core {
             settings: Mutex::new(Settings::load_from(&settings_path)),
             settings_path,
             models_dir,
+            diarization: Mutex::new(None),
         }))
     }
 
@@ -352,6 +400,142 @@ impl Core {
             .write(move |connection| crate::store::watchlist::remove(connection, &id))
             .await?;
         self.watchlist().await
+    }
+
+    // ---- Speakers and the Voice Registry (M3) ----
+
+    /// Every Speaker the app holds (story 30).
+    pub async fn speakers(&self) -> Result<SpeakerListResponse> {
+        let speakers = self
+            .store
+            .read(|connection| {
+                let rows = crate::store::speakers::list(connection)?;
+                rows.into_iter()
+                    .map(|row| speaker_to_wire(connection, row))
+                    .collect::<Result<Vec<_>>>()
+            })
+            .await?;
+        Ok(SpeakerListResponse { speakers })
+    }
+
+    /// One Speaker, plus the names the calendar knew for Meetings they were
+    /// in.
+    ///
+    /// Suggestions, never attributions. ADR-0036 stores attendees precisely
+    /// so this can offer them, and M2's schema comment already says why they
+    /// are not applied: an invitation is evidence about who was invited, and
+    /// turning it into who spoke would be inventing attribution.
+    pub async fn speaker(&self, id: &str) -> Result<SpeakerDetailResponse> {
+        let id = id.to_string();
+        self.store
+            .read(move |connection| {
+                let row = crate::store::speakers::get(connection, &id)?
+                    .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
+                let speaker = speaker_to_wire(connection, row)?;
+                let name_suggestions = crate::store::speakers::name_suggestions(connection, &id)?;
+                Ok(SpeakerDetailResponse {
+                    speaker,
+                    name_suggestions,
+                })
+            })
+            .await
+    }
+
+    /// Names a Speaker, which also confirms its Voiceprint.
+    pub async fn speaker_rename(&self, id: &str, display_name: &str) -> Result<SpeakerResponse> {
+        let id = id.to_string();
+        let display_name = display_name.to_string();
+        let speaker = self
+            .store
+            .write(move |connection| {
+                let row = crate::store::speakers::rename(connection, &id, &display_name)?;
+                speaker_to_wire(connection, row)
+            })
+            .await?;
+        let _ = self
+            .notifications
+            .send(ServerNotification::SpeakerChanged(SpeakerChangedParams {
+                speaker: speaker.clone(),
+            }));
+        self.mirror_wake.notify_one();
+        Ok(SpeakerResponse { speaker })
+    }
+
+    /// Deletes a Speaker's Voiceprint (story 31). The record is untouched.
+    pub async fn speaker_delete_voiceprint(&self, id: &str) -> Result<SpeakerResponse> {
+        let id = id.to_string();
+        let speaker = self
+            .store
+            .write(move |connection| {
+                crate::store::speakers::delete_voiceprint(connection, &id)?;
+                let row = crate::store::speakers::get(connection, &id)?
+                    .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
+                speaker_to_wire(connection, row)
+            })
+            .await?;
+        let _ = self
+            .notifications
+            .send(ServerNotification::SpeakerChanged(SpeakerChangedParams {
+                speaker: speaker.clone(),
+            }));
+        Ok(SpeakerResponse { speaker })
+    }
+
+    /// Re-assigns a segment to a different Speaker (story 29b).
+    pub async fn reassign_segment(
+        &self,
+        segment_id: &str,
+        speaker_id: &str,
+    ) -> Result<TranscriptReassignResponse> {
+        let segment_id = segment_id.to_string();
+        let speaker_id = speaker_id.to_string();
+        let (meeting_id, segment) = self
+            .store
+            .write(move |connection| {
+                crate::store::speakers::correct_attribution(connection, &segment_id, &speaker_id)?;
+                let meeting_id: String = connection.query_row(
+                    "SELECT meeting_id FROM transcript_segments WHERE id = ?1",
+                    rusqlite::params![segment_id],
+                    |row| row.get(0),
+                )?;
+                let segment = crate::store::meetings::segments(connection, &meeting_id)?
+                    .into_iter()
+                    .find(|segment| segment.id == segment_id)
+                    .ok_or_else(|| anyhow::anyhow!("the segment vanished after correction"))?;
+                Ok((meeting_id, segment))
+            })
+            .await?;
+        let _ = meeting_id;
+        self.mirror_wake.notify_one();
+        Ok(TranscriptReassignResponse { segment })
+    }
+
+    /// What Diarization is doing.
+    pub async fn diarize_status(&self) -> DiarizeStatusResponse {
+        match self.diarization.lock().await.as_ref() {
+            Some(job) => DiarizeStatusResponse {
+                state: DiarizeState::Running,
+                meeting_id: Some(job.meeting_id.clone()),
+                done_ms: job.done_ms as i64,
+                total_ms: job.total_ms as i64,
+            },
+            None => DiarizeStatusResponse {
+                state: DiarizeState::Idle,
+                meeting_id: None,
+                done_ms: 0,
+                total_ms: 0,
+            },
+        }
+    }
+
+    /// Stops a running Diarization, keeping whatever attribution completed.
+    pub async fn diarize_cancel(&self, meeting_id: &str) -> DiarizeStatusResponse {
+        if let Some(job) = self.diarization.lock().await.as_ref()
+            && job.meeting_id == meeting_id
+        {
+            job.cancel.cancel();
+        }
+        self.diarize_status().await
     }
 
     /// The Watchlist as Meeting Detection needs it.
@@ -678,7 +862,25 @@ impl Core {
         let Some((meeting, segments)) = self.get_meeting(id).await? else {
             return Ok(None);
         };
-        let markdown = mirror::render(&meeting, &segments);
+        let names = self
+            .store
+            .read(|connection| {
+                let entries = crate::store::speakers::list(connection)?
+                    .into_iter()
+                    .map(|speaker| {
+                        (
+                            speaker.id,
+                            mirror::SpeakerName {
+                                display_name: speaker.display_name,
+                                is_operator: speaker.is_operator,
+                            },
+                        )
+                    })
+                    .collect();
+                Ok(mirror::SpeakerNames::from_entries(entries))
+            })
+            .await?;
+        let markdown = mirror::render(&meeting, &segments, &names);
         let path = meeting
             .mirror_filename
             .as_ref()
@@ -1182,6 +1384,36 @@ impl Server {
 
             ClientRequest::WatchlistRemove(params) => Ok(serde_json::to_value(
                 self.core.watchlist_remove(&params.id).await?,
+            )?),
+
+            ClientRequest::SpeakerList(_) => Ok(serde_json::to_value(self.core.speakers().await?)?),
+
+            ClientRequest::SpeakerGet(params) => {
+                Ok(serde_json::to_value(self.core.speaker(&params.id).await?)?)
+            }
+
+            ClientRequest::SpeakerRename(params) => Ok(serde_json::to_value(
+                self.core
+                    .speaker_rename(&params.id, &params.display_name)
+                    .await?,
+            )?),
+
+            ClientRequest::SpeakerDeleteVoiceprint(params) => Ok(serde_json::to_value(
+                self.core.speaker_delete_voiceprint(&params.id).await?,
+            )?),
+
+            ClientRequest::TranscriptReassign(params) => Ok(serde_json::to_value(
+                self.core
+                    .reassign_segment(&params.segment_id, &params.speaker_id)
+                    .await?,
+            )?),
+
+            ClientRequest::DiarizeStatus(_) => {
+                Ok(serde_json::to_value(self.core.diarize_status().await)?)
+            }
+
+            ClientRequest::DiarizeCancel(params) => Ok(serde_json::to_value(
+                self.core.diarize_cancel(&params.meeting_id).await,
             )?),
 
             ClientRequest::TranscriptUnsubscribe(_) => {

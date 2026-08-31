@@ -262,6 +262,51 @@ client_request_definitions! {
         params: WatchlistRemoveParams,
         response: WatchlistResponse,
     },
+    /// Every Speaker the app holds — the Voice Registry's inventory
+    /// (story 30). ADR-0008 makes this surface mandatory rather than
+    /// optional: it is half of what was traded for storing Voiceprints
+    /// at all.
+    SpeakerList => "speaker/list" {
+        params: SpeakerListParams,
+        response: SpeakerListResponse,
+    },
+    /// One Speaker, with the facts a person needs to act on it.
+    SpeakerGet => "speaker/get" {
+        params: SpeakerGetParams,
+        response: SpeakerDetailResponse,
+    },
+    /// Names a Speaker, which also confirms its Voiceprint (ADR-0008 as
+    /// amended). Retroactive across all of History by construction — the
+    /// record holds references, not names (story 29).
+    SpeakerRename => "speaker/rename" {
+        params: SpeakerRenameParams,
+        response: SpeakerResponse,
+    },
+    /// Deletes a Speaker's Voiceprint (story 31). Recognition stops; the
+    /// record is untouched. The only destructive biometric operation there
+    /// is (ADR-0009) — the Speaker itself is permanent.
+    SpeakerDeleteVoiceprint => "speaker/deleteVoiceprint" {
+        params: SpeakerGetParams,
+        response: SpeakerResponse,
+    },
+    /// Re-assigns a segment to a different Speaker (story 29b). Appends a
+    /// hint; the machine's attribution is preserved beneath it.
+    TranscriptReassign => "transcript/reassign" {
+        params: TranscriptReassignParams,
+        response: TranscriptReassignResponse,
+    },
+    /// What Diarization is doing, if anything.
+    DiarizeStatus => "diarize/status" {
+        params: DiarizeStatusParams,
+        response: DiarizeStatusResponse,
+    },
+    /// Stops a running Diarization. Whatever attribution completed is kept;
+    /// a job the Operator cannot stop is an unaccountable use of their
+    /// machine.
+    DiarizeCancel => "diarize/cancel" {
+        params: DiarizeCancelParams,
+        response: DiarizeStatusResponse,
+    },
 }
 
 server_notification_definitions! {
@@ -284,6 +329,18 @@ server_notification_definitions! {
     /// Sent so a Client can show a gap rather than silently missing words.
     TranscriptCaptionsDropped => "transcript/captionsDropped" {
         params: TranscriptCaptionsDroppedParams,
+    },
+    /// A Speaker was created, renamed, or had its Voiceprint deleted. A
+    /// rename is retroactive across every Meeting, so a Client showing any
+    /// transcript needs to know rather than poll.
+    SpeakerChanged => "speaker/changed" {
+        params: SpeakerChangedParams,
+    },
+    /// Diarization progressed, finished, or stopped. Post-meeting work the
+    /// Operator did not ask for out loud still has to be visible while it
+    /// runs.
+    DiarizeProgress => "diarize/progress" {
+        params: DiarizeProgressParams,
     },
 }
 
@@ -495,6 +552,11 @@ pub struct TranscriptSegment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub speaker_id: Option<String>,
+    /// Why `speaker_id` is what it is (ADR-0008's visible match
+    /// attribution). Absent on segments written before Diarization ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub attribution: Option<Attribution>,
 }
 
 /// Which capture leg a segment came from. The mic channel is where the
@@ -908,6 +970,179 @@ pub struct MeetingChangedParams {
 
 /// Convenience: the id type re-exported for clients building requests.
 pub type ClientRequestId = RequestId;
+
+/// A Speaker, as the Voice Registry shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct Speaker {
+    pub id: String,
+    /// Absent until the Operator names it. Clients render a numbered
+    /// pseudonym ("Speaker 3"); it is deliberately not stored, because a
+    /// stored pseudonym looks like a name someone chose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub display_name: Option<String>,
+    /// The Operator's own Speaker, displayed "You" (ADR-0029 as amended).
+    pub is_operator: bool,
+    /// Whether the app can still recognize this voice. False after a
+    /// Voiceprint deletion, with the Speaker and the record intact.
+    pub has_voiceprint: bool,
+    /// Set when the Operator named this Speaker: naming is confirmation
+    /// (ADR-0008 as amended), and a confirmed Voiceprint outranks an
+    /// unconfirmed one when matching.
+    pub confirmed: bool,
+    /// Which model produced the stored Voiceprint. Present so a Registry can
+    /// explain why an upgrade re-embedded, rather than recognition silently
+    /// changing quality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub voiceprint_model: Option<String>,
+    #[ts(type = "number")]
+    pub meetings_seen_in: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub first_seen_at: Option<String>,
+    pub created_at: String,
+}
+
+/// Why a segment is attributed to whom it is.
+///
+/// ADR-0008 counts visible match attribution among the legibility surfaces
+/// it made mandatory in exchange for storing biometrics. An Operator who
+/// cannot ask why has no way to know whether to correct it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum Attribution {
+    /// Matched an existing Voiceprint.
+    Voiceprint,
+    /// Clustered within this Meeting and matched nobody in History.
+    Clustered,
+    /// The mic-channel prior did the work (ADR-0029 as amended).
+    Channel,
+    /// The Operator said so, and that outranks everything above.
+    Operator,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerListParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerListResponse {
+    pub speakers: Vec<Speaker>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerGetParams {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerResponse {
+    pub speaker: Speaker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerDetailResponse {
+    pub speaker: Speaker,
+    /// Names the calendar knew about for Meetings this Speaker appears in,
+    /// offered as candidates. **Suggestions only** — an invitation is
+    /// evidence about who was invited, never about who spoke, and applying
+    /// one automatically would invent attribution.
+    pub name_suggestions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerRenameParams {
+    pub id: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerChangedParams {
+    pub speaker: Speaker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptReassignParams {
+    pub segment_id: String,
+    pub speaker_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TranscriptReassignResponse {
+    pub segment: TranscriptSegment,
+}
+
+/// What a diarization job is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum DiarizeState {
+    Idle,
+    Running,
+    /// Ran, and could not: a missing or unloadable model. The Transcript
+    /// stays unattributed and says so rather than the Meeting failing.
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiarizeStatusParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiarizeStatusResponse {
+    pub state: DiarizeState,
+    /// The Meeting being diarized, when one is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meeting_id: Option<String>,
+    #[ts(type = "number")]
+    pub done_ms: i64,
+    #[ts(type = "number")]
+    pub total_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiarizeCancelParams {
+    pub meeting_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiarizeProgressParams {
+    pub meeting_id: String,
+    pub state: DiarizeState,
+    #[ts(type = "number")]
+    pub done_ms: i64,
+    #[ts(type = "number")]
+    pub total_ms: i64,
+}
 
 #[cfg(test)]
 mod tests {

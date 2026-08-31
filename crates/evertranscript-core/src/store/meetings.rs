@@ -202,14 +202,40 @@ pub fn delete(connection: &Connection, id: &str) -> Result<DeletedMeeting> {
     })
 }
 
+/// A Meeting's Transcript, **with the Operator's corrections applied**.
+///
+/// The hint join lives in the query rather than at the call sites on
+/// purpose. ADR-0009 as amended keeps the machine's conclusion on the
+/// segment and layers the Operator's above it, which means every reader that
+/// selected `speaker_id` directly would show the Operator a correction they
+/// made being ignored — in the Client, the CLI, and the Mirror
+/// independently. Making the raw column the harder thing to reach is what
+/// stops that from happening three times.
 pub fn segments(connection: &Connection, meeting_id: &str) -> Result<Vec<TranscriptSegment>> {
     let mut statement = connection.prepare(
-        "SELECT id, sequence, channel, start_ms, end_ms, text, speaker_id
-         FROM transcript_segments WHERE meeting_id = ?1 ORDER BY sequence",
+        "SELECT segment.id, segment.sequence, segment.channel, segment.start_ms, segment.end_ms,
+                segment.text,
+                coalesce(
+                    (SELECT hint.speaker_id FROM attribution_hints hint
+                      WHERE hint.segment_id = segment.id
+                      ORDER BY hint.created_at DESC, hint.id DESC LIMIT 1),
+                    segment.speaker_id
+                ),
+                CASE WHEN EXISTS (
+                        SELECT 1 FROM attribution_hints hint
+                         WHERE hint.segment_id = segment.id
+                     )
+                     THEN 'operator'
+                     ELSE segment.attribution
+                END
+           FROM transcript_segments segment
+          WHERE segment.meeting_id = ?1
+          ORDER BY segment.sequence",
     )?;
     let segments = statement
         .query_map(params![meeting_id], |row| {
             let channel: String = row.get(2)?;
+            let attribution: Option<String> = row.get(7)?;
             Ok(TranscriptSegment {
                 id: row.get(0)?,
                 sequence: row.get(1)?,
@@ -218,10 +244,22 @@ pub fn segments(connection: &Connection, meeting_id: &str) -> Result<Vec<Transcr
                 end_ms: row.get(4)?,
                 text: row.get(5)?,
                 speaker_id: row.get(6)?,
+                attribution: attribution.as_deref().and_then(parse_attribution),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(segments)
+}
+
+fn parse_attribution(value: &str) -> Option<evertranscript_protocol::Attribution> {
+    use evertranscript_protocol::Attribution;
+    match value {
+        "voiceprint" => Some(Attribution::Voiceprint),
+        "clustered" => Some(Attribution::Clustered),
+        "channel" => Some(Attribution::Channel),
+        "operator" => Some(Attribution::Operator),
+        _ => None,
+    }
 }
 
 /// Appends a Transcript segment. The record is immutable: segments are only
@@ -262,6 +300,7 @@ pub fn append_segment(
         end_ms,
         text: text.to_string(),
         speaker_id: None,
+        attribution: None,
     })
 }
 

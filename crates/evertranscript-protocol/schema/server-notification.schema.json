@@ -70,9 +70,68 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "A Speaker was created, renamed, or had its Voiceprint deleted. A\nrename is retroactive across every Meeting, so a Client showing any\ntranscript needs to know rather than poll.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "speaker/changed"
+        },
+        "params": {
+          "$ref": "#/$defs/SpeakerChangedParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Diarization progressed, finished, or stopped. Post-meeting work the\nOperator did not ask for out loud still has to be visible while it\nruns.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "diarize/progress"
+        },
+        "params": {
+          "$ref": "#/$defs/DiarizeProgressParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
+    "Attribution": {
+      "description": "Why a segment is attributed to whom it is.\n\nADR-0008 counts visible match attribution among the legibility surfaces\nit made mandatory in exchange for storing biometrics. An Operator who\ncannot ask why has no way to know whether to correct it.",
+      "oneOf": [
+        {
+          "description": "Matched an existing Voiceprint.",
+          "type": "string",
+          "const": "voiceprint"
+        },
+        {
+          "description": "Clustered within this Meeting and matched nobody in History.",
+          "type": "string",
+          "const": "clustered"
+        },
+        {
+          "description": "The mic-channel prior did the work (ADR-0029 as amended).",
+          "type": "string",
+          "const": "channel"
+        },
+        {
+          "description": "The Operator said so, and that outranks everything above.",
+          "type": "string",
+          "const": "operator"
+        }
+      ]
+    },
     "AudioChannel": {
       "description": "Which capture leg a segment came from. The mic channel is where the\nOperator is (ADR-0029 as amended).",
       "type": "string",
@@ -98,6 +157,48 @@
       },
       "required": [
         "state"
+      ]
+    },
+    "DiarizeProgressParams": {
+      "type": "object",
+      "properties": {
+        "doneMs": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "meetingId": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/DiarizeState"
+        },
+        "totalMs": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "meetingId",
+        "state",
+        "doneMs",
+        "totalMs"
+      ]
+    },
+    "DiarizeState": {
+      "description": "What a diarization job is doing.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "idle",
+            "running"
+          ]
+        },
+        {
+          "description": "Ran, and could not: a missing or unloadable model. The Transcript\nstays unattributed and says so rather than the Meeting failing.",
+          "type": "string",
+          "const": "unavailable"
+        }
       ]
     },
     "Meeting": {
@@ -214,6 +315,73 @@
         "meetingId"
       ]
     },
+    "Speaker": {
+      "description": "A Speaker, as the Voice Registry shows it.",
+      "type": "object",
+      "properties": {
+        "confirmed": {
+          "description": "Set when the Operator named this Speaker: naming is confirmation\n(ADR-0008 as amended), and a confirmed Voiceprint outranks an\nunconfirmed one when matching.",
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "displayName": {
+          "description": "Absent until the Operator names it. Clients render a numbered\npseudonym (\"Speaker 3\"); it is deliberately not stored, because a\nstored pseudonym looks like a name someone chose.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "firstSeenAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hasVoiceprint": {
+          "description": "Whether the app can still recognize this voice. False after a\nVoiceprint deletion, with the Speaker and the record intact.",
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "isOperator": {
+          "description": "The Operator's own Speaker, displayed \"You\" (ADR-0029 as amended).",
+          "type": "boolean"
+        },
+        "meetingsSeenIn": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "voiceprintModel": {
+          "description": "Which model produced the stored Voiceprint. Present so a Registry can\nexplain why an upgrade re-embedded, rather than recognition silently\nchanging quality.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "isOperator",
+        "hasVoiceprint",
+        "confirmed",
+        "meetingsSeenIn",
+        "createdAt"
+      ]
+    },
+    "SpeakerChangedParams": {
+      "type": "object",
+      "properties": {
+        "speaker": {
+          "$ref": "#/$defs/Speaker"
+        }
+      },
+      "required": [
+        "speaker"
+      ]
+    },
     "TranscriptCaptionsDroppedParams": {
       "type": "object",
       "properties": {
@@ -235,6 +403,17 @@
       "description": "One attributed span of the Transcript.",
       "type": "object",
       "properties": {
+        "attribution": {
+          "description": "Why `speaker_id` is what it is (ADR-0008's visible match\nattribution). Absent on segments written before Diarization ran.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Attribution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "channel": {
           "$ref": "#/$defs/AudioChannel"
         },

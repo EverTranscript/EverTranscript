@@ -325,6 +325,125 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "Every Speaker the app holds — the Voice Registry's inventory\n(story 30). ADR-0008 makes this surface mandatory rather than\noptional: it is half of what was traded for storing Voiceprints\nat all.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "speaker/list"
+        },
+        "params": {
+          "$ref": "#/$defs/SpeakerListParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "One Speaker, with the facts a person needs to act on it.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "speaker/get"
+        },
+        "params": {
+          "$ref": "#/$defs/SpeakerGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Names a Speaker, which also confirms its Voiceprint (ADR-0008 as\namended). Retroactive across all of History by construction — the\nrecord holds references, not names (story 29).",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "speaker/rename"
+        },
+        "params": {
+          "$ref": "#/$defs/SpeakerRenameParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Deletes a Speaker's Voiceprint (story 31). Recognition stops; the\nrecord is untouched. The only destructive biometric operation there\nis (ADR-0009) — the Speaker itself is permanent.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "speaker/deleteVoiceprint"
+        },
+        "params": {
+          "$ref": "#/$defs/SpeakerGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Re-assigns a segment to a different Speaker (story 29b). Appends a\nhint; the machine's attribution is preserved beneath it.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "transcript/reassign"
+        },
+        "params": {
+          "$ref": "#/$defs/TranscriptReassignParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "What Diarization is doing, if anything.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "diarize/status"
+        },
+        "params": {
+          "$ref": "#/$defs/DiarizeStatusParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Stops a running Diarization. Whatever attribution completed is kept;\na job the Operator cannot stop is an unaccountable use of their\nmachine.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "diarize/cancel"
+        },
+        "params": {
+          "$ref": "#/$defs/DiarizeCancelParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -369,6 +488,20 @@
         "name",
         "version"
       ]
+    },
+    "DiarizeCancelParams": {
+      "type": "object",
+      "properties": {
+        "meetingId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "meetingId"
+      ]
+    },
+    "DiarizeStatusParams": {
+      "type": "object"
     },
     "HistorySearchParams": {
       "type": "object",
@@ -538,8 +671,52 @@
         }
       }
     },
+    "SpeakerGetParams": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "SpeakerListParams": {
+      "type": "object"
+    },
+    "SpeakerRenameParams": {
+      "type": "object",
+      "properties": {
+        "displayName": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "displayName"
+      ]
+    },
     "StatusParams": {
       "type": "object"
+    },
+    "TranscriptReassignParams": {
+      "type": "object",
+      "properties": {
+        "segmentId": {
+          "type": "string"
+        },
+        "speakerId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "segmentId",
+        "speakerId"
+      ]
     },
     "TranscriptSubscribeParams": {
       "type": "object",

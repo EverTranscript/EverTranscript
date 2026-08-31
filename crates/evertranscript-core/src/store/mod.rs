@@ -8,6 +8,7 @@
 
 pub mod meetings;
 pub mod schema;
+pub mod speakers;
 pub mod watchlist;
 
 use std::path::Path;

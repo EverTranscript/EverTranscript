@@ -9,6 +9,7 @@
 //! callers remembering to ask, which is what keeps it from silently drifting
 //! out of step with the database.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -99,7 +100,7 @@ pub fn filename(meeting: &Meeting) -> String {
 /// the longest section last. Sections that have not been produced yet say so
 /// rather than being absent, so the shape of a Meeting's file never changes
 /// as post-processing lands.
-pub fn render(meeting: &Meeting, segments: &[TranscriptSegment]) -> String {
+pub fn render(meeting: &Meeting, segments: &[TranscriptSegment], names: &SpeakerNames) -> String {
     let mut out = String::new();
 
     out.push_str("---\n");
@@ -111,7 +112,7 @@ pub fn render(meeting: &Meeting, segments: &[TranscriptSegment]) -> String {
     if let Some(duration) = meeting.duration_seconds {
         out.push_str(&format!("duration: {}\n", format_duration(duration)));
     }
-    out.push_str(&format!("speakers: [{}]\n", speaker_list(segments)));
+    out.push_str(&format!("speakers: [{}]\n", speaker_list(segments, names)));
     // What the calendar knew (ADR-0036). The event id makes the Meeting
     // traceable back to the entry that armed it; the attendees are a record
     // of who was *invited*, which is not the same claim as who spoke and is
@@ -162,10 +163,10 @@ pub fn render(meeting: &Meeting, segments: &[TranscriptSegment]) -> String {
     if segments.is_empty() {
         out.push_str("*No transcript yet.*\n");
     } else {
-        for segment in segments {
+        for (segment, label) in segments.iter().zip(labels_for(segments, names)) {
             out.push_str(&format!(
                 "**{}** ({}) {}\n\n",
-                channel_label(segment.channel),
+                label,
                 format_timestamp(segment.start_ms),
                 segment.text.trim()
             ));
@@ -174,7 +175,55 @@ pub fn render(meeting: &Meeting, segments: &[TranscriptSegment]) -> String {
     out
 }
 
-/// Until Diarization runs (M3), the channel is the attribution we honestly
+/// Every Speaker's name, for the renderer.
+///
+/// All of them rather than only this Meeting's: the map is small, and
+/// filtering it would mean a correction that introduced a Speaker between
+/// the segment query and this one rendered as a pseudonym.
+fn speaker_names(connection: &rusqlite::Connection) -> anyhow::Result<SpeakerNames> {
+    let entries = crate::store::speakers::list(connection)?
+        .into_iter()
+        .map(|speaker| {
+            (
+                speaker.id,
+                SpeakerName {
+                    display_name: speaker.display_name,
+                    is_operator: speaker.is_operator,
+                },
+            )
+        })
+        .collect();
+    Ok(SpeakerNames::from_entries(entries))
+}
+
+/// What a Meeting's Speakers are called, for rendering.
+///
+/// Passed in rather than looked up here because the Mirror is a pure
+/// projection (ADR-0005): given the same Meeting, segments and names it
+/// must produce the same bytes, and a renderer that could reach the
+/// database would be one whose output depended on when it ran.
+#[derive(Debug, Clone, Default)]
+pub struct SpeakerNames {
+    entries: BTreeMap<String, SpeakerName>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpeakerName {
+    pub display_name: Option<String>,
+    pub is_operator: bool,
+}
+
+impl SpeakerNames {
+    pub fn from_entries(entries: BTreeMap<String, SpeakerName>) -> Self {
+        Self { entries }
+    }
+
+    fn get(&self, id: &str) -> Option<&SpeakerName> {
+        self.entries.get(id)
+    }
+}
+
+/// Before Diarization has run, the channel is the attribution we honestly
 /// have: the mic channel is where the Operator is, the system channel is
 /// everyone else (ADR-0029 as amended).
 fn channel_label(channel: AudioChannel) -> &'static str {
@@ -184,15 +233,57 @@ fn channel_label(channel: AudioChannel) -> &'static str {
     }
 }
 
-fn speaker_list(segments: &[TranscriptSegment]) -> String {
-    let mut labels: Vec<&str> = Vec::new();
+/// What each segment is labelled, in order.
+///
+/// Unnamed Speakers get numbered pseudonyms assigned by order of first
+/// appearance in this Meeting. Stable for a given transcript, and
+/// deliberately not stored: a persisted "Speaker 3" would look to the
+/// Operator like a name somebody chose, and would then be wrong the moment
+/// a different Meeting numbered its voices differently.
+fn labels_for(segments: &[TranscriptSegment], names: &SpeakerNames) -> Vec<String> {
+    let mut pseudonyms: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut next = 1;
+    let mut labels = Vec::with_capacity(segments.len());
+
     for segment in segments {
-        let label = channel_label(segment.channel);
-        if !labels.contains(&label) {
-            labels.push(label);
+        let label = match segment.speaker_id.as_deref() {
+            // Diarization has not attributed this one. The channel is still
+            // the honest answer rather than a fabricated Speaker.
+            None => channel_label(segment.channel).to_string(),
+            Some(id) => match names.get(id) {
+                Some(SpeakerName {
+                    display_name: Some(name),
+                    ..
+                }) => name.clone(),
+                // The Operator's own Speaker, unnamed: "You" is what ADR-0029
+                // says to call them, and it is a display name rather than a
+                // stored one so renaming still works.
+                Some(SpeakerName {
+                    is_operator: true, ..
+                }) => "You".to_string(),
+                _ => {
+                    let number = *pseudonyms.entry(id).or_insert_with(|| {
+                        let assigned = next;
+                        next += 1;
+                        assigned
+                    });
+                    format!("Speaker {number}")
+                }
+            },
+        };
+        labels.push(label);
+    }
+    labels
+}
+
+fn speaker_list(segments: &[TranscriptSegment], names: &SpeakerNames) -> String {
+    let mut seen: Vec<String> = Vec::new();
+    for label in labels_for(segments, names) {
+        if !seen.contains(&label) {
+            seen.push(label);
         }
     }
-    labels.join(", ")
+    seen.join(", ")
 }
 
 fn fallback_title(meeting: &Meeting) -> String {
@@ -279,16 +370,17 @@ impl MirrorWriter {
                     return Ok(None);
                 };
                 let segments = meetings::segments(connection, &id)?;
-                Ok(Some((meeting, segments)))
+                let names = speaker_names(connection)?;
+                Ok(Some((meeting, segments, names)))
             })
             .await?;
 
         // The Meeting was deleted between being marked dirty and now.
-        let Some((meeting, segments)) = loaded else {
+        let Some((meeting, segments, names)) = loaded else {
             return Ok(());
         };
 
-        let markdown = render(&meeting, &segments);
+        let markdown = render(&meeting, &segments, &names);
         let next_filename = filename(&meeting);
         let destination = self.history_dir.join(&next_filename);
         write_atomically(&destination, &markdown)?;
@@ -388,7 +480,7 @@ mod tests {
             calendar_attendees: vec!["Ada".to_string(), "Grace".to_string()],
             ..meeting()
         };
-        let rendered = render(&armed, &[]);
+        let rendered = render(&armed, &[], &SpeakerNames::default());
         assert!(rendered.contains("calendar_event: evt-42"), "{rendered}");
         assert!(rendered.contains("invited: [Ada, Grace]"), "{rendered}");
         assert!(
@@ -406,7 +498,7 @@ mod tests {
         meeting.audio_notes = vec![
             "system audio: permission to record system audio has not been granted".to_string(),
         ];
-        let rendered = render(&meeting, &[]);
+        let rendered = render(&meeting, &[], &SpeakerNames::default());
 
         let warning = rendered
             .find("This recording is incomplete")
@@ -425,7 +517,7 @@ mod tests {
     fn a_whole_recording_is_not_littered_with_reassurance() {
         // The note appears only when something was lost; a clean Meeting
         // says nothing, or the warning stops meaning anything.
-        assert!(!render(&meeting(), &[]).contains("incomplete"));
+        assert!(!render(&meeting(), &[], &SpeakerNames::default()).contains("incomplete"));
     }
 
     #[test]
@@ -459,7 +551,7 @@ mod tests {
 
     #[test]
     fn the_mirror_has_every_section_even_before_post_processing() {
-        let rendered = render(&meeting(), &[]);
+        let rendered = render(&meeting(), &[], &SpeakerNames::default());
         assert!(rendered.starts_with("---\n"), "frontmatter comes first");
         assert!(rendered.contains("id: 0199a1b2-c3d4-7e5f-8901-234567890abc"));
         assert!(rendered.contains("audio: .data/audio/0199a1b2.m4a"));
@@ -476,6 +568,114 @@ mod tests {
         assert!(summary < notes && notes < transcript);
     }
 
+    fn attributed(
+        id: &str,
+        sequence: i64,
+        channel: AudioChannel,
+        speaker: &str,
+    ) -> TranscriptSegment {
+        TranscriptSegment {
+            id: id.into(),
+            sequence,
+            channel,
+            start_ms: sequence * 1_000,
+            end_ms: sequence * 1_000 + 900,
+            text: format!("line {sequence}"),
+            speaker_id: Some(speaker.into()),
+            attribution: None,
+        }
+    }
+
+    fn names(entries: &[(&str, Option<&str>, bool)]) -> SpeakerNames {
+        SpeakerNames::from_entries(
+            entries
+                .iter()
+                .map(|(id, name, is_operator)| {
+                    (
+                        (*id).to_string(),
+                        SpeakerName {
+                            display_name: name.map(str::to_string),
+                            is_operator: *is_operator,
+                        },
+                    )
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_named_speaker_is_rendered_by_name() {
+        // Story 29's visible half: the rename has to reach the folder the
+        // Operator actually reads, not just the database.
+        let segments = vec![attributed("a", 0, AudioChannel::System, "s1")];
+        let rendered = render(
+            &meeting(),
+            &segments,
+            &names(&[("s1", Some("Alice"), false)]),
+        );
+        assert!(rendered.contains("**Alice**"));
+        assert!(rendered.contains("speakers: [Alice]"));
+    }
+
+    #[test]
+    fn unnamed_speakers_are_numbered_by_first_appearance() {
+        // Stable within the Meeting, and never stored: a persisted
+        // "Speaker 2" would read as a name somebody chose, and would be
+        // wrong the moment another Meeting numbered its voices differently.
+        let segments = vec![
+            attributed("a", 0, AudioChannel::System, "zzz"),
+            attributed("b", 1, AudioChannel::System, "aaa"),
+            attributed("c", 2, AudioChannel::System, "zzz"),
+        ];
+        let rendered = render(
+            &meeting(),
+            &segments,
+            &names(&[("zzz", None, false), ("aaa", None, false)]),
+        );
+        // First heard is Speaker 1, even though its id sorts last.
+        assert!(rendered.contains("**Speaker 1** (00:00) line 0"));
+        assert!(rendered.contains("**Speaker 2** (00:01) line 1"));
+        assert!(rendered.contains("**Speaker 1** (00:02) line 2"));
+    }
+
+    #[test]
+    fn the_operators_own_speaker_is_you_until_they_rename_it() {
+        // ADR-0029 as amended: "You" is a display name, not a magic record.
+        let segments = vec![attributed("a", 0, AudioChannel::Mic, "me")];
+        assert!(
+            render(&meeting(), &segments, &names(&[("me", None, true)])).contains("**You**"),
+            "unnamed Operator reads as You"
+        );
+        assert!(
+            render(
+                &meeting(),
+                &segments,
+                &names(&[("me", Some("Frank"), true)])
+            )
+            .contains("**Frank**"),
+            "and their chosen name wins over it"
+        );
+    }
+
+    #[test]
+    fn unattributed_segments_still_fall_back_to_the_channel() {
+        // Every Meeting recorded before M3, and every Meeting whose models
+        // were missing. The channel is the honest attribution we have; a
+        // fabricated "Speaker 1" would claim knowledge nobody has.
+        let segments = vec![TranscriptSegment {
+            id: "a".into(),
+            sequence: 0,
+            channel: AudioChannel::Mic,
+            start_ms: 0,
+            end_ms: 900,
+            text: "hello".into(),
+            speaker_id: None,
+            attribution: None,
+        }];
+        let rendered = render(&meeting(), &segments, &SpeakerNames::default());
+        assert!(rendered.contains("**You**"));
+    }
+
     #[test]
     fn transcript_segments_render_with_speaker_and_timestamp() {
         let segments = vec![
@@ -487,6 +687,7 @@ mod tests {
                 end_ms: 14_000,
                 text: "shall we start".into(),
                 speaker_id: None,
+                attribution: None,
             },
             TranscriptSegment {
                 id: "b".into(),
@@ -496,9 +697,10 @@ mod tests {
                 end_ms: 3_734_000,
                 text: "yes, go ahead".into(),
                 speaker_id: None,
+                attribution: None,
             },
         ];
-        let rendered = render(&meeting(), &segments);
+        let rendered = render(&meeting(), &segments, &SpeakerNames::default());
         assert!(rendered.contains("**You** (00:12) shall we start"));
         assert!(rendered.contains("**Participants** (01:02:12) yes, go ahead"));
         assert!(rendered.contains("speakers: [You, Participants]"));
