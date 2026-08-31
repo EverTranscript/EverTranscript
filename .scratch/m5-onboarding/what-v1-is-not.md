@@ -6,7 +6,7 @@ list, assembled from the open criteria across M1–M5 and grouped by what
 would actually be needed to close each.
 
 Counts at the time of writing: **M1 65/65, M2 85/85, M3 69/71, M4 66/74,
-M5 56/60.**
+M5 58/60.**
 
 ---
 
@@ -18,14 +18,19 @@ from somewhere else, and each is already labelled that way in its ticket.
 - **A clean-machine install by someone who is not the author.** The single
   most valuable untaken step in the project. Every milestone found its real
   defects by running the real thing on real input — M2 found six, M3 three,
-  M4 two, and the closest local approximation of *this* one found three more
-  (Q43). Every one of those had passed its unit tests. What is still
+  M4 two, the closest local approximation of *this* one found three more
+  (Q43), and having CI install its own artifact found two more (Q44),
+  including a Windows installer that had never contained the Core. Every
+  one of those had passed its unit tests, and the last two had passed a
+  green release matrix and a published checksum as well. What is still
   untaken is an Operator installing from a package on a machine that has
   never built this, and it is the one thing the repository cannot
   self-serve.
-- **Installing on Windows.** `EverTranscript Setup 0.1.0.exe` is built and
-  its checksum published; nobody has run it. That is also where the Summary
-  sidecar has never run.
+- **Installing on Windows, on an Operator's machine.** CI now installs the
+  NSIS package on its own runner and runs what it installed, which is how
+  Q44 found that the package had never contained the Core. What a runner
+  cannot supply is a real audio stack: Auto-Record, dual-channel capture and
+  the device-churn path are still unobserved on physical Windows hardware.
 - **The Briefing read by someone other than its author.** It has one job: to
   make a stranger able to say what the product does before they let it
   record. Nobody has tried.
@@ -40,9 +45,6 @@ from somewhere else, and each is already labelled that way in its ticket.
 - **Publishing the cask and manifest.** Generated and well-formed; their
   checksums stay placeholders until a tagged release produces real ones,
   and publishing needs accounts.
-- **The Summary sidecar has never run on Windows.** It cross-compiles with
-  llama.cpp included, which is worth exactly what the same sentence was
-  worth in M3 — nothing about runtime.
 - **Counsel review of the Briefing.** The PRD makes it mandatory before v1
   and calls it per-jurisdiction work rather than translation. `AWAITING_COUNSEL`
   says so in the product.
@@ -104,6 +106,24 @@ session. Recorded because of what it nearly did: had it survived, this
 milestone would have claimed validation by a person who does not exist.
 The narrow lesson is that an edit which ticks boxes should never be able to
 tick one its author did not read.
+
+## 6. A second mistake worth keeping (Q44)
+
+The Windows installer shipped without the Core in it, and everything that
+was supposed to catch that passed: the release matrix was green, the
+checksum was published, and the manifest was generated from real artifacts.
+Each of those verified a *file*. None of them verified a product. It was
+found the first time anything installed the package instead of describing
+it — and the reason it had survived was a second defect that made the two
+platforms indistinguishable: the Client never looked inside its own bundle
+for the Core, so the macOS package, which did contain one, was not using it
+either.
+
+The lesson pairs with Q42's. That one was about a checkbox asserting
+something nobody observed; this one is about a *check* asserting something
+nobody observed. "The installer builds" and "the installer installs
+something that runs" are different claims, and only the first had ever been
+made.
 
 ---
 
