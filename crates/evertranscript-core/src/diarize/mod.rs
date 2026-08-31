@@ -32,6 +32,7 @@
 //! three-way conversations and wrong on the meeting that is one person for
 //! fifty minutes. [`fixture`] exists to produce the ugly shapes on purpose.
 
+pub mod cluster;
 pub mod fixture;
 pub mod reconcile;
 

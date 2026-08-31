@@ -375,6 +375,28 @@ pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<(i64, Op
     Ok(row)
 }
 
+/// Every Speaker with a Voiceprint, as vectors.
+///
+/// This is what History offers a new Meeting's clusterer as seeds. All of
+/// them rather than a shortlist: the whole promise of ADR-0008 is that a
+/// voice from any past Meeting is recognized, and pre-filtering by recency
+/// would quietly make "seen once, a year ago" unrecognizable — which is
+/// exactly the case retroactive naming exists to serve.
+pub fn voiceprints(connection: &Connection) -> Result<Vec<(String, Vec<f32>, bool)>> {
+    let mut statement = connection.prepare(
+        "SELECT id, voiceprint, confirmed FROM speakers WHERE voiceprint IS NOT NULL ORDER BY id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        let blob: Vec<u8> = row.get(1)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            decode(&blob),
+            row.get::<_, i64>(2)? != 0,
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Calendar attendee names from Meetings this Speaker appeared in.
 ///
 /// **Candidates, never attributions.** ADR-0036 stores attendees so this can
