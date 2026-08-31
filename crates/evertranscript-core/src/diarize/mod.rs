@@ -33,6 +33,7 @@
 //! fifty minutes. [`fixture`] exists to produce the ugly shapes on purpose.
 
 pub mod fixture;
+pub mod reconcile;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
