@@ -7,13 +7,14 @@
   "main": "dist/main/index.js",
   "scripts": {
     "protocol:sync": "node scripts/sync-protocol.mjs",
-    "pretypecheck": "pnpm protocol:sync",
+    "pretypecheck": "pnpm protocol:sync && pnpm check:translations",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.main.json",
     "prebuild": "pnpm protocol:sync",
     "build": "vite build && tsc -p tsconfig.main.json",
     "predev": "pnpm protocol:sync",
     "dev": "vite",
-    "start": "pnpm build && electron ."
+    "start": "pnpm build && electron .",
+    "check:translations": "node scripts/check-translations.mjs"
   },
   "dependencies": {
     "react": "^19.2.0",

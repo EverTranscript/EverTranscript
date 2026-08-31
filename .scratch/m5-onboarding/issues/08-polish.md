@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 02.
 
-Status: not started
+Status: done
 
 - [ ] The tray's **not-ready gate** during onboarding (catalog): the menu says "Downloading model…" rather than offering an action that will be refused. `TrayPhase::NotReady` and `NotPermitted` already exist for this
 - [ ] Transitional tray items are optimistic and revert on error (catalog: "⏹ Stopping…", disabled), so a click always visibly does something

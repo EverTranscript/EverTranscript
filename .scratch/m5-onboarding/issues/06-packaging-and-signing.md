@@ -4,7 +4,7 @@
 
 **Blocked by:** 05.
 
-Status: not started
+Status: not built — needs credentials that are the Operator's
 
 - [ ] A macOS app bundle containing the Client, the Core, and the Summary sidecar — three binaries that must be signed and notarized together, and whose codesigning identifiers must agree or the OS will refuse the child processes
 - [ ] The macOS entitlements the product actually needs and **nothing else** — the permission-set audit already forbids ScreenCaptureKit, Contacts, MapKit and CoreLocation, and the bundle is where that becomes visible to an evaluator (story 46)

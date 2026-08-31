@@ -568,3 +568,23 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Justification:** This is the first milestone where a bug leaks meeting content, and every other failure in this product is recoverable — a lost recording, a missed meeting, a mislabelled speaker. Sending a transcript to a provider the Operator did not choose is not. A boolean that happens to be false and a function that cannot express the wrong thing are different guarantees, and only the second survives a future edit by someone who has not read this entry. The tests are written to tell them apart: each drives all four failure shapes and asserts the *other* Backend was never called, rather than only that the right one answered. Cancellation is excluded from fallback for the same reason — an Operator who pressed stop must not discover that stopping is what sent their transcript somewhere. The gate on choosing Cloud lives in the Core rather than the UI on the same principle: a gate a Client can walk around by forgetting to call it is not a gate.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q40 — m5-onboarding/04-floating-indicator — gate-resolution
+
+**Question:** The PRD lists a Core-native floating mini-indicator as an M5 *evaluation*. The catalog has the exact Electron recipe. Build it, or keep the tray as the only always-visible indicator?
+**Options considered:** build the floating nub from the catalog's recipe / keep the Core-owned tray alone and record why
+**Chosen:** Not building it. The tray stays the only always-visible recording indicator (ADR-0026).
+**Decided-by:** agent
+**Justification:** The recipe is available and the work is small, which is exactly why the decision needs a reason rather than a shrug. **A Client-owned indicator has a defect the tray does not: it disappears when the Client is closed, and the Core keeps recording.** That is not a corner case — it is the product's normal state, since ADR-0026 makes the Core an always-on daemon and the Client a thin optional window, and Auto-Record starts meetings without opening one. An indicator that is absent precisely when someone has closed the window and forgotten they are recording is worse than no second indicator, because its usual presence teaches an Operator to read its absence as "not recording". The one thing the tray genuinely loses to is fullscreen — the menu bar hides, and the catalog's `visibleOnFullScreen` flag is aimed at exactly that. But M1 already answered the fullscreen case by making the tray icon reachable on mouse-to-top, and story 4 in the PRD describes it that way. So the gap this would close is narrower than it first looks, and the cost is a second always-on-top window whose correctness depends on a six-flag incantation that neither steals focus nor blocks clicks. Revisit if a real Operator reports losing track of a recording in fullscreen; that report would be evidence, and this is not.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q41 — m5-onboarding/08-polish — finding
+
+**Question:** M5's polish pass includes a staleness review of `CONTEXT.md`, whose glossary is normative. Did four milestones of ADRs leave anything wrong in it?
+**Options considered:** read it and confirm it is current / read it against what the code now does
+**Chosen:** One real contradiction, now corrected. `CONTEXT.md` defined Sanctioned Traffic as "the enumerable, **content-free** network calls the product may ever make" and then listed the cloud Summary Backend as the third. That Backend sends the full text of a meeting — it is the only path by which anything said in a meeting can leave the machine, and sending it is the entire point.
+**Decided-by:** agent
+**Justification:** This is the second time this file has contradicted itself in a way that mattered; M2 found the first (Meeting Detection calling itself the "single" ambient sense eleven entries above a list of two). The wording is inherited from ADR-0034, which says "enumerable, content-free list" in one sentence and then, in the next, rewords the guarantee test to "none of it carrying meeting content" — a phrasing that is only true of entries one and two. The glossary is normative for every spec written after it, and this is exactly the sentence a privacy-conscious evaluator would quote back after finding the cloud Backend. Corrected in `CONTEXT.md` to say plainly that two of the three are content-free and the third is not, with an `_Avoid_` entry naming the phrase. **ADR-0034 itself is left alone**: amending a ratified decision is not a polish-pass act, and the ADR's substance — three entries, enumerable, one requiring an explicit choice — is right. What was wrong is one adjective, and the glossary is where it does damage.
+**Outcome:** applied
+**Ref:** (pending)

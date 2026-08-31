@@ -4,7 +4,7 @@
 
 **Blocked by:** 06.
 
-Status: not started
+Status: not built — blocked on 06 and on a tagged release
 
 - [ ] A Homebrew cask formula pointing at the signed, notarized macOS artifact, with its checksum
 - [ ] A winget manifest pointing at the signed Windows installer, with its checksum

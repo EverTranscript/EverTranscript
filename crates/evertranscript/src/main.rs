@@ -148,7 +148,7 @@ enum Command {
         /// Speaker id, from `evertranscript speakers list`.
         speaker: String,
     },
-    /// What Diarization is doing, and how to stop it.
+    /// Run Diarization over a Meeting, see what it is doing, or stop it.
     #[command(subcommand)]
     Diarize(DiarizeCommand),
     /// Turn launch-at-login on or off. Registration only: a running Core is

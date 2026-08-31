@@ -4,7 +4,7 @@
 
 **Blocked by:** 01.
 
-Status: not started
+Status: not built — the pieces exist, the flow does not
 
 - [ ] A linear flow: Briefing → permissions → models → History folder → Summary Backend → calendar → done
 - [ ] **Each step explains the requirement at the moment it is demanded**, not in a help page. The microphone prompt is the moment to say why the microphone is needed
