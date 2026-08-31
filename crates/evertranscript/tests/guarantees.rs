@@ -325,6 +325,81 @@ fn diarization_opens_no_network_connections_either() {
 }
 
 #[test]
+fn a_full_cycle_with_summary_and_updates_off_opens_no_sockets() {
+    // ADR-0034's guarantee in its final form: "with updates off and models
+    // downloaded, literally zero". The two tests above cover recording, and
+    // recording plus Diarization. This is the longest-reaching path — it
+    // also generates a Summary, which in M4 became a second thing that
+    // could reach for a network.
+    //
+    // Skipped loudly without models rather than passing quietly: a
+    // guarantee test that proves nothing while looking green is worse than
+    // one that is missing.
+    let Ok(models) = std::env::var("EVERTRANSCRIPT_DIARIZE_MODELS") else {
+        eprintln!("skipped: set EVERTRANSCRIPT_DIARIZE_MODELS to run this");
+        return;
+    };
+    let source = std::path::PathBuf::from(&models);
+    if !source.join("segmentation.onnx").exists() {
+        eprintln!("skipped: no models at {models}");
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let history = dir.path().join("History");
+    let runtime = dir.path().join("run");
+    let models_dir = dir.path().join("models");
+    std::fs::create_dir_all(&models_dir).expect("models dir");
+    std::fs::copy(
+        source.join("segmentation.onnx"),
+        models_dir.join("diarize-segmentation.onnx"),
+    )
+    .expect("segmentation");
+    std::fs::copy(
+        source.join("embedding.onnx"),
+        models_dir.join("diarize-embedding.onnx"),
+    )
+    .expect("embedding");
+
+    let mut daemon = Command::new(binary())
+        .arg("daemon")
+        .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
+        .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
+        .env("EVERTRANSCRIPT_MODELS_DIR", &models_dir)
+        .env(evertranscript_core::tray::DISABLE_ENV, "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("starting the Core");
+    wait_for_core(&history, &runtime);
+
+    run(&history, &runtime, &["acknowledge"]);
+    // Updates off, and Summary on the local Backend. Both are the
+    // configuration this guarantee is about.
+    run(&history, &runtime, &["summary", "use", "local"]);
+    run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    run(&history, &runtime, &["record", "stop"]);
+    // Stopping spawns Diarization; a Summary is requested straight after.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let outcome = open_sockets(daemon.id());
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+
+    let connections: Vec<&str> = outcome
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert!(
+        connections.is_empty(),
+        "a full local cycle must reach nothing, but the Core had these sockets open:\n{}",
+        connections.join("\n")
+    );
+}
+
+#[test]
 fn nothing_key_shaped_reaches_the_record_or_the_logs() {
     // Story 41: secrets live only in the OS credential store, never in the
     // database, the Mirrors, or the logs. M1 holds no keys at all, and this

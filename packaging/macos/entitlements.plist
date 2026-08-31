@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  What the product actually needs, and nothing else.
+
+  This file is the checkable form of story 46: an evaluator holding only the
+  download can read it. Every entry below exists because a feature would not
+  work without it; anything that could be added "just in case" belongs in a
+  different product.
+
+  Deliberately absent, and asserted absent in the binary by
+  tests/guarantees.rs: ScreenCaptureKit (no screen content, ever), Contacts,
+  MapKit and CoreLocation. The last two were linked by accident through a
+  dependency's default features in M2 and found by that audit — which is why
+  the audit names them rather than trusting this file.
+-->
+<plist version="1.0">
+<dict>
+    <!-- Recording the Operator's own voice. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!-- The History folder is the Operator's and may live wherever they put
+         it (ADR-0035). -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Sanctioned Traffic, entries one to three (ADR-0034). Outgoing only:
+         nothing in this product listens on a socket, so there is no server
+         entitlement here and its absence is the point. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>
