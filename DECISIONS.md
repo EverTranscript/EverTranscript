@@ -373,3 +373,13 @@ What this does **not** establish: no meeting app has been observed holding the m
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q28 — m2-auto-record/05-windows-detection-vertical — gate-resolution
+
+**Question:** The Windows run fixed the platform but reached only Edge — no Zoom, VooV, 腾讯会议 or the other browsers, and Teams was never driven into a call. Keep the meeting-app row open until someone runs them, or close live Windows testing?
+**Options considered:** hold it open until the matrix is actually complete / close it as the Operator's decision, with the unreached cases named as standing risk
+**Chosen:** Closed on the Operator's instruction (2026-08-31). The residual is recorded specifically rather than generally — Teams on Windows is WebView2-hosted, one `ms-teams.exe` beside 24 `msedgewebview2.exe` children, so its capture session may belong to a name the row does not hold; 腾讯会议's executable is unknown; Zoom, VooV and five browsers are unobserved there.
+**Decided-by:** human
+**Justification:** The run did the thing that mattered: it found that Windows detection had never worked at all — `GetModuleBaseNameW` denied on every process, so `microphone_holders` always answered "nobody" — and fixed it. Holding the ticket open for a fuller matrix would confuse two different states: a platform that does not work, and a platform that works and has been exercised on one app. Only the first is a milestone blocker. The Operator has the machine and has ended this line of work, and more of their time is theirs to offer. The reason for naming Teams so precisely is that it is the one case with a *predicted* failure shape rather than a general unknown, and the prediction must not become the fix: adding `msedgewebview2.exe` on the strength of the reasoning would match every WebView2 app and would be Q20's mistake with a new spelling. `examples/mic-holders.rs`, which the run added, settles it in one command whenever a signed-in Teams call exists.
+**Outcome:** applied
+**Ref:** (pending)
