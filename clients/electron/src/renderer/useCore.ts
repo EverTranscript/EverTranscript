@@ -13,6 +13,8 @@ import type { JsonRpcNotification } from "@protocol/JsonRpcNotification";
 import type { Meeting } from "@protocol/Meeting";
 import type { SettingsResponse } from "@protocol/SettingsResponse";
 import type { SettingsSetParams } from "@protocol/SettingsSetParams";
+import type { BriefingResponse } from "@protocol/BriefingResponse";
+import type { PostureResponse } from "@protocol/PostureResponse";
 import type { SpeakerListResponse } from "@protocol/SpeakerListResponse";
 import type { SummaryBackendsResponse } from "@protocol/SummaryBackendsResponse";
 import type { SpeakerResponse } from "@protocol/SpeakerResponse";
@@ -426,4 +428,57 @@ export function useSummaryBackends() {
   );
 
   return { backends, error, choose, setStrict, setKey };
+}
+
+/**
+ * The Briefing, and whether this installation has acknowledged it.
+ */
+export function useBriefing() {
+  const [briefing, setBriefing] = useState<BriefingResponse | null>(null);
+
+  const refresh = useCallback(async () => {
+    setBriefing(
+      await window.evertranscript.request<BriefingResponse>("briefing/get", {}),
+    );
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const acknowledge = useCallback(async () => {
+    await window.evertranscript.request<SettingsResponse>("settings/set", {
+      briefingAcknowledged: true,
+    });
+    await refresh();
+  }, [refresh]);
+
+  return { briefing, acknowledge };
+}
+
+/**
+ * What this installation holds, may say, and cannot do (stories 46, 47).
+ *
+ * Refetched on open rather than cached: a stale privacy page is a false
+ * one, and this is the surface someone uses to decide whether to trust the
+ * product.
+ */
+export function usePosture() {
+  const [posture, setPosture] = useState<PostureResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        setPosture(
+          await window.evertranscript.request<PostureResponse>("posture/get", {}),
+        );
+        setError(null);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    })();
+  }, []);
+
+  return { posture, error };
 }

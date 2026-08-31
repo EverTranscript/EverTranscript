@@ -292,6 +292,12 @@ client_request_definitions! {
         params: BriefingGetParams,
         response: BriefingResponse,
     },
+    /// What this installation holds, what it may say on the wire, and what
+    /// it cannot do (stories 46, 47). Enumerated so it can be checked.
+    PostureGet => "posture/get" {
+        params: PostureGetParams,
+        response: PostureResponse,
+    },
     /// Every Speaker the app holds — the Voice Registry's inventory
     /// (story 30). ADR-0008 makes this surface mandatory rather than
     /// optional: it is half of what was traded for storing Voiceprints
@@ -1345,6 +1351,59 @@ pub struct BriefingResponse {
     /// all of them, and the surface should say so rather than imply a review
     /// that has not happened.
     pub awaiting_counsel: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PostureGetParams {}
+
+/// One thing this product may say on the network (ADR-0034). Three, closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TrafficEntry {
+    pub name: String,
+    pub host: String,
+    pub what_it_sends: String,
+    /// Whether it can happen right now, as configured.
+    pub enabled: bool,
+    pub disableable: bool,
+}
+
+/// A capability foreclosed, or one whose promise moved, with where to check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PostureClaim {
+    pub capability: String,
+    pub proof: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PostureResponse {
+    pub history_dir: String,
+    #[ts(type = "number")]
+    pub meetings: i64,
+    #[ts(type = "number")]
+    pub speakers: i64,
+    /// How many Speakers have a stored Voiceprint — the biometric count, as
+    /// a number rather than a category.
+    #[ts(type = "number")]
+    pub voiceprints: i64,
+    pub models: Vec<String>,
+    pub calendar_granted: bool,
+    pub traffic: Vec<TrafficEntry>,
+    pub foreclosed: Vec<PostureClaim>,
+    /// Where a guarantee moved, and which decision moved it. Shown, not
+    /// absorbed: a page reflecting only the current state, with no sign the
+    /// promise had changed, is what an evaluator trusts least.
+    pub amended: Vec<PostureClaim>,
+    /// True when this installation would make no network call at all.
+    pub currently_silent: bool,
+    pub source: String,
 }
 
 #[cfg(test)]

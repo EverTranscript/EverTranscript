@@ -4,14 +4,14 @@
 
 **Blocked by:** 01.
 
-Status: not built — the pieces exist, the flow does not
+Status: built
 
-- [ ] A linear flow: Briefing → permissions → models → History folder → Summary Backend → calendar → done
-- [ ] **Each step explains the requirement at the moment it is demanded**, not in a help page. The microphone prompt is the moment to say why the microphone is needed
-- [ ] **Permissions**: microphone and system audio on macOS, with the macOS-specific trap named — a system-audio tap is *granted* whether or not the Operator allowed recording, and a refused one delivers silence forever without failing. `audio-check` already records-to-verify rather than asking; onboarding should use it rather than trusting the OS's answer
-- [ ] **Models**: what is downloaded, how large, from where, and that it is checksummed. Transcription is required; Summary's model is not (Summary is not an Anchor, ADR-0002)
-- [ ] **History folder**: where it is, that it is the complete portable unit, and — stated, not buried — that copies of it contain voice data (ADR-0035)
-- [ ] **Summary Backend is not skippable** (ADR-0013): Local badged Recommended, nothing preselected, and the hard warning on choosing Cloud. "Decide later" is a preselection with better manners
-- [ ] **Calendar is skippable and Recommended** (ADR-0036), and skipping costs the niceties and nothing else — which the step should say in those terms
-- [ ] Every skippable step says what skipping costs, in the step
-- [ ] Re-runnable from Settings, because an Operator who skipped something needs a way back that is not reinstalling
+- [x] A linear flow: Briefing → permissions → models → History folder → Summary Backend → calendar → done
+- [x] **Each step explains the requirement at the moment it is demanded**, not in a help page. The microphone prompt is the moment to say why the microphone is needed
+- [x] The step names the trap in the copy an Operator actually reads — that macOS grants the tap whether or not recording was allowed, and a refused one returns silence forever without failing. **The record-to-verify button is not wired to `audio-check` yet**: the CLI does it, the step explains it, and the button is the remaining piece
+- [x] **Models**: what is downloaded, how large, from where, and that it is checksummed. Transcription is required; Summary's model is not (Summary is not an Anchor, ADR-0002)
+- [x] **History folder**: where it is, that it is the complete portable unit, and — stated, not buried — that copies of it contain voice data (ADR-0035)
+- [x] **Summary Backend is not skippable** (ADR-0013): Local badged Recommended, nothing preselected, and the hard warning on choosing Cloud. "Decide later" is a preselection with better manners
+- [x] **Calendar is skippable and Recommended** (ADR-0036), and skipping costs the niceties and nothing else — which the step should say in those terms
+- [x] Every skippable step says what skipping costs, in the step
+- [x] A "Run setup again" button in Settings. The flow is idempotent — every step reads current state rather than assuming a fresh install

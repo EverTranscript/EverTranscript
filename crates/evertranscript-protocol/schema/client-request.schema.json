@@ -412,6 +412,23 @@
       ]
     },
     {
+      "description": "What this installation holds, what it may say on the wire, and what\nit cannot do (stories 46, 47). Enumerated so it can be checked.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "posture/get"
+        },
+        "params": {
+          "$ref": "#/$defs/PostureGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Every Speaker the app holds — the Voice Registry's inventory\n(story 30). ADR-0008 makes this surface mandatory rather than\noptional: it is half of what was traded for storing Voiceprints\nat all.",
       "type": "object",
       "properties": {
@@ -760,6 +777,9 @@
       }
     },
     "ModelsStatusParams": {
+      "type": "object"
+    },
+    "PostureGetParams": {
       "type": "object"
     },
     "SettingsGetParams": {

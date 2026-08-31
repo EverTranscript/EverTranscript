@@ -10,6 +10,8 @@ import {
   useMeetingWriting,
   useRegistry,
   useSettings,
+  useBriefing,
+  usePosture,
   useSummaryBackends,
   useTranscript,
 } from "./useCore";
@@ -19,6 +21,9 @@ export function App(): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showingSettings, setShowingSettings] = useState(false);
   const [showingRegistry, setShowingRegistry] = useState(false);
+  const [showingPosture, setShowingPosture] = useState(false);
+  const [showingOnboarding, setShowingOnboarding] = useState(false);
+  const { briefing } = useBriefing();
 
   const recording = useMemo(
     () => core.meetings.find((meeting) => !meeting.endedAt) ?? null,
@@ -40,6 +45,13 @@ export function App(): React.JSX.Element {
     );
   }
 
+  // Setup takes the whole window until the Briefing is acknowledged.
+  // Nothing is captured before that (ADR-0023), so a sidebar offering a
+  // Record button would be offering an action that will be refused.
+  if (!briefing?.acknowledged || showingOnboarding) {
+    return <Onboarding onDone={() => setShowingOnboarding(false)} />;
+  }
+
   return (
     <div className="grid h-full grid-cols-[280px_1fr]">
       <Sidebar
@@ -55,14 +67,28 @@ export function App(): React.JSX.Element {
         }}
         onRegistry={() => {
           setShowingSettings(false);
+          setShowingPosture(false);
           setShowingRegistry((open) => !open);
+        }}
+        onPosture={() => {
+          setShowingSettings(false);
+          setShowingRegistry(false);
+          setShowingPosture((open) => !open);
         }}
       />
       <main className="flex h-full min-w-0 flex-col overflow-hidden">
         {showingSettings ? (
-          <SettingsPanel onClose={() => setShowingSettings(false)} />
+          <SettingsPanel
+            onClose={() => setShowingSettings(false)}
+            onRerunSetup={() => {
+              setShowingSettings(false);
+              setShowingOnboarding(true);
+            }}
+          />
         ) : showingRegistry ? (
           <RegistryPanel onClose={() => setShowingRegistry(false)} />
+        ) : showingPosture ? (
+          <PosturePanel onClose={() => setShowingPosture(false)} />
         ) : active ? (
           <MeetingView
             meeting={active}
@@ -127,6 +153,7 @@ function Sidebar({
   onStop,
   onSettings,
   onRegistry,
+  onPosture,
 }: {
   meetings: Meeting[];
   activeId: string | null;
@@ -136,6 +163,7 @@ function Sidebar({
   onStop: () => void;
   onSettings: () => void;
   onRegistry: () => void;
+  onPosture: () => void;
 }): React.JSX.Element {
   return (
     <aside className="flex h-full flex-col border-r border-[--color-line] bg-[--color-surface-raised]">
@@ -155,6 +183,14 @@ function Sidebar({
           className="text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
         >
           {t("registry.open")}
+        </button>
+        <button
+          type="button"
+          onClick={onPosture}
+          title={t("posture.title")}
+          className="text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
+        >
+          {t("posture.open")}
         </button>
         {recordingId ? (
           <button
@@ -407,7 +443,13 @@ function formatTimestamp(milliseconds: number): string {
  * settings only the CLI could reach come to live — a settings screen that
  * hides settings is worse than none.
  */
-function SettingsPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+function SettingsPanel({
+  onClose,
+  onRerunSetup,
+}: {
+  onClose: () => void;
+  onRerunSetup: () => void;
+}): React.JSX.Element {
   const { settings, watchlist, error, update, addWatched, removeWatched } =
     useSettings();
   const [draft, setDraft] = useState("");
@@ -561,6 +603,34 @@ function SettingsPanel({ onClose }: { onClose: () => void }): React.JSX.Element 
       </section>
 
       <BackendPanel />
+
+      <section className="mt-8">
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={settings?.checkForUpdates ?? true}
+            onChange={(changed) =>
+              void update({ checkForUpdates: changed.target.checked })
+            }
+          />
+          <span>
+            {t("updates.title")}
+            <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+              {t("updates.hint")}
+            </span>
+          </span>
+        </label>
+
+        {/* An Operator who skipped a step needs a way back that is not
+            reinstalling. */}
+        <button
+          type="button"
+          onClick={onRerunSetup}
+          className="mt-4 rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+        >
+          {t("onboarding.reopen")}
+        </button>
+      </section>
     </div>
   );
 }
@@ -967,5 +1037,268 @@ function BackendPanel(): React.JSX.Element {
         </span>
       </label>
     </section>
+  );
+}
+
+/**
+ * What this installation knows, holds, and may say (stories 46, 47).
+ *
+ * Enumeration, not assurance. Every line here is a fact with a source, and
+ * the Core recomputes them on each open — a stale privacy page is a false
+ * one, and this is the surface an evaluator uses to decide.
+ */
+function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const { posture, error } = usePosture();
+
+  return (
+    <div className="flex h-full flex-col overflow-y-auto p-6">
+      <header className="mb-6 flex items-center justify-between">
+        <h1 className="text-lg font-semibold">{t("posture.title")}</h1>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+        >
+          {t("registry.close")}
+        </button>
+      </header>
+
+      {error ? (
+        <p className="mb-4 text-sm text-[--color-recording]">{error}</p>
+      ) : null}
+
+      {posture ? (
+        <>
+          <section className="mb-6">
+            <h2 className="text-sm font-medium">{t("posture.holds")}</h2>
+            <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+              <dt className="text-[--color-ink-muted]">{t("posture.meetings")}</dt>
+              <dd>{posture.meetings}</dd>
+              <dt className="text-[--color-ink-muted]">{t("posture.speakers")}</dt>
+              <dd>{posture.speakers}</dd>
+              {/* The biometric count, as a number rather than a category. */}
+              <dt className="text-[--color-ink-muted]">
+                {t("posture.voiceprints")}
+              </dt>
+              <dd>{posture.voiceprints}</dd>
+              <dt className="text-[--color-ink-muted]">{t("posture.models")}</dt>
+              <dd>{posture.models.join(", ") || "—"}</dd>
+              <dt className="text-[--color-ink-muted]">{t("posture.folder")}</dt>
+              <dd className="truncate font-mono text-xs">{posture.historyDir}</dd>
+            </dl>
+            <p className="mt-2 text-xs text-[--color-ink-muted]">
+              {posture.calendarGranted
+                ? t("posture.calendar.granted")
+                : t("posture.calendar.withheld")}
+            </p>
+          </section>
+
+          <section className="mb-6">
+            <h2 className="text-sm font-medium">{t("posture.wire")}</h2>
+            <p
+              className={`mt-1 text-xs ${
+                posture.currentlySilent ? "" : "text-[--color-recording]"
+              }`}
+            >
+              {posture.currentlySilent
+                ? t("posture.silent")
+                : t("posture.notSilent")}
+            </p>
+            <ul className="mt-2">
+              {posture.traffic.map((entry) => (
+                <li key={entry.name} className="border-b border-[--color-line] py-2">
+                  <span className="block text-sm">
+                    {entry.name} —{" "}
+                    <span className="text-[--color-ink-muted]">
+                      {entry.enabled ? t("posture.enabled") : t("posture.disabled")}
+                    </span>
+                  </span>
+                  <span className="block font-mono text-xs text-[--color-ink-muted]">
+                    {entry.host}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+                    {entry.whatItSends}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section className="mb-6">
+            <h2 className="text-sm font-medium">{t("posture.cannot")}</h2>
+            <ul className="mt-2">
+              {posture.foreclosed.map((claim) => (
+                <li key={claim.capability} className="py-1.5">
+                  <span className="block text-sm">{claim.capability}</span>
+                  <span className="block text-xs text-[--color-ink-muted]">
+                    {claim.proof}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          {/* Shown rather than absorbed: a guarantees page reflecting only
+              the current state, with no sign the promise had moved, is what
+              an evaluator finds first and trusts least. */}
+          <section className="mb-6">
+            <h2 className="text-sm font-medium">{t("posture.amended")}</h2>
+            <ul className="mt-2">
+              {posture.amended.map((claim) => (
+                <li key={claim.capability} className="py-1.5">
+                  <span className="block text-sm">{claim.capability}</span>
+                  <span className="block text-xs text-[--color-ink-muted]">
+                    {claim.proof}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <a
+            href={posture.source}
+            className="text-sm underline"
+            target="_blank"
+            rel="noreferrer"
+          >
+            {t("posture.source")}
+          </a>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Linear setup (story 44).
+ *
+ * Each step explains its requirement where the requirement is made, not in
+ * a help page. Skippable steps say what skipping costs, in the step — and
+ * the Backend step is not skippable, because ADR-0013 requires an explicit
+ * choice and "decide later" is a preselection with better manners.
+ */
+function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
+  const { briefing, acknowledge } = useBriefing();
+  const [step, setStep] = useState(0);
+  const { backends } = useSummaryBackends();
+
+  const steps = [
+    "briefing",
+    "permissions",
+    "models",
+    "folder",
+    "backend",
+    "calendar",
+  ] as const;
+  const current = steps[step];
+
+  // The Briefing is not a step that can be walked past, and the Backend is
+  // not one that can be deferred. Everything else can.
+  const blocked =
+    (current === "briefing" && !briefing?.acknowledged) ||
+    (current === "backend" && !backends?.chosen);
+
+  const advance = () => (step + 1 < steps.length ? setStep(step + 1) : onDone());
+
+  return (
+    <div className="flex h-full flex-col overflow-y-auto p-6">
+      <header className="mb-4">
+        <h1 className="text-lg font-semibold">{t("onboarding.title")}</h1>
+        <p className="text-xs text-[--color-ink-muted]">
+          {t("onboarding.step")} {step + 1} {t("onboarding.of")} {steps.length}
+        </p>
+      </header>
+
+      <div className="min-h-0 flex-1">
+        {current === "briefing" ? (
+          <section>
+            <h2 className="text-sm font-medium">{t("onboarding.briefing.title")}</h2>
+            <pre className="mt-2 max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded border border-[--color-line] bg-[--color-surface-raised] p-3 font-sans text-sm">
+              {briefing?.text ?? ""}
+            </pre>
+            {briefing?.acknowledged ? null : (
+              <button
+                type="button"
+                onClick={() => void acknowledge()}
+                className="mt-3 rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+              >
+                {t("onboarding.briefing.accept")}
+              </button>
+            )}
+          </section>
+        ) : null}
+
+        {current === "permissions" ? (
+          <section>
+            <h2 className="text-sm font-medium">
+              {t("onboarding.permissions.title")}
+            </h2>
+            <p className="mt-2 text-sm text-[--color-ink-muted]">
+              {t("onboarding.permissions.body")}
+            </p>
+          </section>
+        ) : null}
+
+        {current === "models" ? (
+          <section>
+            <h2 className="text-sm font-medium">{t("onboarding.models.title")}</h2>
+            <p className="mt-2 text-sm text-[--color-ink-muted]">
+              {t("onboarding.models.body")}
+            </p>
+          </section>
+        ) : null}
+
+        {current === "folder" ? (
+          <section>
+            <h2 className="text-sm font-medium">{t("onboarding.folder.title")}</h2>
+            <p className="mt-2 text-sm text-[--color-ink-muted]">
+              {t("onboarding.folder.body")}
+            </p>
+          </section>
+        ) : null}
+
+        {current === "backend" ? (
+          <section>
+            <h2 className="text-sm font-medium">{t("onboarding.backend.title")}</h2>
+            <p className="mt-2 text-sm text-[--color-ink-muted]">
+              {t("onboarding.backend.body")}
+            </p>
+            <BackendPanel />
+          </section>
+        ) : null}
+
+        {current === "calendar" ? (
+          <section>
+            <h2 className="text-sm font-medium">{t("onboarding.calendar.title")}</h2>
+            <p className="mt-2 text-sm text-[--color-ink-muted]">
+              {t("onboarding.calendar.body")}
+            </p>
+            <p className="mt-2 text-xs text-[--color-ink-muted]">
+              {t("onboarding.calendar.skipCost")}
+            </p>
+          </section>
+        ) : null}
+      </div>
+
+      <footer className="mt-4 flex gap-2">
+        <button
+          type="button"
+          disabled={blocked}
+          onClick={advance}
+          className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised] disabled:opacity-40"
+        >
+          {step + 1 === steps.length ? t("onboarding.done") : t("onboarding.next")}
+        </button>
+        {!blocked && current !== "briefing" && current !== "backend" ? (
+          <button
+            type="button"
+            onClick={advance}
+            className="px-3 py-1.5 text-sm text-[--color-ink-muted]"
+          >
+            {t("onboarding.skip")}
+          </button>
+        ) : null}
+      </footer>
+    </div>
   );
 }

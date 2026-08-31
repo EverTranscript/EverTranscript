@@ -36,6 +36,8 @@ use evertranscript_protocol::MeetingResponse;
 use evertranscript_protocol::ModelAvailability;
 use evertranscript_protocol::ModelState;
 use evertranscript_protocol::ModelsStatusResponse;
+use evertranscript_protocol::PostureClaim;
+use evertranscript_protocol::PostureResponse;
 use evertranscript_protocol::RequestId;
 use evertranscript_protocol::ServerCapabilities;
 use evertranscript_protocol::ServerInfo;
@@ -51,6 +53,7 @@ use evertranscript_protocol::StatusResponse;
 use evertranscript_protocol::SummaryBackendOption;
 use evertranscript_protocol::SummaryBackendsResponse;
 use evertranscript_protocol::SummaryDataHandling;
+use evertranscript_protocol::TrafficEntry;
 use evertranscript_protocol::TranscriptCaptionsDroppedParams;
 use evertranscript_protocol::TranscriptReassignResponse;
 use evertranscript_protocol::TranscriptSegment;
@@ -490,6 +493,74 @@ impl Core {
         // transcript.
         self.mirror_wake.notify_one();
         Ok(meeting)
+    }
+
+    /// What this installation holds and may say (stories 46, 47).
+    ///
+    /// Counted from the record and read from the settings each time rather
+    /// than cached: a stale privacy page is a false one, and this is the
+    /// surface an evaluator uses to decide.
+    pub async fn posture(&self) -> Result<PostureResponse> {
+        let settings = self.settings.lock().await.clone();
+        let (meetings, speakers, voiceprints) = self
+            .store
+            .read(|connection| {
+                let meetings: i64 =
+                    connection.query_row("SELECT COUNT(*) FROM meetings", [], |row| row.get(0))?;
+                let speakers: i64 =
+                    connection.query_row("SELECT COUNT(*) FROM speakers", [], |row| row.get(0))?;
+                let voiceprints: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM speakers WHERE voiceprint IS NOT NULL",
+                    [],
+                    |row| row.get(0),
+                )?;
+                Ok((meetings, speakers, voiceprints))
+            })
+            .await?;
+
+        let models: Vec<String> = crate::models::registry::ALL
+            .iter()
+            .filter(|entry| entry.local_path(&self.models_dir).exists())
+            .map(|entry| entry.display_name.to_string())
+            .collect();
+        let all_present = crate::models::registry::required()
+            .all(|entry| entry.local_path(&self.models_dir).exists());
+
+        let traffic = crate::posture::sanctioned_traffic(
+            settings.check_for_updates,
+            settings.summary_backend.as_deref(),
+            settings.summary_base_url.as_deref(),
+        );
+        let currently_silent = crate::posture::currently_silent(&traffic, all_present);
+
+        let claim = |item: &crate::posture::Foreclosed| PostureClaim {
+            capability: item.capability.to_string(),
+            proof: item.proof.to_string(),
+        };
+
+        Ok(PostureResponse {
+            history_dir: self.history_dir.display().to_string(),
+            meetings,
+            speakers,
+            voiceprints,
+            models,
+            calendar_granted: crate::detect::calendar::access()
+                == crate::detect::calendar::Access::Granted,
+            traffic: traffic
+                .into_iter()
+                .map(|entry| TrafficEntry {
+                    name: entry.name.to_string(),
+                    host: entry.host,
+                    what_it_sends: entry.what_it_sends.to_string(),
+                    enabled: entry.enabled,
+                    disableable: entry.disableable,
+                })
+                .collect(),
+            foreclosed: crate::posture::FORECLOSED.iter().map(claim).collect(),
+            amended: crate::posture::AMENDED.iter().map(claim).collect(),
+            currently_silent,
+            source: "https://github.com/EverTranscript/EverTranscript".to_string(),
+        })
     }
 
     // ---- Summary (M4) ----
@@ -1896,6 +1967,8 @@ impl Server {
                     awaiting_counsel: true,
                 })?)
             }
+
+            ClientRequest::PostureGet(_) => Ok(serde_json::to_value(self.core.posture().await?)?),
 
             ClientRequest::SpeakerList(_) => Ok(serde_json::to_value(self.core.speakers().await?)?),
 
