@@ -194,27 +194,65 @@ fn best_cluster_for(
 
 /// Merges clusters that are the same voice.
 ///
-/// Agglomerative, single pass, at [`MERGE_THRESHOLD`]. Over-segmentation is
-/// the failure this repairs: a clusterer that splits one person into two is
-/// commonplace, and the Operator sees it as a stranger in their own meeting.
+/// **Properly agglomerative — closest pair first, repeatedly, against a
+/// running centroid.** The first version was a single pass that joined each
+/// cluster to the first earlier one within [`MERGE_THRESHOLD`], which is not
+/// the same algorithm and does not give the same answer: it compares against
+/// whichever member happened to come first rather than against the group, so
+/// a voice whose short windows vary lands in two groups that are each
+/// internally consistent and never get compared to each other.
+///
+/// That is not hypothetical. The close-out measured three speakers in a
+/// two-speaker recording, and the two extra clusters were the *same* person
+/// — which an Operator reads as a stranger in their own meeting. Merging by
+/// centroid, closest pair first, is what the catalog specifies and it is
+/// what fixed it.
 pub fn agglomerate(embeddings: &BTreeMap<Cluster, Embedding>) -> BTreeMap<Cluster, Cluster> {
-    let mut canonical: BTreeMap<Cluster, Cluster> = BTreeMap::new();
-    for (cluster, embedding) in embeddings {
-        // Join the first canonical cluster close enough to be the same
-        // voice; the ordering is deterministic because the map is sorted.
-        let joined = canonical
-            .values()
-            .copied()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .find(|other| {
-                embeddings.get(other).is_some_and(|theirs| {
-                    cosine(&embedding.vector, &theirs.vector) >= MERGE_THRESHOLD
-                })
-            });
-        canonical.insert(*cluster, joined.unwrap_or(*cluster));
+    // Each cluster starts as its own group; groups merge until no pair is
+    // close enough.
+    let mut groups: Vec<(Vec<Cluster>, Vec<f32>)> = embeddings
+        .iter()
+        .map(|(cluster, embedding)| (vec![*cluster], embedding.vector.clone()))
+        .collect();
+
+    loop {
+        let mut best: Option<(usize, usize, f32)> = None;
+        for left in 0..groups.len() {
+            for right in (left + 1)..groups.len() {
+                let score = cosine(&groups[left].1, &groups[right].1);
+                if score >= MERGE_THRESHOLD && best.is_none_or(|(_, _, previous)| score > previous)
+                {
+                    best = Some((left, right, score));
+                }
+            }
+        }
+        let Some((left, right, _)) = best else { break };
+
+        // Merge into the earlier group and recentre. The centroid is what
+        // makes this stable: comparing against a single member is how a
+        // group drifts apart one window at a time.
+        let (members, vector) = groups.remove(right);
+        let weight = groups[left].0.len() as f32;
+        let total = weight + members.len() as f32;
+        for (slot, value) in groups[left].1.iter_mut().zip(vector.iter()) {
+            *slot = (*slot * weight + value * members.len() as f32) / total;
+        }
+        l2_normalize(&mut groups[left].1);
+        groups[left].0.extend(members);
     }
-    canonical
+
+    groups
+        .into_iter()
+        .flat_map(|(members, _)| {
+            // The lowest id names the group, so the result does not depend
+            // on the order groups happened to merge in — otherwise
+            // "Speaker 1" and "Speaker 2" could swap between two runs over
+            // the same audio, and an Operator who named one has named the
+            // other.
+            let canonical = members.iter().copied().min().expect("a non-empty group");
+            members.into_iter().map(move |member| (member, canonical))
+        })
+        .collect()
 }
 
 /// The average of a Speaker's exemplars, weighted by how much voiced audio
@@ -674,5 +712,37 @@ mod tests {
             speaker_id,
             "the same voice is now a stranger, which is what deletion means"
         );
+    }
+
+    #[test]
+    fn a_voice_whose_windows_drift_still_ends_as_one_cluster() {
+        // The close-out found three speakers in a two-speaker recording,
+        // two of them the same person. The cause was comparing each window
+        // against one earlier member rather than against the group: A and B
+        // are within threshold, B and C are, A and C are not, and a single
+        // pass leaves two groups that never meet.
+        let chain = clusters(&[
+            (0, &[1.00, 0.00, 0.0]),
+            (1, &[0.80, 0.60, 0.0]),
+            (2, &[0.55, 0.84, 0.0]),
+        ]);
+        assert!(
+            cosine(&[1.00, 0.00, 0.0], &[0.55, 0.84, 0.0]) < MERGE_THRESHOLD,
+            "the end points are too far apart to join directly"
+        );
+        let canonical = agglomerate(&chain);
+        assert_eq!(
+            canonical[&Cluster(0)],
+            canonical[&Cluster(2)],
+            "but they are one drifting voice"
+        );
+    }
+
+    #[test]
+    fn the_group_name_does_not_depend_on_merge_order() {
+        // Otherwise "Speaker 1" and "Speaker 2" swap between two runs over
+        // the same audio, and an Operator who named one has named the other.
+        let split = clusters(&[(7, &[1.0, 0.0, 0.0]), (2, &[0.97, 0.24, 0.0])]);
+        assert_eq!(agglomerate(&split)[&Cluster(7)], Cluster(2));
     }
 }

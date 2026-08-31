@@ -499,6 +499,7 @@ What makes the narrowing defensible is the evidence line rather than the count: 
 
 **Ref:** (pending)
 
+
 ## Q35 — m2-auto-record/05-windows-detection-vertical — deviation
 
 **Question:** Q34 narrowed `known_browsers` to Chrome, Edge, Safari and Firefox on the Operator's instruction. The Operator then said the label "any browser in a call" still stands, that the four are what gets *tested* because they are the top market-share browsers, and that EverTranscript "will most likely work on any browser". Implement the narrowing as written, or reconcile it with what the code actually does?
@@ -518,5 +519,12 @@ Two process notes. First, this is the session's own failure mode once more: a pl
 **Supersedes:** Q34 — the narrowing it recorded is reverted. What survives from it is the test-matrix priority and the observation that the Operator-visible label and the code had drifted apart.
 
 **Outcome:** applied
+## Q36 — m3-diarization/09-m3-closeout — finding
 
+**Question:** M3's owed number is a Diarization Error Rate. There was no labelled multi-speaker audio to measure against, and no second person to record. Report the solo case and call the rest unmeasurable, or construct something and measure it?
+**Options considered:** measure only the real solo recording and leave DER open / construct a labelled two-speaker file from the one real voice and measure against it, saying plainly what the construction is
+**Chosen:** Constructed it. Voice A is the mic channel of the M1 dogfood recording; voice B is the same passage resampled down; four 15 s turns, A-B-A-B, with an energy VAD for the speech reference. **DER 3.9%**, two speakers found for two, confusion 0.0%, 1.6 s missed. Cross-voice separation 0.848 same / 0.202 different against a 0.62 floor.
+**Decided-by:** agent
+**Justification:** The construction found three defects that every unit test had passed, which is the whole argument for measuring something imperfect rather than nothing. **(1)** The catalog's Voiceprint span rules — clip to the middle 10 s, drop under 1.5 s — were being used to define *turns*, so 28% of speech had no speaker at all; correct for choosing what to embed, disastrous for saying who talked. **(2)** One embedding per contiguous span made two people alternating without a pause into one speaker, at 23.6% confusion. **(3)** `agglomerate` was not agglomerative: a single pass joining each cluster to the first earlier one within threshold split one voice into two groups that never got compared, giving three speakers in a two-speaker recording. DER went 38.4% → 26.6% → 3.9% across the three fixes. What the number is **not** is equally important and is written into the ticket rather than buried: voice B is not a second person, so 3.9% is evidence that the pipeline separates two acoustically distinct voices and is not a DER on a real meeting, which is still owed. The embedding bake-off is likewise not run and is recorded as not run — a bake-off with one entrant is a preference wearing a lab coat, and it should be run against the same real audio when there is some.
+**Outcome:** applied
 **Ref:** (pending)

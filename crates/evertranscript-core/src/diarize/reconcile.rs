@@ -496,4 +496,88 @@ mod tests {
             "and the rest are plainly unattributed rather than wrong"
         );
     }
+
+    #[test]
+    fn a_meeting_killed_mid_diarization_reopens_coherent() {
+        // The crash criterion. In-memory coherence is not the claim worth
+        // making — the claim is that a Core killed while attributing leaves
+        // a database the *next* Core can open and read correctly.
+        use crate::store::meetings;
+        use crate::store::speakers as speaker_store;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("record.db");
+
+        let (meeting_id, speaker_id, segment_ids) = {
+            let mut connection = rusqlite::Connection::open(&path).expect("open");
+            crate::store::schema::migrate(&mut connection).expect("migrate");
+            let meeting = meetings::start(&connection, Some("Killed"), None).expect("meeting");
+            for index in 0..6 {
+                meetings::append_segment(
+                    &connection,
+                    &meeting.id,
+                    AudioChannel::System,
+                    index * 1_000,
+                    index * 1_000 + 900,
+                    "words",
+                )
+                .expect("segment");
+            }
+            let speaker = speaker_store::create(&connection, false).expect("speaker");
+            let all = meetings::segments(&connection, &meeting.id).expect("segments");
+            let ids: Vec<String> = all.iter().map(|s| s.id.clone()).collect();
+
+            let d = diarization(vec![Turn::new(AudioChannel::System, 0, 10_000, 0)]);
+            let full = reconcile(&d, &all);
+            // Half of the work, then the process goes away.
+            let partial = Reconciliation {
+                assignments: full.assignments[..3].to_vec(),
+                boundary_flips: 0,
+            };
+            let mut map = std::collections::BTreeMap::new();
+            map.insert(Cluster(0), speaker.id.clone());
+            apply(
+                &connection,
+                &partial,
+                &map,
+                speaker_store::Attribution::Clustered,
+            )
+            .expect("apply");
+            (meeting.id, speaker.id, ids)
+            // `connection` drops here — the kill.
+        };
+
+        // A new Core, over the same History.
+        let connection = rusqlite::Connection::open(&path).expect("reopen");
+        let after = meetings::segments(&connection, &meeting_id).expect("segments");
+        assert_eq!(after.len(), segment_ids.len(), "no segment was lost");
+
+        let attributed = after.iter().filter(|s| s.speaker_id.is_some()).count();
+        assert_eq!(attributed, 3, "what completed, survived");
+        assert!(
+            after[..3]
+                .iter()
+                .all(|s| s.speaker_id.as_deref() == Some(speaker_id.as_str())),
+            "and is attributed to the right Speaker"
+        );
+        assert!(
+            after[3..].iter().all(|s| s.speaker_id.is_none()),
+            "the rest are plainly unattributed rather than half-written"
+        );
+
+        // And the Meeting is still diarizable: re-running is how the
+        // Operator recovers from this, not a repair tool.
+        let all = meetings::segments(&connection, &meeting_id).expect("segments");
+        let d = diarization(vec![Turn::new(AudioChannel::System, 0, 10_000, 0)]);
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(Cluster(0), speaker_id.clone());
+        let written = apply(
+            &connection,
+            &reconcile(&d, &all),
+            &map,
+            speaker_store::Attribution::Clustered,
+        )
+        .expect("second run");
+        assert_eq!(written, 6, "the whole Meeting attributes on a re-run");
+    }
 }

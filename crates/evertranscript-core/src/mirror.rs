@@ -245,10 +245,20 @@ fn labels_for(segments: &[TranscriptSegment], names: &SpeakerNames) -> Vec<Strin
     let mut next = 1;
     let mut labels = Vec::with_capacity(segments.len());
 
+    // Whether Diarization has run over this Meeting at all. Found by
+    // dogfooding: before it runs, "You" on the mic channel is the honest
+    // best guess. *After* it runs, an unattributed mic segment means
+    // Diarization looked and found no voice there — and still calling it
+    // "You" put the Operator in one transcript under two different names,
+    // their own and the channel's. Not knowing is a different claim from
+    // not having looked, and the Mirror should not blur them.
+    let diarized = segments
+        .iter()
+        .any(|segment| segment.attribution.is_some() || segment.speaker_id.is_some());
+
     for segment in segments {
         let label = match segment.speaker_id.as_deref() {
-            // Diarization has not attributed this one. The channel is still
-            // the honest answer rather than a fabricated Speaker.
+            None if diarized => "Unattributed".to_string(),
             None => channel_label(segment.channel).to_string(),
             Some(id) => match names.get(id) {
                 Some(SpeakerName {
@@ -655,6 +665,39 @@ mod tests {
             .contains("**Frank**"),
             "and their chosen name wins over it"
         );
+    }
+
+    #[test]
+    fn after_diarization_an_unattributed_segment_is_not_called_you() {
+        // Found by dogfooding the real recording: with some segments
+        // attributed to a named Speaker and others not, the Operator
+        // appeared in one transcript under two names — "Frank" where
+        // Diarization spoke, "You" where it had not. Once Diarization has
+        // run, silence about a segment is a finding, not a channel guess.
+        let segments = vec![
+            attributed("a", 0, AudioChannel::Mic, "me"),
+            TranscriptSegment {
+                id: "b".into(),
+                sequence: 1,
+                channel: AudioChannel::Mic,
+                start_ms: 1_000,
+                end_ms: 1_900,
+                text: "unattributed".into(),
+                speaker_id: None,
+                attribution: None,
+            },
+        ];
+        let rendered = render(
+            &meeting(),
+            &segments,
+            &names(&[("me", Some("Frank"), true)]),
+        );
+        assert!(rendered.contains("**Frank**"));
+        assert!(
+            !rendered.contains("**You**"),
+            "one person must not appear under two names:\n{rendered}"
+        );
+        assert!(rendered.contains("**Unattributed**"));
     }
 
     #[test]

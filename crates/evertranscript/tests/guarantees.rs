@@ -254,6 +254,77 @@ fn a_full_recording_cycle_opens_no_network_connections() {
 }
 
 #[test]
+fn diarization_opens_no_network_connections_either() {
+    // Story 33 forbids a cloud form of Diarization "in any shape". The
+    // recording-cycle test above already covers the path where the models
+    // are absent; this one covers the path where they are present and
+    // actually run, which is the only one that could reach for a network.
+    //
+    // Skipped without models rather than passing quietly — a guarantee test
+    // that silently proves nothing is worse than one that is missing.
+    let Ok(models) = std::env::var("EVERTRANSCRIPT_DIARIZE_MODELS") else {
+        eprintln!("skipped: set EVERTRANSCRIPT_DIARIZE_MODELS to run this");
+        return;
+    };
+    let source = std::path::PathBuf::from(&models);
+    if !source.join("segmentation.onnx").exists() {
+        eprintln!("skipped: no models at {models}");
+        return;
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let history = dir.path().join("History");
+    let runtime = dir.path().join("run");
+    let models_dir = dir.path().join("models");
+    std::fs::create_dir_all(&models_dir).expect("models dir");
+    // Under the names the Core looks for.
+    std::fs::copy(
+        source.join("segmentation.onnx"),
+        models_dir.join("diarize-segmentation.onnx"),
+    )
+    .expect("segmentation");
+    std::fs::copy(
+        source.join("embedding.onnx"),
+        models_dir.join("diarize-embedding.onnx"),
+    )
+    .expect("embedding");
+
+    let mut daemon = Command::new(binary())
+        .arg("daemon")
+        .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
+        .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
+        .env("EVERTRANSCRIPT_MODELS_DIR", &models_dir)
+        .env(evertranscript_core::tray::DISABLE_ENV, "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("starting the Core");
+    wait_for_core(&history, &runtime);
+
+    run(&history, &runtime, &["acknowledge"]);
+    run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    run(&history, &runtime, &["record", "stop"]);
+    // Stopping spawns Diarization; give the models time to load and run.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let outcome = open_sockets(daemon.id());
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+
+    let connections: Vec<&str> = outcome
+        .lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert!(
+        connections.is_empty(),
+        "Diarization must reach no network, but the Core had these sockets open:\n{}",
+        connections.join("\n")
+    );
+}
+
+#[test]
 fn nothing_key_shaped_reaches_the_record_or_the_logs() {
     // Story 41: secrets live only in the OS credential store, never in the
     // database, the Mirrors, or the logs. M1 holds no keys at all, and this
