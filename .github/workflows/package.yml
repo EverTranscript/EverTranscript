@@ -32,14 +32,17 @@ jobs:
       - name: Install the Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # No `version:` here. The root package.json carries `packageManager`,
+      # and specifying both is an error rather than a redundancy — the
+      # action refuses with ERR_PNPM_BAD_PM_VERSION. One source of truth,
+      # and it is the manifest. (CI learned this in M2; this job relearned
+      # it on its first run.)
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: clients/electron/pnpm-lock.yaml
 
       # The Core and the Summary sidecar. Both ship inside the bundle: the
       # Core is the process that records and runs at login without a window,
@@ -59,7 +62,7 @@ jobs:
 
       - name: Build the Client
         run: |
-          pnpm -C clients/electron install --frozen-lockfile
+          pnpm install --frozen-lockfile
           pnpm -C clients/electron build
 
       # electron-builder signs when it finds an identity and says so when it
