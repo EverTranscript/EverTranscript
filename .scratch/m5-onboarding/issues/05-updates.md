@@ -4,9 +4,9 @@
 
 **Blocked by:** nothing.
 
-Status: the check and its switch exist; electron-updater does not
+Status: done, except installing an update — which needs a signed release
 
-- [ ] **Still not wired, and now for a sharper reason.** The Core-side check, the host, the version comparison and the switch all exist and are tested — that is the half the zero-network guarantee depends on. electron-updater's job is downloading and *installing* a signed artifact, and ticket 06 produces unsigned ones: pointed at those it would either refuse the signature or install something unsigned, and neither outcome tells you anything about whether it works. It becomes a ten-minute job the day a signed release exists. Original criterion: — a Client that updated itself and left an old Core behind is a protocol-skew bug waiting for its first user
+- [x] Wired, and the CI run produced `latest.yml` — electron-updater's own feed file — beside the installer, which is the evidence the config is right. It replaces the whole bundle, and the Core and sidecar ship inside it, so updating the Client updates them; a Client that updated itself and left an old Core behind is a protocol-skew bug waiting for its first user. **Installing an update is still unproven** and needs a signed release to be proven against. Original criterion: — a Client that updated itself and left an old Core behind is a protocol-skew bug waiting for its first user
 - [x] **Disableable in Settings** (ADR-0034), and the setting is honoured before any check happens rather than after
 - [x] **With updates off and models downloaded, the product makes zero network calls.** The guarantee test already asserts this and must keep passing with the updater present — which is the whole reason the switch exists
 - [x] The update check sends nothing about the machine: no identifiers, no version telemetry beyond what a version check inherently is, no meeting data. It is entry one of three (ADR-0034) and should be inspectable in one screenful

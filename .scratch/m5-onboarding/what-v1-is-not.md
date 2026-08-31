@@ -6,7 +6,7 @@ list, assembled from the open criteria across M1–M5 and grouped by what
 would actually be needed to close each.
 
 Counts at the time of writing: **M1 65/65, M2 85/85, M3 69/71, M4 66/74,
-M5 52/60.**
+M5 55/60.**
 
 ---
 
@@ -24,11 +24,17 @@ from somewhere else, and each is already labelled that way in its ticket.
 - **The Briefing read by someone other than its author.** It has one job: to
   make a stranger able to say what the product does before they let it
   record. Nobody has tried.
-- **Signing, notarization, and both installers.** Needs a Developer ID
+- **Signing and notarization.** Both installers now build in CI — a macOS
+  `.app` with the Core running from inside it, and a 94 MB NSIS installer
+  built on Windows — and both are **unsigned**. Needs a Developer ID
   certificate, an App Store Connect key, and a Windows code-signing
   certificate. Those are the Operator's and should not live here.
-- **Homebrew cask and winget manifests.** Blocked on the above and on a
-  tagged release that does not exist.
+- **Installing an update.** electron-updater is wired and CI produces its
+  `latest.yml` feed, but nothing has installed an update: doing so needs a
+  signed release to install.
+- **Publishing the cask and manifest.** Generated and well-formed; their
+  checksums stay placeholders until a tagged release produces real ones,
+  and publishing needs accounts.
 - **The Summary sidecar has never run on Windows.** It cross-compiles with
   llama.cpp included, which is worth exactly what the same sentence was
   worth in M3 — nothing about runtime.
@@ -84,24 +90,7 @@ These are live in the build and say so where an Operator can see it.
 - **腾讯会议's Windows executable** is confirmed; Zoom's and VooV's rows are
   believed-good and only partly observed.
 
-## 5. Not built at all in M5
-
-- **The Windows NSIS installer.** The build script handles the `.exe`
-  suffix and the manifest generator expects the artifact; nothing produces
-  it. The winget manifest is consequently generated but points at a file
-  that does not exist.
-- **electron-updater.** The Core-side check, its host, the version
-  comparison and the switch all exist and are tested — that is the half the
-  zero-network guarantee rests on. Its remaining job is downloading and
-  *installing* a signed artifact, and pointed at unsigned local builds it
-  would either refuse the signature or install something unsigned; neither
-  outcome says whether it works. A short job the day a signed release
-  exists.
-- **A `.app` bundle.** The three binaries and the built renderer are staged
-  side by side; wrapping them is the remaining step before anything can be
-  signed or notarized.
-
-## 6. A mistake worth keeping (Q42)
+## 5. A mistake worth keeping (Q42)
 
 A blanket replace of `- [ ]` with `- [x]` across the M5 close-out ticked
 five criteria nobody had met — and they were precisely the five this

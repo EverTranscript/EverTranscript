@@ -121,10 +121,15 @@ jobs:
           # a checksum kept by hand is one that will eventually be wrong, and
           # a wrong one in a package manager fails with a message about
           # tampering.
+          # Excluding the file being written: `find` enumerates it, the
+          # redirect has already created it empty, and the result is a
+          # checksums file listing its own hash as the hash of nothing.
           if command -v sha256sum >/dev/null 2>&1; then
-            find . -maxdepth 1 -type f -exec sha256sum {} + | tr -d '\\' > SHA256SUMS
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -exec sha256sum {} + \
+              | tr -d '\\' > SHA256SUMS
           else
-            find . -maxdepth 1 -type f -exec shasum -a 256 {} + > SHA256SUMS
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -exec shasum -a 256 {} + \
+              > SHA256SUMS
           fi
           cat SHA256SUMS
 
