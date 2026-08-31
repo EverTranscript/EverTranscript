@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 02.
 
-Status: reopened and closed again on 2026-08-31. Live Windows testing found and fixed a platform that had never detected anything, then the capture-endpoint gap, and then — after the Operator installed the meeting apps the first pass lacked — a live false negative: 腾讯会议 recording under a name the table had dropped. **Edge, Zoom, 腾讯会议 and VooV are all now observed starting and stopping a Meeting on this platform.** Open: Teams was never driven into a call, and the five other browsers are unrun.
+Status: closed on 2026-08-31, on observation rather than on decision. Live Windows testing found and fixed a platform that had never detected anything, then the capture-endpoint gap, then — after the Operator installed the meeting apps the first pass lacked — a live false negative: 腾讯会议 recording under a name the table had dropped. **Every app this milestone watches has now been observed starting and stopping a Meeting on Windows: Edge, Chrome, Zoom, Teams, 腾讯会议 and VooV.** The two standing risks both resolved negatively — Teams records as `ms-teams.exe`, not `msedgewebview2.exe`, and Zoom as `zoom.exe`, not `aomhost64.exe`. Open: Firefox, Brave, Opera and Arc are unrun on Windows.
 
 - [x] Process enumeration for the Watchlist's exe entries, and audio-session state for the microphone condition — no permission prompt required on this platform
 - [x] The exe→app table twin of the macOS helper table. **This was checked off while the table did not exist**, and the mistake was structural rather than careless: the macOS helper rule (strip at `.helper`) is genuinely platform-neutral code, so "the twin" looked satisfied by the function being shared. It was not — a twin of a *table* is a table, and `WINDOWS_EXECUTABLES` is now it. See the open criterion below for what that omission cost.
@@ -20,7 +20,7 @@ Status: reopened and closed again on 2026-08-31. Live Windows testing found and 
 
   **This closes as a decision, not as a claim that the matrix is complete.** The Operator has the machine and has ended this line of work; asking for more of their time on it is theirs to offer. The residual below is carried forward as standing risk rather than pending M2 work, and it is deliberately specific so that a later failure is recognised instead of re-derived:
 
-  - **Teams on Windows is the live risk.** Teams 2.x there is WebView2-hosted — one `ms-teams.exe` beside 24 `msedgewebview2.exe` children — so the process owning its capture session may be `msedgewebview2.exe`, not the row's `ms-teams.exe`. That is the same shape as `com.microsoft.teams2.modulehost`, which Teams already produced once on macOS. **Do not add `msedgewebview2.exe` on the strength of that sentence**: it would match every WebView2 app, and inventing the name is the mistake this milestone is a record of. `examples/mic-holders.rs` answers it in one command whenever a signed-in Teams call is available.
+  - ~~**Teams on Windows is the live risk.**~~ **Answered, and the answer is no.** Teams 2.x there is WebView2-hosted — one `ms-teams.exe` beside 25 `msedgewebview2.exe` children — so the fear was that the capture session belonged to `msedgewebview2.exe`, the shape `com.microsoft.teams2.modulehost` had already produced on macOS. Run in a live Teams call: the session belongs to **`ms-teams.exe`**, and no WebView2 process holds a capture session at all. The row was right. Worth noting the process holding it is a *different* `ms-teams.exe` than the one owning the window — the executable name is what makes that harmless here, where macOS's separately-named helper was not. **This is why the name was never added on suspicion:** the suspicion was wrong, and `msedgewebview2.exe` would have matched every WebView2 application on the machine.
   - ~~**腾讯会议's executable is still unknown**, and still not guessed at.~~ **Answered, and it was a live defect — see the criterion below.**
   - ~~Zoom, VooV and the five unrun browsers are unobserved on Windows.~~ VooV is now observed end to end; Zoom and the five browsers are not.
 
@@ -65,3 +65,18 @@ Windows build being broken.
 What remains genuinely impossible here is execution. Wine is not a Windows
 machine and cannot serve WASAPI audio sessions or the WinRT appointment
 store, which are the only two things this ticket is really about.
+
+- [x] **Teams and the browsers, observed.** Run in a live Teams call and on the WebRTC `getUserMedia` sample in both Chromium browsers, with `examples/mic-holders.rs` reading the capture endpoint:
+
+  | App | Capture session owner | `responsible_app` | Result |
+  | --- | --- | --- | --- |
+  | Microsoft Teams | `ms-teams.exe` (a second one, not the window's) | `com.microsoft.teams2` | started + stopped |
+  | Zoom | `zoom.exe` (the meeting process) | `us.zoom.xos` | started + stopped |
+  | 腾讯会议 | `wemeetapp.exe` | `com.tencent.tencentmeeting` | started + stopped, **after** the fix |
+  | VooV Meeting | `voovmeetingapp.exe` | `com.tencent.tencentmeeting` | started + stopped |
+  | Chrome | `chrome.exe` | `chrome.exe` | started + stopped |
+  | Edge | `msedge.exe` | `msedge.exe` | started + stopped |
+
+  **Both standing risks resolved negatively.** Teams' session is not `msedgewebview2.exe` (no WebView2 process holds one at all, out of 25), and Zoom's is not `aomhost64.exe`/`airhost.exe`/`CptHost.exe`. Neither name was ever added on suspicion, and both suspicions were wrong — `msedgewebview2.exe` in particular would have matched every WebView2 application on the machine.
+
+  Still unrun on Windows: Firefox, Brave, Opera, Arc. All four are `known_browsers` entries reached by the same route Chrome and Edge just demonstrated, so the risk is low, but it is unobserved and is left saying so.

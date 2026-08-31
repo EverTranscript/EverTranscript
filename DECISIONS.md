@@ -439,3 +439,24 @@ Two incidental findings worth keeping. Zoom registers its capture sessions at la
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q32 — m2-auto-record/05-windows-detection-vertical — finding
+
+**Question:** Teams and the browsers were the last unrun rows on Windows, and Teams carried a named suspicion since Q28: WebView2-hosted, so its capture session might belong to `msedgewebview2.exe` rather than the row's `ms-teams.exe`. Run them, or ship the suspicion as documented risk?
+
+**Options considered:** leave Teams as a named standing risk and let a user find out / drive a real Teams call and a real `getUserMedia` page and read the endpoint
+
+**Chosen:** Ran them, and **both standing suspicions were wrong**. In a live Teams call the capture session belongs to `ms-teams.exe`, and no `msedgewebview2.exe` process holds one at all — out of twenty-five. Zoom's belongs to `zoom.exe`, the meeting process, not to `aomhost64.exe`, `airhost.exe` or `CptHost.exe`, all of which Zoom ships. Chrome and Edge both start and stop as themselves. With 腾讯会议 and VooV from Q30, every app this milestone watches has now been seen starting *and* stopping a Meeting on Windows.
+
+**Decided-by:** human (asked for Teams and the browsers); agent (the runs)
+
+**Justification:** The value here is entirely in the negative results, and they are worth more than they look. Q28 wrote `msedgewebview2.exe` down as the likely answer and — correctly — refused to add it, on the grounds that it would match every WebView2 application on the machine. Had that reasoning been weaker, the table would now carry a name that is both wrong and dangerously broad, and it would have looked like a fix. Two milestones of evidence say the bar is *observation*, and this is the case where holding that bar prevented a defect rather than merely delaying a fix.
+
+There is a real asymmetry worth recording between the two platforms. On macOS, Teams records under `com.microsoft.teams2.modulehost` — a helper with its own identifier, which is what made it invisible to an exact-match row. On Windows the process holding the session is also not the process owning the window; it is a *second* `ms-teams.exe`. The reason that is harmless is that Windows attribution is by executable name, so two processes of the same binary are the same app for free. The defect macOS had is structurally unreachable here, which is not something reading the code would have told you and is exactly the sort of thing the parity gate exists to check.
+
+**Still unrun:** Firefox, Brave, Opera and Arc on Windows. They are `known_browsers` entries reached by the route Chrome and Edge just demonstrated, so the residual risk is low — but low is not observed, and the ticket says so rather than rounding up.
+
+**Outcome:** applied
+
+**Ref:** (pending)
+
