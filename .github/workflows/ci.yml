@@ -58,11 +58,17 @@ jobs:
           # `shasum` is macOS; Git Bash on the Windows runner has
           # `sha256sum` and not the other way round. Found by this job
           # failing on its first run, which is the job doing its job.
+          #
+          # The leading `tr -d` is not decoration: GNU coreutils escapes its
+          # output line with a leading backslash when the filename contains
+          # one, and `$RUNNER_TEMP` on Windows is `D:\a\_temp`. So the hash
+          # came back as `\057ee...` and compared unequal to itself. Found
+          # the same way as the line above it — by running.
           checksum() {
             if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$1" | cut -d' ' -f1
+              sha256sum "$1" | cut -d' ' -f1 | tr -d '\\'
             else
-              shasum -a 256 "$1" | cut -d' ' -f1
+              shasum -a 256 "$1" | cut -d' ' -f1 | tr -d '\\'
             fi
           }
           verify() {
