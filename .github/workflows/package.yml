@@ -65,20 +65,47 @@ jobs:
           pnpm install --frozen-lockfile
           pnpm -C clients/electron build
 
-      # electron-builder signs when it finds an identity and says so when it
-      # does not. The secrets are absent in a fork and in this repository
-      # until the Operator adds them, and both cases produce a usable
-      # unsigned artifact rather than a failed job.
-      - name: Package
+      # **An absent GitHub secret is an empty string, not an unset variable**,
+      # and electron-builder reads an empty CSC_LINK as a path to a
+      # certificate file — then fails with "not a file" naming the project
+      # directory. Building unsigned locally worked precisely because the
+      # variable was genuinely unset there. So the signing vars are exported
+      # only when they have content, and a repository without certificates
+      # gets the unsigned path this job promises rather than a failure that
+      # looks like a packaging bug.
+      - name: Signing credentials, if there are any
         shell: bash
         env:
-          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
-          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          WIN_CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          carry() {
+            # $1 = the name electron-builder reads, $2 = the secret's value
+            if [[ -n "${2:-}" ]]; then
+              echo "$1=$2" >> "$GITHUB_ENV"
+              echo "  $1: set"
+            else
+              echo "  $1: absent — artifacts will be unsigned"
+            fi
+          }
+          carry CSC_LINK "$MACOS_CERTIFICATE"
+          carry CSC_KEY_PASSWORD "$MACOS_CERTIFICATE_PASSWORD"
+          carry APPLE_API_KEY "$APPLE_KEY"
+          carry APPLE_API_KEY_ID "$APPLE_KEY_ID"
+          carry APPLE_API_ISSUER "$APPLE_ISSUER"
+          carry WIN_CSC_LINK "$WINDOWS_CERTIFICATE"
+          carry WIN_CSC_KEY_PASSWORD "$WINDOWS_CERTIFICATE_PASSWORD"
+
+      # electron-builder signs when it finds an identity and says so when it
+      # does not. Both cases produce a usable artifact rather than a failed
+      # job.
+      - name: Package
+        shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             pnpm -C clients/electron exec electron-builder --win --publish never
