@@ -111,31 +111,53 @@ pub fn blocklist() -> Vec<&'static str> {
 
 /// Browsers, for the Browser Meetings row.
 ///
-/// **Four browsers, deliberately, and not every browser that exists.** This
-/// listed Arc, Brave, Vivaldi, Opera and two ids for Comet until the
-/// Operator narrowed it on 2026-08-31 (`DECISIONS.md` Q34). The row's label
-/// still reads "any browser in a call", and that is now an overstatement:
-/// an Operator whose daily browser is Brave gets no Browser Meeting, and
-/// nothing tells them why. That is the cost of the narrowing and it is
-/// deliberate, not an oversight — every id here is one that has been
-/// watched holding a microphone on at least one platform, which none of the
-/// removed five could claim. Arc in particular could never be driven at all:
-/// it will not open a window without an account, on either platform.
+/// **Support is this whole list; the test matrix is a subset of it.** The
+/// two are deliberately different sizes, and conflating them cost a round
+/// trip: this was narrowed to Chrome, Edge, Safari and Firefox on
+/// 2026-08-31 and restored the same day (`DECISIONS.md` Q34, then Q35),
+/// once it was clear that "the four we test" had been read as "the four we
+/// support". Matching is by exact executable name or bundle id, so a
+/// browser missing from this list is not detected at all — narrowing it does
+/// not lower a test bar, it removes working detection. Brave and Opera were
+/// each observed starting and stopping a Meeting on Windows, and were
+/// briefly removed anyway.
 ///
-/// Adding a browser back is one line plus an observation. Adding one on the
-/// strength of "it is a browser, so it must work" is the habit `DECISIONS.md`
-/// Q20–Q23 and Q30 are a record of.
+/// The four engines — Chromium, Gecko, WebKit — are what makes Chrome,
+/// Edge, Safari and Firefox a reasonable *priority* for testing. They are
+/// not a reason to drop the rest, because an engine being standardised
+/// changes nothing about the name a derivative ships under: Brave is
+/// Chromium and matches only because `brave.exe` is written below.
+///
+/// So the bar for **adding** an id stays observation — the habit
+/// `DECISIONS.md` Q20–Q23 and Q30 are a record of is inventing them — while
+/// the bar for **removing** one is now higher than a tidying instinct.
 pub fn known_browsers() -> Vec<&'static str> {
     vec![
         "com.google.Chrome",
         "com.apple.Safari",
+        "company.thebrowser.Browser", // Arc
         "com.microsoft.edgemac",
         "org.mozilla.firefox",
+        "com.brave.Browser",
+        "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera",
+        // Two ids for Comet: ours and the one Granola's table carries. No
+        // machine here has Comet to settle which is current, and an extra
+        // browser id can only ever over-match a browser, which is what the
+        // Browser Meetings row wants anyway.
+        "com.perplexity.comet",
+        "ai.perplexity.comet",
         // Windows executables, so one list serves both platforms. Safari has
-        // none, which is why this list is shorter than the one above.
+        // none. `brave.exe` and `opera.exe` were observed holding the
+        // capture session live; `arc.exe` is the name Arc's MSIX package
+        // ships, read off disk, with its audio path still unobserved because
+        // Arc will not open a window without an account.
         "chrome.exe",
         "msedge.exe",
         "firefox.exe",
+        "brave.exe",
+        "arc.exe",
+        "opera.exe",
     ]
 }
 
@@ -424,6 +446,9 @@ mod tests {
         // One entry covering Google Meet plus the web variants of the
         // desktop apps, which the process rows never did.
         let list = Watchlist::shipped();
+
+        // The four the test matrix prioritises — the engines, not the
+        // vendors: Chromium twice, Gecko, WebKit.
         for browser in [
             "com.google.Chrome",
             "com.apple.Safari",
@@ -436,22 +461,27 @@ mod tests {
             assert!(list.watches(&app(browser)), "{browser} is a browser");
         }
 
-        // And the narrowing holds: these were browsers here until 2026-08-31
-        // and are not any more. Asserted so that re-adding one is a visible
-        // decision rather than a quiet drift back.
-        for dropped in [
-            "company.thebrowser.Browser",
+        // And everything else the row supports. These are asserted
+        // separately, and deliberately, because they were removed on
+        // 2026-08-31 in the belief that trimming the *tested* set was the
+        // same act as trimming the *supported* one. It is not: matching is
+        // by exact name, so dropping an id deletes working detection rather
+        // than lowering a bar. Brave and Opera had both been watched
+        // starting and stopping a Meeting before they were removed.
+        for browser in [
+            "company.thebrowser.Browser", // Arc
             "com.brave.Browser",
             "com.vivaldi.Vivaldi",
             "com.operasoftware.Opera",
             "com.perplexity.comet",
+            "ai.perplexity.comet",
             "brave.exe",
             "arc.exe",
             "opera.exe",
         ] {
             assert!(
-                !list.watches(&app(dropped)),
-                "{dropped} was removed from Browser Meetings"
+                list.watches(&app(browser)),
+                "{browser} is supported even though it is not in the test matrix"
             );
         }
     }
@@ -493,6 +523,11 @@ mod tests {
             ("com.google.Chrome.helper.Renderer", "com.google.Chrome"),
             ("com.google.Chrome.helper", "com.google.Chrome"),
             ("com.microsoft.edgemac.helper.GPU", "com.microsoft.edgemac"),
+            ("com.brave.Browser.helper.GPU", "com.brave.Browser"),
+            (
+                "company.thebrowser.Browser.helper.Plugin",
+                "company.thebrowser.Browser",
+            ),
             // Deliberately not a real vendor's id. The point of this row is
             // that the rule is a *rule* and not a list: it maps helpers of
             // apps nobody has heard of, including ones that did not exist
@@ -511,10 +546,11 @@ mod tests {
 
     #[test]
     fn every_browser_in_the_matrix_attributes_its_helpers_to_itself() {
-        // ADR-0030's M2 matrix was Chrome, Safari, Arc and Edge; the shipped
-        // set is now Chrome, Safari, Edge and Firefox (`DECISIONS.md` Q34).
-        // A renderer belonging to any of them resolves to the browser, and
-        // the browser matches Browser Meetings.
+        // ADR-0030's M2 matrix is Chrome, Safari, Arc and Edge, and Firefox
+        // joined the tested set on Windows. A renderer belonging to any of
+        // them resolves to the browser, and the browser matches Browser
+        // Meetings. The *supported* set is wider than this — see
+        // `known_browsers` and `DECISIONS.md` Q35.
         //
         // Firefox is absent from the helper rows on purpose: it is not
         // Chromium and ships no `<id>.helper` processes, and inventing one
@@ -536,6 +572,10 @@ mod tests {
             (
                 "com.microsoft.edgemac.helper.Renderer",
                 "com.microsoft.edgemac",
+            ),
+            (
+                "company.thebrowser.Browser.helper.Renderer",
+                "company.thebrowser.Browser",
             ),
             // Safari never appears under its own bundle id in the audio
             // process list — its children do, and they say only "WebKit".
@@ -656,9 +696,10 @@ mod tests {
 
     #[test]
     fn a_vendor_may_spell_its_helpers_in_a_different_case_than_its_app() {
-        // The defect this guards was found on Arc, which is no longer a
-        // watched browser (`DECISIONS.md` Q34) — so it is asserted here on
-        // browsers that are, because the property was never about Arc.
+        // The defect this guards was found on Arc, and is asserted on Arc
+        // *and* on browsers that are not Arc, because the property was never
+        // about Arc: it belongs to whichever vendor spells a helper
+        // differently from its app next.
         //
         // Arc shipped as `company.thebrowser.Browser` — capital B — and every
         // one of its helpers as `company.thebrowser.browser.*`, lowercase.
@@ -667,12 +708,15 @@ mod tests {
         // have matched. Chrome and Edge hid it by lowercasing nothing.
         //
         // Bundle ids are case-insensitive to LaunchServices, so the
-        // case-sensitive comparison was the defect. Removing Arc does not
-        // retire the risk: it belongs to whichever vendor does this next, and
-        // nothing stops that being Chrome tomorrow. Hence the varied casing
-        // below on ids that are shipped today.
+        // case-sensitive comparison was the defect, and nothing stops the
+        // next vendor to do it being Chrome. Hence the varied casing below
+        // across several shipped ids rather than only Arc's.
         let list = Watchlist::shipped();
         for process in [
+            "company.thebrowser.browser.helper",
+            "company.thebrowser.browser.helper.renderer",
+            "company.thebrowser.Browser.helper.Renderer",
+            "company.thebrowser.Browser",
             "com.google.chrome.helper",
             "com.google.chrome.helper.renderer",
             "com.google.Chrome.helper.Renderer",

@@ -74,7 +74,7 @@ The Operator-visible, extensible list of meeting apps that Meeting Detection wat
 _Avoid_: app list, detection rules
 
 **Browser Meetings**:
-The single Watchlist entry standing for every browser-hosted call — it matches a browser in a call rather than a specific site, covering Google Meet and the web variants of the desktop meeting apps.
+The single Watchlist entry standing for any browser in a call — it matches a browser in a call rather than a specific site, covering Google Meet and the web variants of the desktop meeting apps. **Supported** is every browser in `known_browsers` (Chrome, Edge, Safari, Firefox, Arc, Brave, Vivaldi, Opera, Comet); **prioritised for testing** is Chrome, Edge, Safari and Firefox, which are the engines rather than the vendors. The two sets are not the same size on purpose: matching is by exact executable name or bundle id, so removing an id deletes working detection rather than lowering a test bar.
 
 ### System
 

@@ -77,11 +77,11 @@ store, which are the only two things this ticket is really about.
   | Chrome | `chrome.exe` | `chrome.exe` | started + stopped |
   | Edge | `msedge.exe` | `msedge.exe` | started + stopped |
   | Firefox | `firefox.exe` (the main process, not a content child) | `firefox.exe` | started + stopped |
-  | ~~Brave~~ | `brave.exe` | — | started + stopped, **then removed from the list** |
-  | ~~Opera~~ | `opera.exe` | — | started + stopped, **then removed from the list** |
-  | ~~Arc~~ | **unobserved** — will not open a window without an account | — | blocked, **then removed from the list** |
+  | Brave | `brave.exe` | `brave.exe` | started + stopped |
+  | Opera | `opera.exe` | `opera.exe` | started + stopped |
+  | Arc | **unobserved** — will not open a window without an account | — | blocked |
 
-  **Three of those rows no longer exist.** The Operator narrowed Browser Meetings to Chrome, Edge, Safari and Firefox on 2026-08-31 (`DECISIONS.md` Q34), which retires Brave, Opera, Arc, Vivaldi and Comet. Brave and Opera are struck through rather than deleted because *they were observed working* — the removal is a scope decision, not a defect, and a later reader deciding whether to re-add one should know the evidence already exists and costs one line. Arc's removal also closes the only row this ticket could never observe, which is a tidy outcome and not a reason the narrowing was right.
+  **These rows were removed and restored the same day, and the round trip is the lesson.** Browser Meetings was narrowed to Chrome, Edge, Safari and Firefox (`DECISIONS.md` Q34) and restored hours later (Q35), once it was clear that "the four we test" had been implemented as "the four we support". Matching is by exact name, so trimming the list does not lower a test bar — it deletes detection that was working, for Brave and Opera demonstrably so. What the narrowing *did* correctly identify is a priority: Chrome, Edge, Safari and Firefox are the engines, and are what the matrix should exercise first.
 
   **Both standing risks resolved negatively.** Teams' session is not `msedgewebview2.exe` (no WebView2 process holds one at all, out of 25), and Zoom's is not `aomhost64.exe`/`airhost.exe`/`CptHost.exe`. Neither name was ever added on suspicion, and both suspicions were wrong — `msedgewebview2.exe` in particular would have matched every WebView2 application on the machine.
 

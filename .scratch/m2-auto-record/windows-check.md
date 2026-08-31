@@ -80,10 +80,10 @@ For **each** of Chrome, Edge and Firefox that the machine has:
 **Expect:** `state Idle`, and `Auto-Record stopped a Meeting` in the log.
 
 **The thing most likely to be wrong:** the app name. The detector lowercases
-the executable, and the Watchlist holds `chrome.exe`, `msedge.exe` and
-`firefox.exe` — Brave, Arc and Opera were removed on 2026-08-31
-(`DECISIONS.md` Q34), so on this build they are expected *not* to trigger
-and a Meeting from one of them would be the surprise. If the log shows a
+the executable, and the Watchlist holds `chrome.exe`, `msedge.exe`,
+`firefox.exe`, `brave.exe`, `arc.exe`, `opera.exe`. Chrome, Edge, Safari and
+Firefox are the four this matrix prioritises; the rest are supported and
+tested opportunistically (`DECISIONS.md` Q35). If the log shows a
 Meeting attributed to something else — or shows nothing while a browser is
 plainly holding the microphone — that is the finding, and the exact string
 it reported is what I need.

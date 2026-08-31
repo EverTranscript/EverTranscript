@@ -498,3 +498,25 @@ What makes the narrowing defensible is the evidence line rather than the count: 
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q35 — m2-auto-record/05-windows-detection-vertical — deviation
+
+**Question:** Q34 narrowed `known_browsers` to Chrome, Edge, Safari and Firefox on the Operator's instruction. The Operator then said the label "any browser in a call" still stands, that the four are what gets *tested* because they are the top market-share browsers, and that EverTranscript "will most likely work on any browser". Implement the narrowing as written, or reconcile it with what the code actually does?
+
+**Options considered:** keep the narrowed list and correct the expectation / restore the wider list and treat the four as a test matrix / detect browsers generically instead of by list
+
+**Chosen:** Put it to the Operator with the evidence, and restored the wider list on their answer. Arc, Brave, Vivaldi, Opera and both Comet ids are back; Chrome, Edge, Safari and Firefox are recorded as the **testing** priority rather than the supported set. Generic detection was offered and not taken — ADR-0030's blocklist exists precisely because Electron apps look like browsers to a naive test, so "any browser" by inference trades a false negative for a false positive.
+
+**Decided-by:** human (both the narrowing and its reversal); agent (noticing the two instructions could not both be true of this code)
+
+**Justification:** The two statements — "narrow to four" and "will most likely work on any browser" — are consistent as *product intent* and contradictory as *code*, because detection matches an exact executable name or bundle id and has no notion of a browser beyond this list. Nothing infers browser-ness. So narrowing the list does not lower a test bar, it deletes working detection: Brave and Opera had each been watched starting and stopping a Meeting on this machine within the hour, and after the narrowing Brave held the microphone through a live page with the Core sitting at Idle. That was verified, not predicted, which is the only reason it was catchable before shipping.
+
+The engine argument is sound for prioritising and unsound for pruning, and the difference is worth stating because it is genuinely subtle. Chrome, Edge, Safari and Firefox really are Chromium, Chromium, WebKit and Gecko, so exercising them does cover the rendering and capture paths that matter. But an engine being standardised says nothing about the *name a derivative ships under*, and the name is the entire matching key. Brave is Chromium and matches only because `brave.exe` is written in the list.
+
+Two process notes. First, this is the session's own failure mode once more: a plausible general claim ("browsers are standardised, so it will work") that nobody had checked against the mechanism. It differs from Q20–Q23 and Q31 only in being caught before it shipped rather than after. Second, the asymmetry now written into `known_browsers`: **adding** an id still requires observation, because inventing them is the habit this milestone is a record of, while **removing** one now requires more than a tidying instinct, because removal is the change that silently costs detection.
+
+**Supersedes:** Q34 — the narrowing it recorded is reverted. What survives from it is the test-matrix priority and the observation that the Operator-visible label and the code had drifted apart.
+
+**Outcome:** applied
+
+**Ref:** (pending)
