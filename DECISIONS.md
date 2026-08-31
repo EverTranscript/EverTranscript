@@ -415,3 +415,27 @@ Worth keeping about method. Three input paths — `mouse_event`, `SendInput`, an
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q31 — m2-auto-record/05-windows-detection-vertical — finding
+
+**Question:** Q30 closed with Zoom unobserved, explaining that Zoom "filters injected input" — three input APIs had appeared to do nothing. The Operator asked for Zoom again. Accept that explanation and look for another way in, or test the explanation first?
+
+**Options considered:** hunt for a Zoom meeting id or a deep link that needs no click / test whether the injection works on anything at all before believing a claim about Zoom
+
+**Chosen:** Went to test the claim, and found the meeting already running. A `Zoom 会议` window was open, holding an ACTIVE capture session as `zoom.exe`, with the Core recording — so a click had worked during the very attempts that were written up as ignored. Zoom is now observed end to end: `Auto-Record started a Meeting app="us.zoom.xos"`, stopping on release, with the capture session in the meeting process itself and **not** in `aomhost64.exe`, `airhost.exe` or `CptHost.exe`, which was the standing worry since Zoom ships all three. The filtering claim is withdrawn as unevidenced rather than replaced with its opposite: what Zoom does with injected input was never established, and does not need to be.
+
+**Decided-by:** human (asked for Zoom to be retried); agent (testing the explanation rather than routing around it)
+
+**Justification:** This is the milestone's own failure mode, committed by the process investigating it. "Zoom filters injected input" is an assertion about a third party that was written into a commit message, a ticket and a decision entry on no evidence beyond "the symptom stopped there". It has exactly the shape of `wemeetapp.exe` being declared wrong because a competitor's table lacked it: a plausible story, adopted because it explained the symptom, never tested.
+
+The attempt to test it went wrong in a way worth recording separately, because it is subtler and it nearly stuck. The control was to inject into Notepad and see whether text appeared; it came back negative, which looked like it had settled the question in favour of "the harness is broken". It had not. Notepad was *behind the terminal*, so the click went to the terminal and the control exercised nothing. **A negative control that could not have succeeded is worse than no control**, because it produces the feeling of evidence without any. The rule that survives is not about input injection at all: an explanation adopted because it accounts for the symptom is not an observation, and neither is a check that could not have come out the other way.
+
+It also cost the observation twice over. The meeting was already running when Zoom was written up as unobserved, so the ticket carried "believed-good and unproven" about a row that had, by then, been proven — and the correction only happened because the Operator asked again rather than accepting the report.
+
+Two incidental findings worth keeping. Zoom registers its capture sessions at launch and leaves them `inactive` until a meeting starts, so the presence of a session proves nothing about the microphone and only `AudioSessionStateActive` does — which is what the detector already keys on. And killing the meeting process made Zoom respawn it under a new pid, across which the Core held a single Meeting, because attribution is by executable name rather than by pid.
+
+**Now settled on Windows:** Edge, Zoom, 腾讯会议 and VooV all observed starting and stopping a Meeting. **Still not:** Teams, which was never driven into a call — `msedgewebview2.exe` remains the standing risk named in Q28 — and the five unrun browsers.
+
+**Outcome:** applied
+
+**Ref:** (pending)
