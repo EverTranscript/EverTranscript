@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use evertranscript_protocol::AudioChannel;
+use evertranscript_protocol::BriefingResponse;
 use evertranscript_protocol::ClientNotification;
 use evertranscript_protocol::ClientRequest;
 use evertranscript_protocol::CoreState;
@@ -1874,6 +1875,23 @@ impl Server {
                     .set_summary_key(&params.provider, params.key.as_deref())
                     .await?,
             )?),
+
+            ClientRequest::BriefingGet(params) => {
+                let language = match params.language.as_deref() {
+                    Some("zh") | Some("zh-CN") => {
+                        crate::briefing::BriefingLanguage::SimplifiedChinese
+                    }
+                    _ => crate::briefing::BriefingLanguage::English,
+                };
+                Ok(serde_json::to_value(BriefingResponse {
+                    text: crate::briefing::briefing(language),
+                    acknowledged: self.core.briefing_acknowledged().await,
+                    // No version has been reviewed by counsel. The PRD makes
+                    // that review mandatory before v1; until it happens the
+                    // product says so rather than implying otherwise.
+                    awaiting_counsel: true,
+                })?)
+            }
 
             ClientRequest::SpeakerList(_) => Ok(serde_json::to_value(self.core.speakers().await?)?),
 

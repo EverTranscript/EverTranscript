@@ -285,6 +285,13 @@ client_request_definitions! {
         params: SummarySetKeyParams,
         response: SummaryBackendsResponse,
     },
+    /// The one-time Briefing (ADR-0007). Readable again after
+    /// acknowledgment: an Operator who wants to re-read what they agreed to
+    /// should not have to reinstall.
+    BriefingGet => "briefing/get" {
+        params: BriefingGetParams,
+        response: BriefingResponse,
+    },
     /// Every Speaker the app holds — the Voice Registry's inventory
     /// (story 30). ADR-0008 makes this surface mandatory rather than
     /// optional: it is half of what was traded for storing Voiceprints
@@ -1306,6 +1313,32 @@ pub struct SummarySetKeyParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub key: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BriefingGetParams {
+    /// `en` or `zh`. Defaults to English, because a translated legal notice
+    /// shown by accident is worse than an English one shown on purpose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub language: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct BriefingResponse {
+    /// Markdown. The text is the deliverable; rendering it is the Client's.
+    pub text: String,
+    /// Whether this installation has acknowledged it. Nothing is captured
+    /// until it has (ADR-0023).
+    pub acknowledged: bool,
+    /// True for any version not reviewed by counsel — which is currently
+    /// all of them, and the surface should say so rather than imply a review
+    /// that has not happened.
+    pub awaiting_counsel: bool,
 }
 
 #[cfg(test)]

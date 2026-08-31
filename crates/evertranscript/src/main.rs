@@ -12,6 +12,7 @@ use clap::Parser;
 use clap::Subcommand;
 use evertranscript_core::client::CoreClient;
 use evertranscript_core::paths;
+use evertranscript_protocol::BriefingResponse;
 use evertranscript_protocol::ChineseScript;
 use evertranscript_protocol::DiarizeState;
 use evertranscript_protocol::DiarizeStatusResponse;
@@ -574,15 +575,38 @@ async fn run_settings(json: bool, chinese_script: Option<String>) -> Result<()> 
 }
 
 async fn run_acknowledge() -> Result<()> {
-    // The real Briefing is M5's onboarding; this is the CLI path to the same
-    // one-way flag, so the pre-capture invariant is testable and dogfoodable
-    // now rather than after the UI exists.
-    println!(
-        "Recording other people may require their consent, and in some places all \
-         parties must agree.\nEverTranscript builds a voice profile for each speaker \
-         so it can recognize them across meetings.\nAuto-Record is ON by default: once \
-         detection lands, meetings record without you asking."
-    );
+    // The whole Briefing, printed. Acknowledging something the Operator was
+    // never shown is the failure this command exists to avoid, and a summary
+    // of a legal notice is not the notice.
+    let mut reader = client().await?;
+    let briefing: BriefingResponse = reader.request("briefing/get", None).await?;
+    println!("{}\n", briefing.text);
+    if briefing.acknowledged {
+        println!("(already acknowledged on this machine)");
+        return Ok(());
+    }
+    if briefing.awaiting_counsel {
+        println!("---\n");
+    }
+
+    // A pause between the text and the act, so acknowledgment follows
+    // reading rather than accompanying it. Only when someone is actually
+    // there: a script or a test invoking this has already made the
+    // deliberate choice that a prompt exists to elicit, and blocking on a
+    // pipe that will never answer would hang instead of asking.
+    use std::io::IsTerminal;
+    if std::io::stdin().is_terminal() {
+        eprint!("Acknowledge this and allow recording on this machine? [y/N] ");
+        use std::io::Write;
+        std::io::stderr().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim(), "y" | "Y" | "yes") {
+            println!("Not acknowledged. Nothing will be captured.");
+            return Ok(());
+        }
+    }
+
     let mut client = client().await?;
     let settings: SettingsResponse = client
         .request(

@@ -8,6 +8,7 @@
 pub mod asr;
 pub mod audio;
 pub mod autostart;
+pub mod briefing;
 pub mod client;
 pub mod detect;
 pub mod diarize;

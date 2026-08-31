@@ -395,6 +395,23 @@
       ]
     },
     {
+      "description": "The one-time Briefing (ADR-0007). Readable again after\nacknowledgment: an Operator who wants to re-read what they agreed to\nshould not have to reinstall.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "briefing/get"
+        },
+        "params": {
+          "$ref": "#/$defs/BriefingGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Every Speaker the app holds — the Voice Registry's inventory\n(story 30). ADR-0008 makes this surface mandatory rather than\noptional: it is half of what was traded for storing Voiceprints\nat all.",
       "type": "object",
       "properties": {
@@ -532,6 +549,18 @@
     }
   ],
   "$defs": {
+    "BriefingGetParams": {
+      "type": "object",
+      "properties": {
+        "language": {
+          "description": "`en` or `zh`. Defaults to English, because a translated legal notice\nshown by accident is worse than an English one shown on purpose.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
     "ChineseScript": {
       "description": "Which Han script to write Mandarin in.\n\nTranscription stays on automatic language detection, because meetings\ncode-switch (story 7) — so the script the model returns is whatever its\ntraining data favoured, not what the speaker would have written. Left\nalone it is frequently Traditional even for a Simplified speaker, which\nthe dogfood run measured. This is the Operator saying which one their\nrecord should use; it is an orthographic choice, not a translation, and\nthe words are identical either way.",
       "oneOf": [
