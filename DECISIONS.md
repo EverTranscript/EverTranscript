@@ -528,3 +528,23 @@ Two process notes. First, this is the session's own failure mode once more: a pl
 **Justification:** The construction found three defects that every unit test had passed, which is the whole argument for measuring something imperfect rather than nothing. **(1)** The catalog's Voiceprint span rules — clip to the middle 10 s, drop under 1.5 s — were being used to define *turns*, so 28% of speech had no speaker at all; correct for choosing what to embed, disastrous for saying who talked. **(2)** One embedding per contiguous span made two people alternating without a pause into one speaker, at 23.6% confusion. **(3)** `agglomerate` was not agglomerative: a single pass joining each cluster to the first earlier one within threshold split one voice into two groups that never got compared, giving three speakers in a two-speaker recording. DER went 38.4% → 26.6% → 3.9% across the three fixes. What the number is **not** is equally important and is written into the ticket rather than buried: voice B is not a second person, so 3.9% is evidence that the pipeline separates two acoustically distinct voices and is not a DER on a real meeting, which is still owed. The embedding bake-off is likewise not run and is recorded as not run — a bake-off with one entrant is a preference wearing a lab coat, and it should be run against the same real audio when there is some.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q37 — m2-auto-record/05-windows-detection-vertical — finding
+
+**Question:** Arc was the last unobserved row, blocked behind an account wall on both platforms. The Operator signed in. Run it, or leave the standing risk as written?
+
+**Options considered:** leave it as a documented residual, since five browsers passing by one mechanism is decent evidence / run it now that the wall is gone
+
+**Chosen:** Ran it. `Auto-Record started a Meeting app="arc.exe"`, stopping on release. **The capture session belongs to `arc.exe` itself — the MSIX main process, not a helper.** With that, every app and every browser this milestone watches has been observed starting *and* stopping a Meeting on Windows.
+
+**Decided-by:** human (signed into Arc, which was the actual blocker); agent (the run)
+
+**Justification:** Arc is the browser that cost this milestone a defect on macOS, so it is the one where "probably fine" was least worth accepting. There it ships as `company.thebrowser.Browser` with helpers as `company.thebrowser.browser.*`, and that one-letter case difference made it match nothing (Q22). On Windows the equivalent defect **cannot occur**: the session is held by the main process under the same name the row carries, with no helper and no case to disagree about. Six browsers for six now hold the session in the main process, so the `.helper` rule that `responsible_app` exists for is never exercised by a browser on this platform — the whole class that cost Safari and Arc on macOS is structurally absent here.
+
+Two process notes, both about not repeating this session's own mistakes. The account wall was correctly refused rather than worked around: creating the account meant choosing a password and accepting Arc's Terms of Service as the Operator, which is not an agent's to accept — so it waited for them, and that was the right trade even though it left the row open for hours.
+
+And the automation failures on the way were misdiagnosed twice before being measured. Arc appeared to ignore clicks and keystrokes; the actual cause was that **Arc lost foreground between separate shell invocations**, so the input was landing in whatever window had taken focus — once, demonstrably, typing a URL into Edge. `Ctrl+T` proved input reached Arc when it genuinely was foreground. The fix was to do focus, verify-foreground, paste and Enter inside a single invocation, aborting if the foreground check failed. Same shape as Q31: an explanation about a third party, adopted because it fit the symptom, wrong once actually tested.
+
+**Outcome:** applied
+
+**Ref:** (pending)
