@@ -351,3 +351,25 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Outcome:** applied
 **Supersedes:** Q24 — the raster-master mechanism it introduced is retired; the art it carried is what the trace preserves.
 **Ref:** (pending)
+
+## Q27 — m2-auto-record/05-windows-detection-vertical — finding
+
+**Question:** The Windows run finally happened. Q20–Q23 had all predicted the same defect shape waiting there — a meeting app recording under a name its Watchlist row does not hold — and the checklist was written to hunt for that name. Report against that prediction, or against what the machine actually did?
+
+**Options considered:** run the checklist as written and report the exe names it asks for / add an instrument that shows the raw capture-session owner before the Watchlist filters it, because the checklist cannot see the case it is hunting
+
+**Chosen:** Added the instrument first, and it immediately showed something the checklist could not have: **Windows detection had never worked at all, for any app.** `executable_name` asked PSAPI's `GetModuleBaseNameW` for a name over a handle opened with `PROCESS_QUERY_LIMITED_INFORMATION`. That call walks the target's module list and is documented against `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`; it returned `ERROR_ACCESS_DENIED` for every process on the machine, and a zero return is indistinguishable in that function from "no such process". So `microphone_holders` answered "nobody" while Edge plainly held the microphone. Replaced with `QueryFullProcessImageNameW`, which is documented against the right the detector asks for, taking the leaf of the path it returns. Observed working afterwards: Edge starts and stops a Meeting as `msedge.exe`, two Cores with different runtime dirs bind different pipes and answer independently, the calendar declines access without crashing. The instrument stays as `examples/mic-holders.rs`.
+
+**Decided-by:** agent (the instrument and the fix); human (the Operator ran the session on their machine, chose to drive Teams by hand rather than have a meeting created on their account, and had the test Meeting deleted)
+
+**Justification:** The checklist could not have found this, and neither could `Get-Process`, which says a process exists rather than that it owns the capture session. The Core logs an app only *after* a Watchlist row matches, so "nothing was named" and "nothing was watched" produce identical silence — the failure mode the whole run was built to investigate was the one the run could not see. That is why the instrument came before the procedure, and it is the transferable lesson: an observation tool that reports the input to a decision is worth more than one that reports the outcome.
+
+On the prediction: Q21–Q23 were right that a fifth defect was waiting on Windows and wrong about its shape, and the way they were wrong matters. Four rounds of this milestone taught that the bug lives in *which name* a table holds, so a fifth round of scrutiny went into the names. Meanwhile the code that produces the name at all had no test — because nothing on that path ran anywhere. `WINDOWS_EXECUTABLES` was never reached, so its correctness was never what stood between this platform and working; the effort spent auditing it against a competitor's bundle in Q23 was, in the event, spent on the wrong end of the pipeline. Typechecking is what hid it: the call was correct Rust against a real API and simply lacked a right, and cross-compiling with `cargo-xwin` proves exactly that much. CI stayed green for the same reason it always had — `windows-latest` compiled and linked this function and never once called it.
+
+The new test asserts `executable_name(std::process::id())` against the name read from `current_exe` at runtime, rather than a string written down. That is deliberate: two of the four defects in Q20–Q23 shipped with tests asserting identifiers nobody had read off a machine, and a test that invents its expectation cannot fail the way this one does.
+
+What this does **not** establish: no meeting app has been observed holding the microphone on Windows. That machine has Edge and Teams and nothing else, so `WINDOWS_EXECUTABLES` is still unobserved and the ticket-09 browser matrix has exactly one row. Teams is the standing risk and is left named as unknown — it runs WebView2-hosted there, one `ms-teams.exe` beside 24 `msedgewebview2.exe` children, which is the same helper shape as `com.microsoft.teams2.modulehost`. Adding `msedgewebview2.exe` on that reasoning would be the Q20 mistake with a new spelling, and it would match every WebView2 app besides.
+
+**Outcome:** applied
+
+**Ref:** (pending)

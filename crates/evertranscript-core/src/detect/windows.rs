@@ -14,13 +14,27 @@
 //! is the same poll-and-debounce the macOS side uses rather than a port of
 //! theirs.
 //!
-//! **Verification status, stated plainly.** The API usage below is
-//! typechecked against `x86_64-pc-windows-msvc`. It has never been run: this
-//! was written on an Apple Silicon Mac, and ticket 05 is not complete until
-//! it has been exercised on a real Windows 10+ machine with the per-browser
-//! matrix from ticket 09. Anything else would be a checked box nobody looked
-//! at, which is the exact failure this milestone's ticket 10 postmortem
-//! exists to prevent.
+//! **Verification status, stated plainly.** Run on Windows 11 Pro 26200 on
+//! 2026-08-31, and it did not work. It had never named a single process.
+//! `executable_name` asked PSAPI's `GetModuleBaseNameW` for a name over a
+//! handle opened with `PROCESS_QUERY_LIMITED_INFORMATION`, which that call
+//! is not documented against; every call on every process returned
+//! `ERROR_ACCESS_DENIED`, and a zero return is indistinguishable here from
+//! "no such process". So `microphone_holders` answered "nobody" while Edge
+//! plainly held the microphone, and no Watchlist row could ever have
+//! matched — not the browsers, not `WINDOWS_EXECUTABLES`, none of it. The
+//! whole platform was dark, on the platform ADR-0025 makes the ship gate.
+//!
+//! Typechecking is what hid it, and typechecking was all this file had: the
+//! call was correct Rust against a real API and simply lacked a right. There
+//! was no test, because there was nothing here that ran. There is one now,
+//! and it asserts against a name read off the machine at runtime rather than
+//! one written down.
+//!
+//! Since the fix, observed live: Edge holding the microphone starts and
+//! stops a Meeting as `msedge.exe`, and two Cores with different runtime
+//! dirs bind different pipes. The meeting apps in `WINDOWS_EXECUTABLES` are
+//! **still unobserved** — none of them is installed on that machine.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -31,6 +45,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use tokio::sync::mpsc;
+use tracing::debug;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Media::Audio::AudioSessionStateActive;
 use windows::Win32::Media::Audio::IAudioSessionControl2;
@@ -44,10 +59,12 @@ use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Com::COINIT_MULTITHREADED;
 use windows::Win32::System::Com::CoCreateInstance;
 use windows::Win32::System::Com::CoInitializeEx;
-use windows::Win32::System::ProcessStatus::GetModuleBaseNameW;
 use windows::Win32::System::Threading::OpenProcess;
+use windows::Win32::System::Threading::PROCESS_NAME_WIN32;
 use windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+use windows::Win32::System::Threading::QueryFullProcessImageNameW;
 use windows::core::Interface;
+use windows::core::PWSTR;
 
 use super::AppIdentity;
 use super::DetectionEvent;
@@ -61,17 +78,66 @@ const RELEASE_DEBOUNCE_MS: u64 = 2_000;
 
 /// The executable behind a process id, lowercased so the Watchlist can hold
 /// one spelling.
+///
+/// `QueryFullProcessImageNameW`, and not PSAPI's `GetModuleBaseNameW`, on
+/// which this shipped and never once succeeded. That call walks the target's
+/// module list and documents a need for `PROCESS_QUERY_INFORMATION` and
+/// `PROCESS_VM_READ`. The handle below carries only the limited query right,
+/// which is what a detector watching other people's processes ought to ask
+/// for and the one this API is documented against. So every call failed with
+/// `ERROR_ACCESS_DENIED`, returned 0, and was read here as "no such process"
+/// — for Edge, for Teams, and for this process itself. Nothing was ever
+/// named, so no Watchlist row could ever match, and no test noticed because
+/// nothing called it.
 fn executable_name(pid: u32) -> Option<String> {
     unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut buffer = [0u16; 260];
-        let written = GetModuleBaseNameW(handle, None, &mut buffer);
+        let handle = match OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) {
+            Ok(handle) => handle,
+            Err(error) => {
+                debug!(pid, %error, "a process holding the microphone would not open; it cannot be attributed");
+                return None;
+            }
+        };
+        // 32767 is NTFS's own ceiling on a path, so this cannot truncate.
+        // Sized to make that true rather than to be generous: a short buffer
+        // would fail the same silent way the access right did.
+        let mut buffer = [0u16; 32768];
+        let mut size = buffer.len() as u32;
+        let read = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        );
         let _ = CloseHandle(handle);
-        if written == 0 {
+        if let Err(error) = read {
+            debug!(pid, %error, "a process holding the microphone would not name itself; it cannot be attributed");
             return None;
         }
-        Some(String::from_utf16_lossy(&buffer[..written as usize]).to_lowercase())
+        if size == 0 {
+            debug!(
+                pid,
+                "a process holding the microphone named itself with an empty path"
+            );
+            return None;
+        }
+        // It answers with a full path; the Watchlist holds the leaf.
+        leaf_lowercased(&String::from_utf16_lossy(&buffer[..size as usize]))
     }
+}
+
+/// The leaf of a Win32 path, in the spelling the Watchlist compares against.
+///
+/// Split out so the lowercasing has a test that can fail. Windows spells its
+/// own paths in mixed case and treats them case-insensitively, and comparing
+/// two spellings exactly is precisely what cost Arc — `Browser` against
+/// `browser`, one letter, matching nothing (`DECISIONS.md` Q22).
+fn leaf_lowercased(path: &str) -> Option<String> {
+    let leaf = path.rsplit('\\').next().unwrap_or(path);
+    if leaf.is_empty() {
+        return None;
+    }
+    Some(leaf.to_lowercase())
 }
 
 /// Which apps are holding the microphone right now, as responsible apps.
@@ -207,5 +273,72 @@ impl DetectionSource for WindowsDetectionSource {
 
     fn describe(&self) -> String {
         "windows".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The name the detector reports for a process it can certainly see:
+    /// this test's own.
+    ///
+    /// Every Windows row is compared against whatever this function returns,
+    /// so a function that answers `None` makes the entire table unreachable
+    /// — and `None` is what it answered, for every process on the machine.
+    /// `GetModuleBaseNameW` walks the module list and documents a need for
+    /// `PROCESS_QUERY_INFORMATION | PROCESS_VM_READ`; the handle is opened
+    /// with `PROCESS_QUERY_LIMITED_INFORMATION`, so it failed with
+    /// `ERROR_ACCESS_DENIED`, and returning 0 is indistinguishable here from
+    /// "no such process".
+    ///
+    /// The name is taken from `current_exe` rather than written down,
+    /// because an expected string this milestone made up rather than read is
+    /// how the previous four defects passed their tests.
+    #[test]
+    fn reports_the_name_of_a_process_it_can_see() {
+        let expected = std::env::current_exe()
+            .expect("this test has an executable")
+            .file_name()
+            .expect("which has a file name")
+            .to_string_lossy()
+            .to_lowercase();
+
+        assert_eq!(executable_name(std::process::id()), Some(expected));
+    }
+
+    /// The lowercasing the Watchlist comparison depends on.
+    ///
+    /// Asserted here rather than against a live process, because a live
+    /// process cannot fail it: the test binary's own name is already
+    /// lowercase, so deleting the `to_lowercase` would leave every
+    /// process-based test still passing. The paths are real ones read off
+    /// the machine this ran on; only the casing is varied, which is the
+    /// thing under test.
+    #[test]
+    fn lowercases_the_leaf_of_a_path() {
+        assert_eq!(
+            leaf_lowercased(r"C:\Program Files (x86)\Microsoft\Edge\Application\MsEdge.EXE")
+                .as_deref(),
+            Some("msedge.exe")
+        );
+        assert_eq!(
+            leaf_lowercased(
+                r"C:\Program Files\WindowsApps\MSTeams_26213.1006.5014.9784_x64__8wekyb3d8bbwe\MS-Teams.exe"
+            )
+            .as_deref(),
+            Some("ms-teams.exe")
+        );
+        // A bare name, and the empty answer that must not become a match.
+        assert_eq!(leaf_lowercased("Zoom.EXE").as_deref(), Some("zoom.exe"));
+        assert_eq!(leaf_lowercased("").as_deref(), None);
+        assert_eq!(leaf_lowercased(r"C:\dir\").as_deref(), None);
+    }
+
+    /// A live process is still named, and still ends up an executable.
+    #[test]
+    fn reports_a_live_process_as_an_executable() {
+        let name = executable_name(std::process::id()).expect("a name for this process");
+        assert!(name.ends_with(".exe"), "{name} should be an executable");
     }
 }

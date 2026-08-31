@@ -6,6 +6,37 @@ on `windows-latest` in CI, so it is sound; what CI cannot show is that it
 
 Everything below is copy-paste. Send back the two logs and the answers.
 
+> **Run once, on 2026-08-31 (Windows 11 Pro 26200). Read this before running it again.**
+>
+> The procedure below could not see the thing it was hunting, and that is
+> worth knowing before anyone repeats it. It asks `Get-Process` for the names
+> of running processes — but a process existing is not the same as that
+> process owning the capture session, and the Core logs an app only *after* a
+> Watchlist row matches it. So "no name was read" and "no row was watched"
+> produce identical silence.
+>
+> What was actually wrong was neither: `executable_name` could not name **any**
+> process, on any machine, because it asked `GetModuleBaseNameW` over a handle
+> lacking the rights that call needs. Windows detection had never detected
+> anything. See DECISIONS.md Q27.
+>
+> **So run the instrument first:**
+>
+> ```powershell
+> cargo run --release -p evertranscript-core --example mic-holders
+> ```
+>
+> It prints every active capture session — the raw executable, the session
+> identifier's full path, and what `responsible_app` makes of it — before the
+> Watchlist has an opinion. `--pid <n>` asks about one process. That output,
+> not the `Get-Process` table, is what settles section 2.
+>
+> Still unobserved, and the reason this file is kept: **no meeting app has
+> ever been seen holding the microphone on Windows.** The machine above had
+> only Edge and Teams, and Teams was never driven into a call. If your machine
+> has Zoom, VooV, 腾讯会议, or a signed-in Teams, section 2 is still the most
+> valuable thing here — and 腾讯会议's executable is still unknown.
+
 ## Setup
 
 ```powershell
