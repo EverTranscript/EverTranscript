@@ -76,7 +76,13 @@ store, which are the only two things this ticket is really about.
   | VooV Meeting | `voovmeetingapp.exe` | `com.tencent.tencentmeeting` | started + stopped |
   | Chrome | `chrome.exe` | `chrome.exe` | started + stopped |
   | Edge | `msedge.exe` | `msedge.exe` | started + stopped |
+  | Firefox | `firefox.exe` (the main process, not a content child) | `firefox.exe` | started + stopped |
+  | Brave | `brave.exe` | `brave.exe` | started + stopped |
+  | Opera | `opera.exe` | `opera.exe` | started + stopped |
+  | Arc | **unobserved** — will not open a window without an account | — | blocked |
 
   **Both standing risks resolved negatively.** Teams' session is not `msedgewebview2.exe` (no WebView2 process holds one at all, out of 25), and Zoom's is not `aomhost64.exe`/`airhost.exe`/`CptHost.exe`. Neither name was ever added on suspicion, and both suspicions were wrong — `msedgewebview2.exe` in particular would have matched every WebView2 application on the machine.
 
-  Still unrun on Windows: Firefox, Brave, Opera, Arc. All four are `known_browsers` entries reached by the same route Chrome and Edge just demonstrated, so the risk is low, but it is unobserved and is left saying so.
+  Firefox, Brave and Opera were then run too, on the same page — Firefox through a profile pref (`media.navigator.permission.disabled`) since it is not Chromium and takes no `--use-fake-ui-for-media-stream`. All three start and stop under their own executable name, and every browser observed holds its capture session in the **main process**, not in a renderer or GPU child — so on Windows the `.helper` suffix rule that `responsible_app` exists for is never exercised by a browser. That is worth knowing: the mechanism that cost Safari and Arc on macOS has no Windows equivalent, because the Windows names never branch.
+
+  **Arc is the one row still unobserved, and for the same reason it is unobserved on macOS.** It installs (MSIX, `TheBrowserCompany.Arc_1.120.1.3_x64__ttt1ap7aakyb4\Arc.exe`) and launches straight to a "Sign In to Arc" window; without an account it will not open a browsing window at all, so it can never reach the microphone. What *is* confirmed is the name: the detector would read `arc.exe`, which is exactly the `known_browsers` entry, so the row is correctly spelled and only its audio path is unproven. Recorded as open risk rather than closed by analogy with the other five.

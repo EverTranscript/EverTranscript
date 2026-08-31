@@ -460,3 +460,21 @@ There is a real asymmetry worth recording between the two platforms. On macOS, T
 
 **Ref:** (pending)
 
+
+## Q33 — m2-auto-record/05-windows-detection-vertical — finding
+
+**Question:** Firefox, Brave, Opera and Arc were the last unrun rows. Run them, or accept them by analogy with Chrome and Edge, which had just passed by the same route?
+
+**Options considered:** accept the four as low-risk, since all are `known_browsers` entries reached by a mechanism twice demonstrated / run them
+
+**Chosen:** Ran them. Firefox, Brave and Opera each start and stop a Meeting under their own executable name. Firefox needed a different lever — it is not Chromium and ignores `--use-fake-ui-for-media-stream`, so the prompt was pre-granted with a profile `user.js` setting `media.navigator.permission.disabled`, which grants the permission without faking the device. **Arc could not be run at all:** it installs and opens straight to a "Sign In to Arc" window, and without an account it never opens a browsing window, so it cannot reach the microphone. Its name is confirmed — the detector would read `arc.exe`, matching the shipped row — but its audio path is unobserved.
+
+**Decided-by:** human (asked for the four); agent (the runs and the Firefox lever)
+
+**Justification:** One genuinely new fact came out of running rather than assuming, and it is the kind that only appears on real hardware: **every browser observed holds its capture session in the main process**, not in a renderer, GPU or audio child. So on Windows the `.helper` suffix rule that `responsible_app` exists for is never exercised by a browser. The entire class of defect that cost Safari (`com.apple.WebKit.GPU`) and Arc (`company.thebrowser.browser.helper`) on macOS has no Windows analogue, because the Windows names do not branch. That is a real asymmetry between the two platforms' detectors, it was invisible from the code, and it means the browser half of this table is far more robust here than there.
+
+Arc is left open rather than closed by analogy, which is the same call made about it on macOS for the same reason. Five browsers passing by one mechanism is decent evidence about the sixth, and this milestone's record is that decent evidence about a name is exactly what keeps being wrong. The difference between "very likely fine" and "observed" is the whole subject of the ticket.
+
+**Outcome:** applied
+
+**Ref:** (pending)
