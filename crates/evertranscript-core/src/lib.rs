@@ -17,6 +17,7 @@ pub mod paths;
 pub mod server;
 pub mod settings;
 pub mod store;
+pub mod summary;
 pub mod transport;
 pub mod tray;
 
