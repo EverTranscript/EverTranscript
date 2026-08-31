@@ -77,9 +77,11 @@ store, which are the only two things this ticket is really about.
   | Chrome | `chrome.exe` | `chrome.exe` | started + stopped |
   | Edge | `msedge.exe` | `msedge.exe` | started + stopped |
   | Firefox | `firefox.exe` (the main process, not a content child) | `firefox.exe` | started + stopped |
-  | Brave | `brave.exe` | `brave.exe` | started + stopped |
-  | Opera | `opera.exe` | `opera.exe` | started + stopped |
-  | Arc | **unobserved** — will not open a window without an account | — | blocked |
+  | ~~Brave~~ | `brave.exe` | — | started + stopped, **then removed from the list** |
+  | ~~Opera~~ | `opera.exe` | — | started + stopped, **then removed from the list** |
+  | ~~Arc~~ | **unobserved** — will not open a window without an account | — | blocked, **then removed from the list** |
+
+  **Three of those rows no longer exist.** The Operator narrowed Browser Meetings to Chrome, Edge, Safari and Firefox on 2026-08-31 (`DECISIONS.md` Q34), which retires Brave, Opera, Arc, Vivaldi and Comet. Brave and Opera are struck through rather than deleted because *they were observed working* — the removal is a scope decision, not a defect, and a later reader deciding whether to re-add one should know the evidence already exists and costs one line. Arc's removal also closes the only row this ticket could never observe, which is a tidy outcome and not a reason the narrowing was right.
 
   **Both standing risks resolved negatively.** Teams' session is not `msedgewebview2.exe` (no WebView2 process holds one at all, out of 25), and Zoom's is not `aomhost64.exe`/`airhost.exe`/`CptHost.exe`. Neither name was ever added on suspicion, and both suspicions were wrong — `msedgewebview2.exe` in particular would have matched every WebView2 application on the machine.
 

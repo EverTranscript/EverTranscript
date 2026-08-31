@@ -478,3 +478,23 @@ Arc is left open rather than closed by analogy, which is the same call made abou
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q34 — m2-auto-record/05-windows-detection-vertical — deviation
+
+**Question:** `known_browsers` carried nine browser identities — Chrome, Safari, Arc, Edge, Firefox, Brave, Vivaldi, Opera and two ids for Comet. The Operator asked to narrow Browser Meetings to Chrome, Edge, Safari and Firefox only, removing the rest.
+
+**Options considered:** keep the wide list, since an extra browser id can only over-match a browser / narrow to the four named
+
+**Chosen:** Narrowed. `known_browsers` is now Chrome, Safari, Edge and Firefox plus `chrome.exe`, `msedge.exe` and `firefox.exe`; Arc, Brave, Vivaldi, Opera and both Comet ids are gone. A test asserts the removed ids **do not** match, so re-adding one is a visible decision rather than a quiet drift back.
+
+**Decided-by:** human
+
+**Justification:** This is a deviation from ADR-0030 on two counts and both should be said plainly. That ADR names the M2 browser matrix as "Chrome, Safari, Arc, Edge"; the shipped set now drops Arc and adds Firefox. It also reasons that an extra browser id "can only ever over-match a browser, which is what the Browser Meetings row wants anyway" — an argument for breadth that this narrowing reverses. The ADR is left unedited and this entry is the record, per the repo's practice of journalling deviations rather than rewriting ratified decisions.
+
+**The cost is a silent false negative, which is the failure mode the PRD ranks first.** An Operator whose daily browser is Brave now gets no Browser Meeting, and nothing in the product tells them why — the row still reads "any browser in a call", which after this is an overstatement. That wording is left alone rather than quietly narrowed, because it is Operator-visible text and the glossary in `CONTEXT.md` is normative; whether the label and the glossary should change is a separate call and is flagged rather than made here.
+
+What makes the narrowing defensible is the evidence line rather than the count: every id that remains has been watched holding a microphone on at least one platform, and none of the five removed could say that. Arc could never even be driven — it will not open a window without an account, on either platform, which is why it is the one row this milestone never observed. Brave and Opera, by contrast, *were* observed starting and stopping a Meeting on Windows an hour before they were removed, so their rows are retired with working evidence behind them and re-adding either is one line plus a test.
+
+**Outcome:** applied
+
+**Ref:** (pending)
