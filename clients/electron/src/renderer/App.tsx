@@ -4,12 +4,14 @@ import type { Meeting } from "@protocol/Meeting";
 import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 
 import { isMessageKey, t } from "./i18n";
-import { useCore, useSettings, useTranscript } from "./useCore";
+import type { Speaker } from "@protocol/Speaker";
+import { useCore, useRegistry, useSettings, useTranscript } from "./useCore";
 
 export function App(): React.JSX.Element {
   const core = useCore();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showingSettings, setShowingSettings] = useState(false);
+  const [showingRegistry, setShowingRegistry] = useState(false);
 
   const recording = useMemo(
     () => core.meetings.find((meeting) => !meeting.endedAt) ?? null,
@@ -40,11 +42,20 @@ export function App(): React.JSX.Element {
         onSelect={setSelectedId}
         onRecord={() => void core.startRecording()}
         onStop={() => void core.stopRecording()}
-        onSettings={() => setShowingSettings((open) => !open)}
+        onSettings={() => {
+          setShowingRegistry(false);
+          setShowingSettings((open) => !open);
+        }}
+        onRegistry={() => {
+          setShowingSettings(false);
+          setShowingRegistry((open) => !open);
+        }}
       />
       <main className="flex h-full min-w-0 flex-col overflow-hidden">
         {showingSettings ? (
           <SettingsPanel onClose={() => setShowingSettings(false)} />
+        ) : showingRegistry ? (
+          <RegistryPanel onClose={() => setShowingRegistry(false)} />
         ) : active ? (
           <MeetingView
             meeting={active}
@@ -108,6 +119,7 @@ function Sidebar({
   onRecord,
   onStop,
   onSettings,
+  onRegistry,
 }: {
   meetings: Meeting[];
   activeId: string | null;
@@ -116,6 +128,7 @@ function Sidebar({
   onRecord: () => void;
   onStop: () => void;
   onSettings: () => void;
+  onRegistry: () => void;
 }): React.JSX.Element {
   return (
     <aside className="flex h-full flex-col border-r border-[--color-line] bg-[--color-surface-raised]">
@@ -127,6 +140,14 @@ function Sidebar({
           className="text-sm font-semibold hover:text-[--color-ink-muted]"
         >
           {t("app.title")}
+        </button>
+        <button
+          type="button"
+          onClick={onRegistry}
+          title={t("registry.title")}
+          className="text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
+        >
+          {t("registry.open")}
         </button>
         {recordingId ? (
           <button
@@ -529,6 +550,169 @@ function SettingsPanel({ onClose }: { onClose: () => void }): React.JSX.Element 
           </>
         ) : null}
       </section>
+    </div>
+  );
+}
+
+/**
+ * The Voice Registry (stories 30-32).
+ *
+ * ADR-0008 accepted storing biometric identifiers for people who never
+ * consented, and named the price: the inventory must be fully inspectable
+ * and each Voiceprint individually deletable. Those are acceptance criteria
+ * of this milestone rather than polish — a build that clusters voices
+ * without this screen has taken the exposure and skipped the controls.
+ *
+ * It opens without a Meeting selected, because it describes what the
+ * installation holds rather than anything about one recording.
+ */
+function RegistryPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+  const { speakers, error, rename, forgetVoice } = useRegistry();
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+
+  const nameOf = (speaker: Speaker): string => {
+    if (speaker.displayName) return speaker.displayName;
+    return speaker.isOperator ? t("registry.you") : t("registry.unnamed");
+  };
+
+  const voiceprintLabel = (speaker: Speaker): string => {
+    if (!speaker.hasVoiceprint) return t("registry.voiceprint.none");
+    return speaker.confirmed
+      ? t("registry.voiceprint.confirmed")
+      : t("registry.voiceprint.unconfirmed");
+  };
+
+  return (
+    <div className="flex h-full flex-col overflow-y-auto p-6">
+      <header className="mb-6 flex items-center justify-between">
+        <h1 className="text-lg font-semibold">{t("registry.title")}</h1>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+        >
+          {t("registry.close")}
+        </button>
+      </header>
+
+      <p className="mb-4 text-xs text-[--color-ink-muted]">
+        {t("registry.hint")}
+      </p>
+
+      {error ? (
+        <p className="mb-4 text-sm text-[--color-recording]">{error}</p>
+      ) : null}
+
+      {speakers && speakers.speakers.length === 0 ? (
+        <p className="text-xs text-[--color-ink-muted]">{t("registry.empty")}</p>
+      ) : null}
+
+      <ul>
+        {speakers?.speakers.map((speaker) => (
+          <li
+            key={speaker.id}
+            className="border-b border-[--color-line] py-3"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                {editingId === speaker.id ? (
+                  <form
+                    onSubmit={(submitted) => {
+                      submitted.preventDefault();
+                      if (draft.trim()) void rename(speaker.id, draft.trim());
+                      setEditingId(null);
+                    }}
+                    className="flex gap-2"
+                  >
+                    <input
+                      autoFocus
+                      value={draft}
+                      onChange={(changed) => setDraft(changed.target.value)}
+                      className="min-w-0 rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-sm"
+                    />
+                    <button type="submit" className="rounded border border-[--color-line] px-2 text-xs">
+                      {t("action.save")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditingId(null)}
+                      className="px-2 text-xs text-[--color-ink-muted]"
+                    >
+                      {t("action.cancel")}
+                    </button>
+                  </form>
+                ) : (
+                  <span className="block truncate text-sm">{nameOf(speaker)}</span>
+                )}
+                <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+                  {voiceprintLabel(speaker)} · {speaker.meetingsSeenIn}{" "}
+                  {t("registry.meetings")}
+                </span>
+              </div>
+
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDraft(speaker.displayName ?? "");
+                    setEditingId(speaker.id);
+                  }}
+                  className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                >
+                  {t("registry.rename")}
+                </button>
+                {speaker.hasVoiceprint ? (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingId(speaker.id)}
+                    className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                  >
+                    {t("registry.forget")}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+
+            {editingId === speaker.id ? (
+              <p className="mt-2 text-xs text-[--color-ink-muted]">
+                {t("registry.rename.hint")}
+              </p>
+            ) : null}
+
+            {/* Said before it happens, not after: a biometric deletion is a
+                legible act, and the Operator has to know it costs
+                recognition and costs the record nothing. */}
+            {confirmingId === speaker.id ? (
+              <div className="mt-3 rounded border border-[--color-line] p-3">
+                <p className="mb-2 text-xs text-[--color-ink-muted]">
+                  {t("registry.forget.hint")}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void forgetVoice(speaker.id);
+                      setConfirmingId(null);
+                    }}
+                    className="rounded border border-[--color-recording] px-2 py-1 text-xs text-[--color-recording]"
+                  >
+                    {t("registry.forget.confirm")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingId(null)}
+                    className="px-2 py-1 text-xs text-[--color-ink-muted]"
+                  >
+                    {t("action.cancel")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

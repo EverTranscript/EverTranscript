@@ -13,6 +13,8 @@ use clap::Subcommand;
 use evertranscript_core::client::CoreClient;
 use evertranscript_core::paths;
 use evertranscript_protocol::ChineseScript;
+use evertranscript_protocol::DiarizeState;
+use evertranscript_protocol::DiarizeStatusResponse;
 use evertranscript_protocol::HistorySearchResponse;
 use evertranscript_protocol::Meeting;
 use evertranscript_protocol::MeetingDeleteResponse;
@@ -23,6 +25,10 @@ use evertranscript_protocol::MeetingResponse;
 use evertranscript_protocol::ModelAvailability;
 use evertranscript_protocol::ModelsStatusResponse;
 use evertranscript_protocol::SettingsResponse;
+use evertranscript_protocol::SpeakerDetailResponse;
+use evertranscript_protocol::SpeakerListResponse;
+use evertranscript_protocol::SpeakerResponse;
+use evertranscript_protocol::TranscriptReassignResponse;
 use evertranscript_protocol::TranscriptSnapshotResponse;
 use evertranscript_protocol::WatchlistKind;
 use evertranscript_protocol::WatchlistResponse;
@@ -121,12 +127,66 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         seconds: u64,
     },
+    /// The Voice Registry: every Speaker and Voiceprint this app holds.
+    #[command(subcommand)]
+    Speakers(SpeakerCommand),
+    /// Re-assign a Transcript segment to a different Speaker. Your
+    /// correction layers above the machine's attribution and never
+    /// rewrites it.
+    Reassign {
+        /// Segment id, from `evertranscript show <meeting> --json`.
+        segment: String,
+        /// Speaker id, from `evertranscript speakers list`.
+        speaker: String,
+    },
+    /// What Diarization is doing, and how to stop it.
+    #[command(subcommand)]
+    Diarize(DiarizeCommand),
     /// Turn launch-at-login on or off. Registration only: a running Core is
     /// left alone, and Quit is what stops it.
     Autostart {
         #[arg(value_parser = ["on", "off"])]
         state: String,
     },
+}
+
+#[derive(Subcommand)]
+enum SpeakerCommand {
+    /// Every Speaker this app holds, and whether it can still recognize
+    /// each voice.
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// One Speaker, with where it has been heard and what the calendar
+    /// suggests calling it.
+    Show {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Name a Speaker. Every past appearance is relabelled, and the name
+    /// also confirms the Voiceprint for future matching.
+    Rename { id: String, name: String },
+    /// Delete a Speaker's Voiceprint. The app stops recognizing that voice;
+    /// nothing in the record changes.
+    Forget {
+        id: String,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum DiarizeCommand {
+    /// Whether a Meeting is being diarized right now.
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop a running Diarization. Whatever attribution finished is kept.
+    Cancel { meeting: String },
 }
 
 #[derive(Subcommand)]
@@ -264,6 +324,9 @@ async fn run(cli: Cli) -> Result<()> {
         } => run_settings(json, chinese_script).await,
         Command::Acknowledge => run_acknowledge().await,
         Command::AudioCheck { seconds } => run_audio_check(seconds).await,
+        Command::Speakers(speakers) => run_speakers(speakers).await,
+        Command::Reassign { segment, speaker } => run_reassign(&segment, &speaker).await,
+        Command::Diarize(diarize) => run_diarize(diarize).await,
         Command::Autostart { state } => run_autostart(&state).await,
     }
 }
@@ -884,6 +947,198 @@ fn init_tracing() {
         .with_env_filter(filter)
         .with_target(false)
         .init();
+}
+
+/// The Voice Registry (ADR-0008's mandatory legibility surface).
+///
+/// It answers "what does this app know about voices?" without a Meeting
+/// open, because the inventory is a property of the installation and not of
+/// any one recording.
+async fn run_speakers(command: SpeakerCommand) -> Result<()> {
+    let mut client = client().await?;
+    match command {
+        SpeakerCommand::List { json } => {
+            let response: SpeakerListResponse = client.request("speaker/list", None).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&response)?);
+                return Ok(());
+            }
+            if response.speakers.is_empty() {
+                println!(
+                    "No Speakers yet. They are created by Diarization, not by enrolling anyone."
+                );
+                return Ok(());
+            }
+            println!(
+                "{:<38}  {:<20}  {:>8}  VOICEPRINT",
+                "ID", "NAME", "MEETINGS"
+            );
+            for speaker in &response.speakers {
+                println!(
+                    "{:<38}  {:<20}  {:>8}  {}",
+                    speaker.id,
+                    display_name_of(speaker),
+                    speaker.meetings_seen_in,
+                    voiceprint_state(speaker),
+                );
+            }
+            println!(
+                "\n{} Speaker(s); {} with a stored Voiceprint.",
+                response.speakers.len(),
+                response
+                    .speakers
+                    .iter()
+                    .filter(|speaker| speaker.has_voiceprint)
+                    .count()
+            );
+        }
+        SpeakerCommand::Show { ref id, json } => {
+            let response: SpeakerDetailResponse = client
+                .request("speaker/get", Some(serde_json::json!({ "id": id })))
+                .await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&response)?);
+                return Ok(());
+            }
+            let speaker = &response.speaker;
+            println!("{}", display_name_of(speaker));
+            println!("  id          {}", speaker.id);
+            println!("  voiceprint  {}", voiceprint_state(speaker));
+            println!("  meetings    {}", speaker.meetings_seen_in);
+            if let Some(first) = &speaker.first_seen_at {
+                println!("  first seen  {first}");
+            }
+            if let Some(model) = &speaker.voiceprint_model {
+                println!("  model       {model}");
+            }
+            if !response.name_suggestions.is_empty() {
+                println!(
+                    "\n  The calendar listed these people in meetings this voice was in.\n  \
+                     Suggestions only — being invited is not evidence of having spoken:"
+                );
+                for name in &response.name_suggestions {
+                    println!("    {name}");
+                }
+            }
+        }
+        SpeakerCommand::Rename { ref id, ref name } => {
+            let response: SpeakerResponse = client
+                .request(
+                    "speaker/rename",
+                    Some(serde_json::json!({ "id": id, "displayName": name })),
+                )
+                .await?;
+            println!(
+                "Renamed to {}. Every past appearance now reads that way, and the Voiceprint is \
+                 confirmed for future matching.",
+                display_name_of(&response.speaker)
+            );
+        }
+        SpeakerCommand::Forget { ref id, force } => {
+            // Said before it happens rather than after, because the whole
+            // point of this surface is that a biometric deletion is a
+            // legible act (ADR-0008, ADR-0009).
+            if !force {
+                println!(
+                    "Deleting this Voiceprint stops the app recognizing that voice in future \
+                     Meetings.\nNothing in the record changes: the Speaker, its name, and every \
+                     word attributed to it stay exactly as they are.\n"
+                );
+                eprint!("delete this Voiceprint? [y/N] ");
+                use std::io::Write;
+                std::io::stderr().flush().ok();
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !matches!(answer.trim(), "y" | "Y" | "yes") {
+                    println!("left alone");
+                    return Ok(());
+                }
+            }
+            let response: SpeakerResponse = client
+                .request(
+                    "speaker/deleteVoiceprint",
+                    Some(serde_json::json!({ "id": id })),
+                )
+                .await?;
+            println!(
+                "Forgot the voice of {}. The record is unchanged.",
+                display_name_of(&response.speaker)
+            );
+        }
+    }
+    Ok(())
+}
+
+fn display_name_of(speaker: &evertranscript_protocol::Speaker) -> String {
+    match (&speaker.display_name, speaker.is_operator) {
+        (Some(name), _) => name.clone(),
+        (None, true) => "You".to_string(),
+        // Deliberately not a stored pseudonym: a persisted "Speaker 3" would
+        // read as a name somebody chose.
+        (None, false) => format!("(unnamed {})", &speaker.id[..8]),
+    }
+}
+
+fn voiceprint_state(speaker: &evertranscript_protocol::Speaker) -> &'static str {
+    match (speaker.has_voiceprint, speaker.confirmed) {
+        (false, _) => "none",
+        (true, true) => "confirmed",
+        (true, false) => "unconfirmed",
+    }
+}
+
+/// Re-assigns one segment (story 29b).
+async fn run_reassign(segment: &str, speaker: &str) -> Result<()> {
+    let mut client = client().await?;
+    let response: TranscriptReassignResponse = client
+        .request(
+            "transcript/reassign",
+            Some(serde_json::json!({ "segmentId": segment, "speakerId": speaker })),
+        )
+        .await?;
+    println!(
+        "Re-assigned. Your correction sits above the machine's attribution, which is kept \
+         underneath.\n  {}",
+        response.segment.text.trim()
+    );
+    Ok(())
+}
+
+async fn run_diarize(command: DiarizeCommand) -> Result<()> {
+    let mut client = client().await?;
+    let response: DiarizeStatusResponse = match command {
+        DiarizeCommand::Status { .. } => client.request("diarize/status", None).await?,
+        DiarizeCommand::Cancel { ref meeting } => {
+            client
+                .request(
+                    "diarize/cancel",
+                    Some(serde_json::json!({ "meetingId": meeting })),
+                )
+                .await?
+        }
+    };
+    if matches!(command, DiarizeCommand::Status { json: true }) {
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        return Ok(());
+    }
+    match response.state {
+        DiarizeState::Idle => println!("Nothing is being diarized."),
+        DiarizeState::Unavailable => {
+            println!("Diarization is unavailable — its models are missing or unreadable.")
+        }
+        DiarizeState::Running => {
+            let percent = if response.total_ms > 0 {
+                response.done_ms * 100 / response.total_ms
+            } else {
+                0
+            };
+            println!(
+                "Diarizing {} — {percent}%",
+                response.meeting_id.as_deref().unwrap_or("a Meeting")
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn run_watchlist(command: WatchlistCommand) -> Result<()> {

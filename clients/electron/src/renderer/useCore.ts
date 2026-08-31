@@ -13,6 +13,8 @@ import type { JsonRpcNotification } from "@protocol/JsonRpcNotification";
 import type { Meeting } from "@protocol/Meeting";
 import type { SettingsResponse } from "@protocol/SettingsResponse";
 import type { SettingsSetParams } from "@protocol/SettingsSetParams";
+import type { SpeakerListResponse } from "@protocol/SpeakerListResponse";
+import type { SpeakerResponse } from "@protocol/SpeakerResponse";
 import type { WatchlistResponse } from "@protocol/WatchlistResponse";
 import type { MeetingDetailResponse } from "@protocol/MeetingDetailResponse";
 import type { MeetingListResponse } from "@protocol/MeetingListResponse";
@@ -238,4 +240,60 @@ export function useSettings() {
   }, []);
 
   return { settings, watchlist, error, update, addWatched, removeWatched };
+}
+
+/**
+ * The Voice Registry.
+ *
+ * ADR-0008 made this surface mandatory rather than optional: the product
+ * stores biometric identifiers for people who never consented, and the
+ * bargain struck in exchange was that the inventory is fully inspectable and
+ * every Voiceprint individually deletable. It loads without a Meeting open
+ * because it describes the installation, not any one recording.
+ */
+export function useRegistry() {
+  const [speakers, setSpeakers] = useState<SpeakerListResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setSpeakers(
+        await window.evertranscript.request<SpeakerListResponse>("speaker/list", {}),
+      );
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const rename = useCallback(
+    async (id: string, displayName: string) => {
+      await window.evertranscript.request<SpeakerResponse>("speaker/rename", {
+        id,
+        displayName,
+      });
+      // Refetched rather than patched in place: a rename is retroactive
+      // across every Meeting, so the counts beside every other row can
+      // change too.
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const forgetVoice = useCallback(
+    async (id: string) => {
+      await window.evertranscript.request<SpeakerResponse>(
+        "speaker/deleteVoiceprint",
+        { id },
+      );
+      await refresh();
+    },
+    [refresh],
+  );
+
+  return { speakers, error, rename, forgetVoice };
 }
