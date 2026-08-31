@@ -10,6 +10,7 @@ pub mod audio;
 pub mod autostart;
 pub mod client;
 pub mod detect;
+pub mod diarize;
 pub mod mirror;
 pub mod models;
 pub mod paths;
