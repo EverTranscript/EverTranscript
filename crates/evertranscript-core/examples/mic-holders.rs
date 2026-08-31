@@ -129,9 +129,15 @@ mod probe {
 
     /// Every active capture endpoint, the default one marked.
     ///
-    /// The detector only ever asks the default (`GetDefaultAudioEndpoint`),
-    /// so an app recording from a second microphone would be invisible to
-    /// it. Printing all of them is how that stays visible here.
+    /// This probe printing all of them is what showed that the detector,
+    /// which then asked only `GetDefaultAudioEndpoint(eCapture,
+    /// eMultimedia)`, could not see an app recording from any other
+    /// endpoint — including the `eCommunications` default, which Windows
+    /// reassigns on its own when a headset appears and which is the role
+    /// meeting apps are directed at. The detector now enumerates the same
+    /// set this does, so the two agree; the default is still marked because
+    /// a disagreement between roles is the condition that made reading one
+    /// endpoint wrong.
     fn capture_endpoints(enumerator: &IMMDeviceEnumerator) -> Vec<(IMMDevice, String, bool)> {
         let mut endpoints = Vec::new();
         unsafe {
@@ -220,10 +226,15 @@ mod probe {
             }
 
             for (device, id, is_default) in &endpoints {
+                // The detector reads every active endpoint now, so the
+                // default is no longer privileged. It is still worth marking:
+                // `eMultimedia` disagreeing with the endpoint a meeting app
+                // actually opened is the thing that made reading only the
+                // default a false-negative source in the first place.
                 let marker = if *is_default {
-                    "  [DEFAULT — the only one the detector reads]"
+                    "  [eMultimedia default]"
                 } else {
-                    "  [not the default; the detector cannot see this one]"
+                    "  [not the eMultimedia default]"
                 };
                 println!("\nendpoint {id}{marker}");
 

@@ -4,7 +4,7 @@
 
 **Blocked by:** 01, 02.
 
-Status: live Windows testing closed by the Operator 2026-08-31 — the platform was found broken and fixed there. One open item left, and it is a product question about capture endpoints rather than anything needing hardware.
+Status: closed. Live Windows testing ended on the Operator's call 2026-08-31, having found and fixed a platform that had never detected anything; the capture-endpoint gap that run exposed is fixed too. Standing risks are named in the criteria rather than left as open work.
 
 - [x] Process enumeration for the Watchlist's exe entries, and audio-session state for the microphone condition — no permission prompt required on this platform
 - [x] The exe→app table twin of the macOS helper table. **This was checked off while the table did not exist**, and the mistake was structural rather than careless: the macOS helper rule (strip at `.helper`) is genuinely platform-neutral code, so "the twin" looked satisfied by the function being shared. It was not — a twin of a *table* is a table, and `WINDOWS_EXECUTABLES` is now it. See the open criterion below for what that omission cost.
@@ -22,11 +22,11 @@ Status: live Windows testing closed by the Operator 2026-08-31 — the platform 
   - **腾讯会议's executable is still unknown**, and still not guessed at.
   - Zoom, VooV and the five unrun browsers are unobserved on Windows.
 
-- [ ] **The detector reads only the default capture endpoint, and probably the wrong default at that.** `microphone_holders` asks `GetDefaultAudioEndpoint(eCapture, eMultimedia)`, so an app recording from a second microphone is invisible to it. Observed as true rather than suspected — the probe enumerates every active capture endpoint and marks which one the detector would see.
+- [x] **The detector now reads every active capture endpoint.** It asked `GetDefaultAudioEndpoint(eCapture, eMultimedia)`, which made two false-negative sources at once. The one the probe observed: an app recording from a second microphone was invisible. The sharper one, which the run did not test: Windows keeps a *separate* default per `ERole` and points communications software at `eCommunications` — and it reassigns that role by itself when a headset appears, so the roles routinely disagree and the detector was liable to be watching the endpoint the meeting was not on. A headset was enough; a second microphone was never required. `EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)` subsumes both and removes the need to guess which role an app chose.
 
-  **A sharper form of the same gap, not yet verified on a machine and recorded so it is not lost:** Windows keeps *separate* default endpoints per `ERole` — `eConsole`, `eMultimedia`, `eCommunications` — and communications software is directed at `eCommunications`. Meeting apps are communications software, and Windows reassigns the communications default on its own when a headset appears. If the two roles point at different devices, the detector is watching the endpoint the meeting is *not* on. That is a false-negative source aimed squarely at the case this product exists for, and it needs no second microphone to occur, only a headset. The probe queried `eMultimedia` only, so the run did not test it.
+  Two deliberate choices in the shape of it. **Failures are per-device and never fatal**, because the defect this platform shipped with was a call that failed and looked exactly like an idle machine — one unreadable endpoint must not be able to blank the whole answer. And a machine that offers no endpoints **says so at debug** rather than answering "nobody" in silence, which is the same postmortem again.
 
-  Neither half is hard to fix — `EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)` is already in the probe and already ran on the real machine, so the enumeration is observed working there. What has not happened is anyone deciding whether watching every capture endpoint is the behaviour this product wants; that is a product question, not a defect report, which is why this stays open rather than being quietly implemented.
+  **Cross-compiles clean under `clippy -D warnings` for `x86_64-pc-windows-msvc`, and that is worth exactly what it was worth last time — nothing about runtime.** What makes it better founded than the code it replaces is that the enumeration is lifted from `examples/mic-holders.rs`, which ran on the Operator's real machine and printed the endpoints this now reads. **Unobserved on Windows in the detector itself**, and the honest next step is one `mic-holders` run against a headset, which would also settle whether the two roles actually disagree on real hardware.
 
 ## How far the Windows build is actually verified, and where it stops
 

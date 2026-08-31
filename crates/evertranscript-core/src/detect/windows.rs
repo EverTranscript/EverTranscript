@@ -48,13 +48,13 @@ use tokio::sync::mpsc;
 use tracing::debug;
 use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::Media::Audio::AudioSessionStateActive;
+use windows::Win32::Media::Audio::DEVICE_STATE_ACTIVE;
 use windows::Win32::Media::Audio::IAudioSessionControl2;
 use windows::Win32::Media::Audio::IAudioSessionManager2;
 use windows::Win32::Media::Audio::IMMDevice;
 use windows::Win32::Media::Audio::IMMDeviceEnumerator;
 use windows::Win32::Media::Audio::MMDeviceEnumerator;
 use windows::Win32::Media::Audio::eCapture;
-use windows::Win32::Media::Audio::eMultimedia;
 use windows::Win32::System::Com::CLSCTX_ALL;
 use windows::Win32::System::Com::COINIT_MULTITHREADED;
 use windows::Win32::System::Com::CoCreateInstance;
@@ -141,6 +141,23 @@ fn leaf_lowercased(path: &str) -> Option<String> {
 }
 
 /// Which apps are holding the microphone right now, as responsible apps.
+///
+/// **Every active capture endpoint, not the default one.** This asked
+/// `GetDefaultAudioEndpoint(eCapture, eMultimedia)` until it was noticed that
+/// Windows keeps a *separate* default per `ERole` — `eConsole`,
+/// `eMultimedia`, `eCommunications` — and points communications software at
+/// `eCommunications`. Meeting apps are communications software, and Windows
+/// reassigns that role by itself when a headset appears, so the two roles
+/// routinely disagree and the detector was liable to watch the endpoint the
+/// meeting was not on. A headset was enough to cause it; a second microphone
+/// was never required. Enumerating them all subsumes both cases and removes
+/// the need to guess which role a given app chose.
+///
+/// Failures are per-device and never fatal. The bug this platform shipped
+/// with was a call that failed and looked exactly like an idle machine, so a
+/// single unreadable endpoint must not be able to blank the whole answer —
+/// and a machine that offers no endpoints at all says so in the log rather
+/// than answering "nobody" in silence.
 pub fn microphone_holders() -> BTreeSet<String> {
     let mut holders = BTreeSet::new();
     unsafe {
@@ -151,42 +168,56 @@ pub fn microphone_holders() -> BTreeSet<String> {
         let Ok(enumerator) =
             CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
         else {
+            tracing::debug!("no device enumerator; reporting no microphone holders");
             return holders;
         };
-        // The capture endpoint: a machine with no microphone answers
-        // "nobody", which is the truthful answer rather than an error.
-        let Ok(device): windows::core::Result<IMMDevice> =
-            enumerator.GetDefaultAudioEndpoint(eCapture, eMultimedia)
-        else {
+        // A machine with no microphone answers "nobody", which is the
+        // truthful answer rather than an error.
+        let Ok(endpoints) = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE) else {
+            tracing::debug!("could not enumerate capture endpoints");
             return holders;
         };
-        let Ok(manager) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else {
+        let Ok(endpoint_count) = endpoints.GetCount() else {
+            tracing::debug!("could not count capture endpoints");
             return holders;
         };
-        let Ok(sessions) = manager.GetSessionEnumerator() else {
+        if endpoint_count == 0 {
+            tracing::debug!("no active capture endpoints on this machine");
             return holders;
-        };
-        let Ok(count) = sessions.GetCount() else {
-            return holders;
-        };
+        }
 
-        for index in 0..count {
-            let Ok(control) = sessions.GetSession(index) else {
+        for endpoint in 0..endpoint_count {
+            let Ok(device): windows::core::Result<IMMDevice> = endpoints.Item(endpoint) else {
                 continue;
             };
-            let Ok(control2) = control.cast::<IAudioSessionControl2>() else {
+            let Ok(manager) = device.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None) else {
                 continue;
             };
-            // Inactive and expired sessions linger; only an active one is a
-            // live microphone.
-            if control2.GetState() != Ok(AudioSessionStateActive) {
-                continue;
-            }
-            let Ok(pid) = control2.GetProcessId() else {
+            let Ok(sessions) = manager.GetSessionEnumerator() else {
                 continue;
             };
-            if let Some(name) = executable_name(pid) {
-                holders.insert(responsible_app(&name));
+            let Ok(count) = sessions.GetCount() else {
+                continue;
+            };
+
+            for index in 0..count {
+                let Ok(control) = sessions.GetSession(index) else {
+                    continue;
+                };
+                let Ok(control2) = control.cast::<IAudioSessionControl2>() else {
+                    continue;
+                };
+                // Inactive and expired sessions linger; only an active one is
+                // a live microphone.
+                if control2.GetState() != Ok(AudioSessionStateActive) {
+                    continue;
+                }
+                let Ok(pid) = control2.GetProcessId() else {
+                    continue;
+                };
+                if let Some(name) = executable_name(pid) {
+                    holders.insert(responsible_app(&name));
+                }
             }
         }
     }
