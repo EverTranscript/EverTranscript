@@ -55,8 +55,27 @@ jobs:
             "https://huggingface.co/onnx-community/pyannote-segmentation-3.0/resolve/main/onnx/model.onnx"
           curl -sL --retry 3 --max-time 300 -o "$RUNNER_TEMP/diarize-models/embedding.onnx" \
             "https://huggingface.co/onnx-community/wespeaker-voxceleb-resnet34-LM/resolve/main/onnx/model.onnx"
-          echo "057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25  $RUNNER_TEMP/diarize-models/segmentation.onnx" | shasum -a 256 -c -
-          echo "3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb  $RUNNER_TEMP/diarize-models/embedding.onnx" | shasum -a 256 -c -
+          # `shasum` is macOS; Git Bash on the Windows runner has
+          # `sha256sum` and not the other way round. Found by this job
+          # failing on its first run, which is the job doing its job.
+          checksum() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" | cut -d' ' -f1
+            else
+              shasum -a 256 "$1" | cut -d' ' -f1
+            fi
+          }
+          verify() {
+            actual=$(checksum "$1")
+            if [ "$actual" != "$2" ]; then
+              echo "::error::$1 checksum $actual, expected $2"
+              exit 1
+            fi
+          }
+          verify "$RUNNER_TEMP/diarize-models/segmentation.onnx" \
+            057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25
+          verify "$RUNNER_TEMP/diarize-models/embedding.onnx" \
+            3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb
 
       - name: Tests
         # Windows runs one test at a time. Two reasons, both real: these
