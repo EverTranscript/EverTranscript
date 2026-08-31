@@ -17,6 +17,7 @@ ebur128.workspace = true
 dirs.workspace = true
 futures-util.workspace = true
 hanconv.workspace = true
+keyring.workspace = true
 ort.workspace = true
 reqwest.workspace = true
 rubato.workspace = true

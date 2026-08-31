@@ -23,8 +23,10 @@
 //!    [`Backend::identity`] is part of the contract rather than a logging
 //!    nicety.
 
+pub mod credentials;
 pub mod fake;
 pub mod generate;
+pub mod knob;
 pub mod prompt;
 
 use std::sync::Arc;
