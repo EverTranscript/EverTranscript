@@ -4,6 +4,11 @@ members = [
     "crates/evertranscript-core",
     "crates/evertranscript-fixtures",
     "crates/evertranscript-protocol",
+    # ADR-0031's local Summary engine, in its own process. A separate
+    # workspace member rather than a module: the point of the process
+    # boundary is that llama.cpp cannot take the Core down with it, and a
+    # boundary that shares a binary is not one.
+    "crates/evertranscript-summarizer",
 ]
 resolver = "2"
 

@@ -60,6 +60,8 @@ pub enum ModelPurpose {
     EchoCancellation,
     /// Diarization: who spoke (ADR-0008, ADR-0029 as amended).
     Diarization,
+    /// Local Summary, through the bundled sidecar (ADR-0031).
+    Summary,
 }
 
 impl ModelEntry {
@@ -124,8 +126,41 @@ pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
     required: true,
 };
 
+/// The local Summary model (ADR-0031: "its small instruct model downloads
+/// during onboarding when the Operator picks Local").
+///
+/// **This is the model that was verified, not the model that should ship.**
+/// 0.5B is small enough to prove the sidecar end to end on a laptop and is
+/// demonstrably too weak for the job: on a two-line transcript it produced a
+/// correct summary and then attributed one person's commitment to the other.
+/// A larger default belongs to the close-out's quality measurement rather
+/// than to anyone's reputation — which is the whole reason M4 owes a number.
+/// Size and checksum read off the downloaded artifact.
+pub const SUMMARY_DEFAULT: ModelEntry = ModelEntry {
+    key: "qwen2.5-0.5b-instruct-q4_k_m",
+    display_name: "Qwen2.5 0.5B Instruct (q4_K_M)",
+    filename: "summary-qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    remote_path: "Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    integrity: Integrity {
+        size_bytes: 491_400_032,
+        sha256: Some("74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"),
+        crc32: None,
+    },
+    purpose: ModelPurpose::Summary,
+    // Not required: Summary is not an Anchor (ADR-0002), and a machine that
+    // never generates one is a working installation. Marking it required
+    // would make a fresh install refuse to record until half a gigabyte had
+    // downloaded, for a feature the Operator may not have chosen.
+    required: false,
+};
+
 /// Every artifact this build knows how to fetch.
-pub const ALL: &[ModelEntry] = &[WHISPER_DEFAULT, DIARIZE_SEGMENTATION, DIARIZE_EMBEDDING];
+pub const ALL: &[ModelEntry] = &[
+    WHISPER_DEFAULT,
+    DIARIZE_SEGMENTATION,
+    DIARIZE_EMBEDDING,
+    SUMMARY_DEFAULT,
+];
 
 pub fn find(key: &str) -> Option<&'static ModelEntry> {
     ALL.iter().find(|entry| entry.key == key)

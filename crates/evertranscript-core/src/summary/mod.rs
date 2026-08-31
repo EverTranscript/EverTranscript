@@ -29,6 +29,7 @@ pub mod fake;
 pub mod generate;
 pub mod knob;
 pub mod prompt;
+pub mod sidecar;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
