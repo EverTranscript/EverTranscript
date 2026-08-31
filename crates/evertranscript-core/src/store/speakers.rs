@@ -309,7 +309,93 @@ pub fn correct_attribution(
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![id, segment_id, speaker_id, replaced, now_rfc3339()],
     )?;
+    feed_correction(connection, segment_id, speaker_id, replaced.as_deref())?;
     Ok(id)
+}
+
+/// Turns a correction into evidence, in both directions.
+///
+/// ADR-0009 as amended does not stop at "the display follows the Operator":
+/// the correction "feeds the correct Speaker's exemplars as positive and the
+/// wrong one's as negative evidence". Only keeping the positive half would
+/// leave the system making the same wrong match, every meeting, having been
+/// told each time.
+///
+/// The vector comes from the exemplar the machine recorded for the wrong
+/// Speaker **in this Meeting** — that is the observation that produced the
+/// mistake, so it is exactly the one worth re-filing. Nothing here has to
+/// re-open audio or re-run a model, which is what lets a correction be
+/// instantaneous from the Operator's side.
+///
+/// Called from [`correct_attribution`] rather than left to the caller: a
+/// correction that silently failed to teach anything would look identical to
+/// one that worked.
+fn feed_correction(
+    connection: &Connection,
+    segment_id: &str,
+    to_speaker: &str,
+    from_speaker: Option<&str>,
+) -> Result<()> {
+    let Some(from_speaker) = from_speaker else {
+        // Nothing to learn from: the machine had no opinion, so the
+        // correction is the first attribution rather than a disagreement.
+        return Ok(());
+    };
+    if from_speaker == to_speaker {
+        return Ok(());
+    }
+
+    let meeting_id: Option<String> = connection
+        .query_row(
+            "SELECT meeting_id FROM transcript_segments WHERE id = ?1",
+            params![segment_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(meeting_id) = meeting_id else {
+        return Ok(());
+    };
+
+    let mistaken: Vec<Exemplar> = exemplars(connection, from_speaker)?
+        .into_iter()
+        .filter(|exemplar| {
+            exemplar.meeting_id.as_deref() == Some(meeting_id.as_str()) && !exemplar.is_negative
+        })
+        .collect();
+
+    for exemplar in mistaken {
+        // Positive for the Speaker it actually was, and marked as coming
+        // from the Operator, which makes it the strongest evidence the
+        // system holds about that voice.
+        add_exemplar(
+            connection,
+            NewExemplar {
+                speaker_id: to_speaker,
+                meeting_id: Some(&meeting_id),
+                vector: &exemplar.vector,
+                model: &exemplar.model,
+                model_version: &exemplar.model_version,
+                voiced_ms: exemplar.voiced_ms,
+                from_operator: true,
+                is_negative: false,
+            },
+        )?;
+        // And negative against the Speaker it was not.
+        add_exemplar(
+            connection,
+            NewExemplar {
+                speaker_id: from_speaker,
+                meeting_id: Some(&meeting_id),
+                vector: &exemplar.vector,
+                model: &exemplar.model,
+                model_version: &exemplar.model_version,
+                voiced_ms: exemplar.voiced_ms,
+                from_operator: true,
+                is_negative: true,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// Who a segment is attributed to, with the Operator's corrections applied.
@@ -790,5 +876,188 @@ mod tests {
         let (count, first_seen) = appearances(&connection, &speaker.id).expect("appearances");
         assert_eq!(count, 1);
         assert!(first_seen.is_some());
+    }
+
+    #[test]
+    fn a_correction_teaches_both_speakers() {
+        // ADR-0009 as amended runs in both directions. Keeping only the
+        // positive half would leave the system making the same wrong match
+        // every meeting, having been told each time.
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let segment_id = segment(&connection, &meeting.id, 1);
+        let machine_said = create(&connection, false).expect("john");
+        let actually = create(&connection, false).expect("alice");
+
+        // The observation that produced the mistake.
+        add_exemplar(
+            &connection,
+            NewExemplar {
+                speaker_id: &machine_said.id,
+                meeting_id: Some(&meeting.id),
+                vector: &[0.6, 0.8],
+                model: "m",
+                model_version: "1",
+                voiced_ms: 5_000,
+                from_operator: false,
+                is_negative: false,
+            },
+        )
+        .expect("exemplar");
+        attribute_segment(
+            &connection,
+            &segment_id,
+            Some(&machine_said.id),
+            Attribution::Voiceprint,
+        )
+        .expect("attribute");
+
+        correct_attribution(&connection, &segment_id, &actually.id).expect("correct");
+
+        let learned = exemplars(&connection, &actually.id).expect("learned");
+        assert_eq!(learned.len(), 1, "the right Speaker gained the evidence");
+        assert!(learned[0].from_operator, "and it is Operator-sourced");
+        assert!(!learned[0].is_negative);
+        assert_eq!(learned[0].vector, vec![0.6, 0.8]);
+
+        let unlearned = exemplars(&connection, &machine_said.id).expect("unlearned");
+        assert!(
+            unlearned.iter().any(|exemplar| exemplar.is_negative),
+            "and the wrong one gained evidence against"
+        );
+    }
+
+    #[test]
+    fn negative_evidence_moves_the_wrong_speakers_voiceprint_away() {
+        // The point of recording it. After a correction, recomputing the
+        // centroid must no longer include the observation that caused the
+        // mistake — otherwise the Voiceprint keeps pointing at the voice it
+        // was just told it does not own.
+        use crate::diarize::cluster::centroid;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let segment_id = segment(&connection, &meeting.id, 1);
+        let machine_said = create(&connection, false).expect("john");
+        let actually = create(&connection, false).expect("alice");
+
+        for vector in [[1.0_f32, 0.0], [0.0, 1.0]] {
+            add_exemplar(
+                &connection,
+                NewExemplar {
+                    speaker_id: &machine_said.id,
+                    meeting_id: Some(&meeting.id),
+                    vector: &vector,
+                    model: "m",
+                    model_version: "1",
+                    voiced_ms: 4_000,
+                    from_operator: false,
+                    is_negative: false,
+                },
+            )
+            .expect("exemplar");
+        }
+        attribute_segment(
+            &connection,
+            &segment_id,
+            Some(&machine_said.id),
+            Attribution::Voiceprint,
+        )
+        .expect("attribute");
+
+        correct_attribution(&connection, &segment_id, &actually.id).expect("correct");
+
+        let history: Vec<(Vec<f32>, i64, bool)> = exemplars(&connection, &machine_said.id)
+            .expect("exemplars")
+            .into_iter()
+            .map(|exemplar| (exemplar.vector, exemplar.voiced_ms, exemplar.is_negative))
+            .collect();
+        assert!(
+            history.iter().any(|(_, _, negative)| *negative),
+            "negatives are on file"
+        );
+        assert!(
+            centroid(&history).is_some(),
+            "and the centroid still computes from what is left"
+        );
+    }
+
+    #[test]
+    fn a_first_attribution_by_the_operator_teaches_nobody_a_lesson() {
+        // Correcting a segment the machine never attributed is the Operator
+        // filling a gap, not disagreeing. Recording negative evidence
+        // against nobody would be inventing a dispute.
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let segment_id = segment(&connection, &meeting.id, 1);
+        let speaker = create(&connection, false).expect("speaker");
+
+        correct_attribution(&connection, &segment_id, &speaker.id).expect("correct");
+        assert!(exemplars(&connection, &speaker.id).expect("ex").is_empty());
+    }
+
+    #[test]
+    fn de_identification_is_rename_plus_voiceprint_delete() {
+        // Story 32, composed from parts that already exist. ADR-0009
+        // rejected a dedicated anonymize mechanism because rename already is
+        // one; this is the test that says the composition actually works.
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let segment_id = segment(&connection, &meeting.id, 1);
+        let speaker = create(&connection, false).expect("speaker");
+        rename(&connection, &speaker.id, "Alice Zhang").expect("name");
+        set_voiceprint(&connection, &speaker.id, &[1.0, 0.0], "m", "1").expect("voiceprint");
+        attribute_segment(
+            &connection,
+            &segment_id,
+            Some(&speaker.id),
+            Attribution::Voiceprint,
+        )
+        .expect("attribute");
+
+        // The Participant asks to be forgotten, to the degree the Operator
+        // chooses.
+        delete_voiceprint(&connection, &speaker.id).expect("forget the voice");
+        rename(&connection, &speaker.id, "Participant 1").expect("forget the name");
+
+        let after = get(&connection, &speaker.id).expect("get").expect("exists");
+        assert!(!after.has_voiceprint, "no longer recognized");
+        assert_eq!(after.display_name.as_deref(), Some("Participant 1"));
+        assert_eq!(
+            attributed_speaker(&connection, &segment_id).expect("attr"),
+            Some(speaker.id),
+            "and what was said is still exactly what was said"
+        );
+    }
+
+    #[test]
+    fn attribution_says_why_and_a_correction_overrides_it() {
+        // ADR-0008's visible match attribution. An Operator who cannot ask
+        // why has no way to judge whether to correct.
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let segment_id = segment(&connection, &meeting.id, 1);
+        let speaker = create(&connection, false).expect("speaker");
+        attribute_segment(
+            &connection,
+            &segment_id,
+            Some(&speaker.id),
+            Attribution::Channel,
+        )
+        .expect("attribute");
+
+        let before = meetings::segments(&connection, &meeting.id).expect("segments");
+        assert_eq!(
+            before[0].attribution,
+            Some(evertranscript_protocol::Attribution::Channel)
+        );
+
+        let other = create(&connection, false).expect("other");
+        correct_attribution(&connection, &segment_id, &other.id).expect("correct");
+        let after = meetings::segments(&connection, &meeting.id).expect("segments");
+        assert_eq!(
+            after[0].attribution,
+            Some(evertranscript_protocol::Attribution::Operator),
+            "the Operator's say-so is itself an attribution basis"
+        );
     }
 }
