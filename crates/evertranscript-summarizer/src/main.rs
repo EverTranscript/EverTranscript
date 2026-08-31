@@ -46,6 +46,15 @@ const CONTEXT_TOKENS: u32 = 8_192;
 /// summary and then wrote itself a fresh transcript to summarize.
 const STOP_SEQUENCES: &[&str] = &[
     "<transcript>",
+    // **The closing tag, which is the one that actually shows up.** The
+    // opening tag was listed and the closing one was not, and a model that
+    // replays the prompt reaches `</transcript>` — so the guard was on the
+    // marker that cannot appear and absent on the marker that does. Safe to
+    // stop on because `prompt::escape_control_markers` puts a zero-width
+    // space inside both tags in every untrusted string, so a transcript that
+    // quotes one cannot produce a literal here: if this appears, the model
+    // wrote it, and it has left the answer.
+    "</transcript>",
     "\nSummary:",
     "\n\n\n\n",
     // Prompt scaffolding. A small model handed a long prompt will restate

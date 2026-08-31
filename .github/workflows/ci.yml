@@ -47,7 +47,7 @@ jobs:
       #
       # 32 MB, pinned by sha256 in `models/registry.rs`. If a checksum ever
       # stops matching, that is a finding and this job should go red.
-      - name: Fetch the diarization models
+      - name: Fetch the inference models
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/diarize-models"
@@ -83,6 +83,28 @@ jobs:
           verify "$RUNNER_TEMP/diarize-models/embedding.onnx" \
             3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb
 
+          # The Summary model, in the same step so it shares the two
+          # hard-won lines above rather than growing a second copy of them.
+          #
+          # 491 MB, which is the largest thing this job fetches — and it buys
+          # the one claim two M4 criteria could not make: that the sidecar
+          # loads a model and generates on *this* platform. It cross-compiles
+          # for Windows, and M3 established what that is worth about runtime.
+          # Size and sha256 are `SUMMARY_DEFAULT` in `models/registry.rs`.
+          mkdir -p "$RUNNER_TEMP/summary-model"
+          curl -sL --retry 3 --max-time 900 \
+            -o "$RUNNER_TEMP/summary-model/summary.gguf" \
+            "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+          verify "$RUNNER_TEMP/summary-model/summary.gguf" \
+            74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db
+
+      # `cargo test --workspace` does **not** produce this. It builds the
+      # summarizer's unit-test harness into `deps/` and stops, so the
+      # inference test would find no binary beside it. Verified by deleting
+      # the file and re-running rather than reasoned about.
+      - name: Build the Summary sidecar for the inference test
+        run: cargo build -p evertranscript-summarizer
+
       - name: Tests
         # Windows runs one test at a time. Two reasons, both real: these
         # tests open capture devices, and a runner with no audio hardware is
@@ -92,6 +114,7 @@ jobs:
         # last test to report is the one that died.
         env:
           EVERTRANSCRIPT_DIARIZE_MODELS: ${{ runner.temp }}/diarize-models
+          EVERTRANSCRIPT_SUMMARY_MODEL: ${{ runner.temp }}/summary-model/summary.gguf
         run: cargo test --workspace ${{ runner.os == 'Windows' && '-- --test-threads=1' || '' }}
 
       # `cargo test` regenerates the TypeScript bindings and JSON schemas.
