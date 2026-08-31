@@ -24,6 +24,8 @@
 //!    nicety.
 
 pub mod fake;
+pub mod generate;
+pub mod prompt;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
