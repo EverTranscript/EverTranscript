@@ -33,11 +33,39 @@ pub struct Settings {
     /// people read; the model's own preference is neither stable nor the
     /// Operator's, so this is a choice rather than an accident.
     pub chinese_script: ChineseScript,
+    /// Which Summary Backend the Operator chose, as a provider id — `local`
+    /// for the bundled sidecar, otherwise a preset id or a custom URL.
+    ///
+    /// **None means nobody has chosen** (ADR-0013), and that is a state the
+    /// product stays in rather than defaulting away from: every
+    /// configuration it runs traces to an explicit act.
+    #[serde(default)]
+    pub summary_backend: Option<String>,
+    /// Custom base URL, when the choice is neither `local` nor a preset.
+    #[serde(default)]
+    pub summary_base_url: Option<String>,
+    /// Strict Mode (story 39): never auto-switch, report the failure.
+    #[serde(default)]
+    pub summary_strict: bool,
+    /// Whether the one-time cloud exfiltration warning has been accepted
+    /// (story 36). Choosing Cloud is refused until it has.
+    #[serde(default)]
+    pub summary_cloud_warning_accepted: bool,
+    /// The Operator's system prompt (story 42). None means the default,
+    /// which is what makes reset-to-default a deletion rather than a copy of
+    /// a string that could drift from the real default.
+    #[serde(default)]
+    pub summary_prompt: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            summary_backend: None,
+            summary_base_url: None,
+            summary_strict: false,
+            summary_cloud_warning_accepted: false,
+            summary_prompt: None,
             // The one thing that does *not* default to convenient.
             briefing_acknowledged: false,
             launch_at_login: true,

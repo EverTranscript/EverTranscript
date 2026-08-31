@@ -44,7 +44,15 @@ const CONTEXT_TOKENS: u32 = 8_192;
 /// CJK character can, and a token-level check would miss it. Small models
 /// reliably continue past the answer — the first real run produced a correct
 /// summary and then wrote itself a fresh transcript to summarize.
-const STOP_SEQUENCES: &[&str] = &["<transcript>", "\nSummary:", "\n\n\n\n"];
+const STOP_SEQUENCES: &[&str] = &[
+    "<transcript>",
+    "\nSummary:",
+    "\n\n\n\n",
+    // Prompt scaffolding. A small model handed a long prompt will restate
+    // it rather than answer it, and the first end-to-end run put this exact
+    // sentence into a Meeting's Summary.
+    "The operator's own notes",
+];
 
 /// How many recent tokens the repetition penalty considers.
 const REPEAT_WINDOW: i32 = 256;

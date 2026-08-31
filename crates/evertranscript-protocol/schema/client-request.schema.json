@@ -344,6 +344,57 @@
       ]
     },
     {
+      "description": "Generates a Summary for a finished Meeting, on the chosen Backend.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "summary/generate"
+        },
+        "params": {
+          "$ref": "#/$defs/MeetingGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "The Summary Backends this build offers, and what is known about each.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "summary/backends"
+        },
+        "params": {
+          "$ref": "#/$defs/SummaryBackendsParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Stores an API key in the OS credential store. **Never readable\nback** — a Client may ask whether one exists and replace or clear it,\nand that is all (story 41).",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "summary/setKey"
+        },
+        "params": {
+          "$ref": "#/$defs/SummarySetKeyParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Every Speaker the app holds — the Voice Registry's inventory\n(story 30). ADR-0008 makes this surface mandatory rather than\noptional: it is half of what was traded for storing Voiceprints\nat all.",
       "type": "object",
       "properties": {
@@ -718,6 +769,39 @@
             "boolean",
             "null"
           ]
+        },
+        "summaryBackend": {
+          "description": "`local`, a preset id, or a custom endpoint id. Setting it to a cloud\ndestination is refused until the warning has been accepted.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summaryBaseUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summaryCloudWarningAccepted": {
+          "description": "Set once the Operator has been shown what leaves the machine\n(story 36).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "summaryPrompt": {
+          "description": "The system prompt. An empty string resets to the default (story 42),\nwhich keeps reset a deletion rather than a copy that could drift.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summaryStrict": {
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       }
     },
@@ -752,6 +836,27 @@
     },
     "StatusParams": {
       "type": "object"
+    },
+    "SummaryBackendsParams": {
+      "type": "object"
+    },
+    "SummarySetKeyParams": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "None clears the stored key. Clearing is a first-class act, not a side\neffect of switching the Knob.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider"
+      ]
     },
     "TranscriptReassignParams": {
       "type": "object",

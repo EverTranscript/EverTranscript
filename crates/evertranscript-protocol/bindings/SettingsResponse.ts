@@ -11,4 +11,18 @@ launchAtLoginLocation: string,
  * True when the setting and the actual registration disagree — for
  * example after the Operator deleted the plist themselves.
  */
-launchAtLoginRegistered: boolean, };
+launchAtLoginRegistered: boolean, 
+/**
+ * The Summary Knob. Absent means unchosen (ADR-0013).
+ */
+summaryBackend?: string, summaryStrict: boolean, summaryCloudWarningAccepted: boolean, 
+/**
+ * The Operator's system prompt, when they have edited it. Absent means
+ * the default is in use, which is what makes reset a deletion.
+ */
+summaryPrompt?: string, 
+/**
+ * The default, so a Client can show it and offer reset without keeping
+ * its own copy that could drift.
+ */
+summaryPromptDefault: string, };

@@ -14,6 +14,7 @@ import type { Meeting } from "@protocol/Meeting";
 import type { SettingsResponse } from "@protocol/SettingsResponse";
 import type { SettingsSetParams } from "@protocol/SettingsSetParams";
 import type { SpeakerListResponse } from "@protocol/SpeakerListResponse";
+import type { SummaryBackendsResponse } from "@protocol/SummaryBackendsResponse";
 import type { SpeakerResponse } from "@protocol/SpeakerResponse";
 import type { WatchlistResponse } from "@protocol/WatchlistResponse";
 import type { MeetingDetailResponse } from "@protocol/MeetingDetailResponse";
@@ -296,4 +297,133 @@ export function useRegistry() {
   );
 
   return { speakers, error, rename, forgetVoice };
+}
+
+/**
+ * Notes and Summary for one Meeting.
+ *
+ * Notes save on a debounce rather than on a button: they are written *during*
+ * a meeting, and a Save button is a thing to forget while listening to
+ * somebody.
+ */
+export function useMeetingWriting(meetingId: string | null) {
+  const [meeting, setMeeting] = useState<Meeting | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!meetingId) return;
+    try {
+      const detail = await window.evertranscript.request<MeetingDetailResponse>(
+        "meeting/get",
+        { id: meetingId },
+      );
+      setMeeting(detail.meeting);
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [meetingId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const saveNotes = useCallback(
+    async (notes: string) => {
+      if (!meetingId) return;
+      const response = await window.evertranscript.request<MeetingResponse>(
+        "meeting/setNotes",
+        { id: meetingId, notes },
+      );
+      setMeeting(response.meeting);
+    },
+    [meetingId],
+  );
+
+  const generate = useCallback(async () => {
+    if (!meetingId) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      const response = await window.evertranscript.request<MeetingResponse>(
+        "summary/generate",
+        { id: meetingId },
+      );
+      setMeeting(response.meeting);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setGenerating(false);
+    }
+  }, [meetingId]);
+
+  return { meeting, generating, error, saveNotes, generate };
+}
+
+/**
+ * The Summary Backend picker (ADR-0013, ADR-0010).
+ *
+ * `chosen` being undefined is a real state the screen must show, not one to
+ * default away: every configuration this product runs traces to an explicit
+ * act.
+ */
+export function useSummaryBackends() {
+  const [backends, setBackends] = useState<SummaryBackendsResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setBackends(
+        await window.evertranscript.request<SummaryBackendsResponse>(
+          "summary/backends",
+          {},
+        ),
+      );
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const choose = useCallback(
+    async (id: string, acceptedWarning: boolean) => {
+      // The Core refuses a cloud choice without the acceptance, so this is
+      // a convenience rather than the gate. The gate must not live in a
+      // renderer that a bug could skip.
+      await window.evertranscript.request<SettingsResponse>("settings/set", {
+        ...(acceptedWarning ? { summaryCloudWarningAccepted: true } : {}),
+        summaryBackend: id,
+      });
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const setStrict = useCallback(
+    async (strict: boolean) => {
+      await window.evertranscript.request<SettingsResponse>("settings/set", {
+        summaryStrict: strict,
+      });
+      await refresh();
+    },
+    [refresh],
+  );
+
+  const setKey = useCallback(
+    async (provider: string, key: string | null) => {
+      await window.evertranscript.request<SummaryBackendsResponse>(
+        "summary/setKey",
+        key ? { provider, key } : { provider },
+      );
+      await refresh();
+    },
+    [refresh],
+  );
+
+  return { backends, error, choose, setStrict, setKey };
 }

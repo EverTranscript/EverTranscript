@@ -1,11 +1,18 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import type { Meeting } from "@protocol/Meeting";
 import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 
 import { isMessageKey, t } from "./i18n";
 import type { Speaker } from "@protocol/Speaker";
-import { useCore, useRegistry, useSettings, useTranscript } from "./useCore";
+import {
+  useCore,
+  useMeetingWriting,
+  useRegistry,
+  useSettings,
+  useSummaryBackends,
+  useTranscript,
+} from "./useCore";
 
 export function App(): React.JSX.Element {
   const core = useCore();
@@ -324,6 +331,8 @@ function MeetingView({
           </ol>
         )}
       </section>
+
+      <WritingPanel meetingId={meeting.id} />
     </>
   );
 }
@@ -550,6 +559,8 @@ function SettingsPanel({ onClose }: { onClose: () => void }): React.JSX.Element 
           </>
         ) : null}
       </section>
+
+      <BackendPanel />
     </div>
   );
 }
@@ -714,5 +725,247 @@ function RegistryPanel({ onClose }: { onClose: () => void }): React.JSX.Element 
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * Notes and Summary for the open Meeting.
+ *
+ * Notes save on a debounce rather than behind a Save button: they are
+ * written *during* a meeting, and a button is a thing to forget while
+ * listening to somebody.
+ */
+function WritingPanel({ meetingId }: { meetingId: string }): React.JSX.Element {
+  const { meeting, generating, error, saveNotes, generate } =
+    useMeetingWriting(meetingId);
+  const [draft, setDraft] = useState<string | null>(null);
+
+  // Adopt the stored notes once, then leave the field alone — re-syncing on
+  // every refresh would overwrite what someone is in the middle of typing.
+  useEffect(() => {
+    setDraft(null);
+  }, [meetingId]);
+
+  const notes = draft ?? meeting?.notes ?? "";
+
+  useEffect(() => {
+    if (draft === null) return;
+    const timer = setTimeout(() => void saveNotes(draft), 600);
+    return () => clearTimeout(timer);
+  }, [draft, saveNotes]);
+
+  return (
+    <div className="border-t border-[--color-line] px-6 py-4">
+      {error ? (
+        <p className="mb-3 text-xs text-[--color-recording]">{error}</p>
+      ) : null}
+
+      <section className="mb-5">
+        <h2 className="text-sm font-medium">{t("summary.title")}</h2>
+        {meeting?.summary ? (
+          <>
+            <pre className="mt-2 whitespace-pre-wrap font-sans text-sm">
+              {meeting.summary}
+            </pre>
+            {meeting.summaryBackend ? (
+              /* Story 38: which Backend actually ran, beside the thing it
+                 produced rather than buried in Settings. */
+              <p className="mt-2 text-xs text-[--color-ink-muted]">
+                {t("summary.generatedBy")} {meeting.summaryBackend}
+              </p>
+            ) : null}
+          </>
+        ) : (
+          <p className="mt-1 text-xs text-[--color-ink-muted]">
+            {t("summary.none")}
+          </p>
+        )}
+        <button
+          type="button"
+          disabled={generating}
+          onClick={() => void generate()}
+          className="mt-3 rounded border border-[--color-line] px-3 py-1 text-xs hover:bg-[--color-surface-raised] disabled:opacity-50"
+        >
+          {generating ? t("summary.generating") : t("summary.generate")}
+        </button>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-medium">{t("notes.title")}</h2>
+        <p className="mb-2 text-xs text-[--color-ink-muted]">{t("notes.hint")}</p>
+        <textarea
+          value={notes}
+          onChange={(changed) => setDraft(changed.target.value)}
+          placeholder={t("notes.placeholder")}
+          rows={5}
+          className="w-full rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-sm"
+        />
+      </section>
+    </div>
+  );
+}
+
+/**
+ * The Summary Backend picker (ADR-0013, ADR-0010).
+ *
+ * Two things this screen must not do: preselect, and gate. Nothing is chosen
+ * until the Operator chooses, and a provider's data-handling label informs
+ * without ever blocking — the product cannot verify provider-side retention,
+ * so refusing on a label would be false hardness dressed as a guarantee.
+ */
+function BackendPanel(): React.JSX.Element {
+  const { backends, error, choose, setStrict, setKey } = useSummaryBackends();
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [keyDraft, setKeyDraft] = useState<Record<string, string>>({});
+
+  return (
+    <section className="mt-8">
+      <h2 className="text-sm font-medium">{t("backend.title")}</h2>
+      <p className="mb-3 text-xs text-[--color-ink-muted]">{t("backend.hint")}</p>
+
+      {error ? (
+        <p className="mb-3 text-sm text-[--color-recording]">{error}</p>
+      ) : null}
+
+      {backends && !backends.chosen ? (
+        <p className="mb-3 text-xs text-[--color-recording]">
+          {t("summary.unchosen")}
+        </p>
+      ) : null}
+
+      <ul className="mb-4">
+        {backends?.options.map((option) => (
+          <li key={option.id} className="border-b border-[--color-line] py-3">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <span className="block text-sm">
+                  {option.displayName}
+                  {option.id === "local" ? (
+                    <span className="ml-2 rounded bg-[--color-surface-raised] px-1.5 py-0.5 text-xs">
+                      {t("backend.recommended")}
+                    </span>
+                  ) : null}
+                </span>
+                <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+                  {option.leavesTheMachine
+                    ? t("backend.leaves")
+                    : t("backend.staysHere")}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={backends.chosen === option.id}
+                onClick={() =>
+                  option.leavesTheMachine && !backends.cloudWarningAccepted
+                    ? setConfirming(option.id)
+                    : void choose(option.id, false)
+                }
+                className="shrink-0 rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised] disabled:opacity-40"
+              >
+                {backends.chosen === option.id ? "✓" : "Use"}
+              </button>
+            </div>
+
+            {option.dataHandling ? (
+              <p className="mt-2 text-xs text-[--color-ink-muted]">
+                {t("backend.trains")}: {String(option.dataHandling.trainsOnInputs)} ·{" "}
+                {t("backend.retention")}: {option.dataHandling.retention} ·{" "}
+                {t("backend.zeroRetention")}:{" "}
+                {String(option.dataHandling.zeroRetentionAvailable)} ·{" "}
+                {t("backend.verified")}:{" "}
+                {/* An unverifiable label is worse than none, so an unverified
+                    one says so rather than implying a check that did not
+                    happen. */}
+                {option.dataHandling.verifiedOn === "unverified"
+                  ? t("backend.unverified")
+                  : option.dataHandling.verifiedOn}
+              </p>
+            ) : null}
+
+            {option.leavesTheMachine ? (
+              <div className="mt-2">
+                <p className="text-xs text-[--color-ink-muted]">
+                  {option.hasKey ? t("backend.key.stored") : t("backend.key.none")}
+                </p>
+                <div className="mt-1 flex gap-2">
+                  <input
+                    type="password"
+                    value={keyDraft[option.id] ?? ""}
+                    onChange={(changed) =>
+                      setKeyDraft({ ...keyDraft, [option.id]: changed.target.value })
+                    }
+                    placeholder={t("backend.key")}
+                    className="min-w-0 flex-1 rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void setKey(option.id, keyDraft[option.id] ?? "");
+                      setKeyDraft({ ...keyDraft, [option.id]: "" });
+                    }}
+                    className="rounded border border-[--color-line] px-2 py-1 text-xs"
+                  >
+                    {t("backend.key.save")}
+                  </button>
+                  {option.hasKey ? (
+                    <button
+                      type="button"
+                      onClick={() => void setKey(option.id, null)}
+                      className="rounded px-2 py-1 text-xs text-[--color-ink-muted]"
+                    >
+                      {t("backend.key.clear")}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
+            {/* The hard one-time warning (story 36), stated before the act
+                rather than after it. */}
+            {confirming === option.id ? (
+              <div className="mt-3 rounded border border-[--color-recording] p-3">
+                <p className="text-sm font-medium">{t("backend.warning.title")}</p>
+                <p className="mt-1 text-xs text-[--color-ink-muted]">
+                  {t("backend.warning.body")}
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void choose(option.id, true);
+                      setConfirming(null);
+                    }}
+                    className="rounded border border-[--color-recording] px-2 py-1 text-xs text-[--color-recording]"
+                  >
+                    {t("backend.warning.accept")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirming(null)}
+                    className="px-2 py-1 text-xs text-[--color-ink-muted]"
+                  >
+                    {t("backend.warning.cancel")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+
+      <label className="flex items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={backends?.strict ?? false}
+          onChange={(changed) => void setStrict(changed.target.checked)}
+        />
+        <span>
+          {t("backend.strict")}
+          <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+            {t("backend.strict.hint")}
+          </span>
+        </span>
+      </label>
+    </section>
   );
 }

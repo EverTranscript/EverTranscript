@@ -548,3 +548,23 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Outcome:** applied
 
 **Ref:** (pending)
+
+## Q37 — m4-summary/09-m4-closeout — finding
+
+**Question:** M4 owes a quality number. The bundled local model is a 0.5B that the registry comment already calls too weak. Measure with it anyway, or download a larger one first so the number means something?
+**Options considered:** ship a bigger model and measure that / measure the model that is actually bundled and report what it does
+**Chosen:** Measured the bundled one. On the M1 dogfood recording — which contains two plain commitments, deferring the hiring plan and sending revised numbers by Friday — the Summary read, in full, `None noted.` **Zero of two action items.**
+**Decided-by:** agent
+**Justification:** The number is bad and it is the honest number for what is in the box today, which is the only kind worth putting in a close-out. It also confirms a prediction that was written down *before* it was measured: the `SUMMARY_DEFAULT` comment says the registered model "is the model that was verified, not the model that should ship". Measuring it turns that from an opinion into evidence for choosing the real default, which is the work still owed. What the run did earn was two defects that no unit test could have found, both now fixed: greedy sampling with no repetition penalty made the model restate the transcript five times to the token ceiling, and the absence of stop handling wrote the prompt's own scaffolding — the literal sentence "The operator's own notes from this meeting" — into a stored Summary. Neither is a model-quality issue; both are pipeline bugs that only appear when a real model runs. What the measurement is **not** is a test of the thing M4 is most likely to get wrong: the recording is 89 seconds, so map-reduce never engaged, and chunk-boundary behaviour on a ninety-minute meeting remains exercised only against the fake.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q38 — m4-summary/07-the-knob — gate-resolution
+
+**Question:** The one-way fallback is the property that stops a network blip becoming an exfiltration. Enforce it with a conditional, or arrange the code so the wrong direction cannot be written?
+**Options considered:** a `strict`/direction flag checked in the fallback path / a function signature in which no cloud Backend can be passed as a fallback
+**Chosen:** The signature. `knob::run` takes the chosen Backend and a `local_fallback`, and the Core hands it a named `ChosenBackends` pair whose second element is always local. There is no argument, field, or branch through which a failing local Backend could reach a cloud one.
+**Decided-by:** agent
+**Justification:** This is the first milestone where a bug leaks meeting content, and every other failure in this product is recoverable — a lost recording, a missed meeting, a mislabelled speaker. Sending a transcript to a provider the Operator did not choose is not. A boolean that happens to be false and a function that cannot express the wrong thing are different guarantees, and only the second survives a future edit by someone who has not read this entry. The tests are written to tell them apart: each drives all four failure shapes and asserts the *other* Backend was never called, rather than only that the right one answered. Cancellation is excluded from fallback for the same reason — an Operator who pressed stop must not discover that stopping is what sent their transcript somewhere. The gate on choosing Cloud lives in the Core rather than the UI on the same principle: a gate a Client can walk around by forgetting to call it is not a gate.
+**Outcome:** applied
+**Ref:** (pending)

@@ -28,6 +28,7 @@ use evertranscript_protocol::SettingsResponse;
 use evertranscript_protocol::SpeakerDetailResponse;
 use evertranscript_protocol::SpeakerListResponse;
 use evertranscript_protocol::SpeakerResponse;
+use evertranscript_protocol::SummaryBackendsResponse;
 use evertranscript_protocol::TranscriptReassignResponse;
 use evertranscript_protocol::TranscriptSnapshotResponse;
 use evertranscript_protocol::WatchlistKind;
@@ -127,6 +128,13 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         seconds: u64,
     },
+    /// Read and write a Meeting's Notes — your own writing, editable
+    /// forever, and what steers the Summary.
+    #[command(subcommand)]
+    Notes(NotesCommand),
+    /// Generate and read a Meeting's Summary.
+    #[command(subcommand)]
+    Summary(SummaryCommand),
     /// The Voice Registry: every Speaker and Voiceprint this app holds.
     #[command(subcommand)]
     Speakers(SpeakerCommand),
@@ -147,6 +155,56 @@ enum Command {
     Autostart {
         #[arg(value_parser = ["on", "off"])]
         state: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum NotesCommand {
+    /// Print a Meeting's Notes.
+    Show { meeting: String },
+    /// Replace them. Reads from stdin when no text is given, so an editor
+    /// or a pipe works.
+    Set {
+        meeting: String,
+        text: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum SummaryCommand {
+    /// Print a Meeting's Summary, if it has one.
+    Show { meeting: String },
+    /// Generate one on the chosen Backend.
+    Generate { meeting: String },
+    /// Show the Summary Backends and which one is chosen.
+    Backends {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Choose a Backend. `local` is the bundled model; anything else sends
+    /// meeting content to that provider.
+    Use {
+        /// `local`, a preset id, or a custom id used with --base-url.
+        backend: String,
+        #[arg(long)]
+        base_url: Option<String>,
+        /// Required to choose anything but `local`: confirms you have read
+        /// what leaves this machine.
+        #[arg(long)]
+        i_understand_this_sends_my_meetings: bool,
+    },
+    /// Never auto-switch Backends; report the failure instead (story 39).
+    Strict { state: String },
+    /// Store an API key in the OS credential store. Reads from stdin so it
+    /// never lands in your shell history.
+    SetKey { provider: String },
+    /// Forget a stored API key.
+    ClearKey { provider: String },
+    /// Show the system prompt, or replace it. `--reset` restores the default.
+    Prompt {
+        text: Option<String>,
+        #[arg(long)]
+        reset: bool,
     },
 }
 
@@ -327,6 +385,8 @@ async fn run(cli: Cli) -> Result<()> {
         } => run_settings(json, chinese_script).await,
         Command::Acknowledge => run_acknowledge().await,
         Command::AudioCheck { seconds } => run_audio_check(seconds).await,
+        Command::Notes(notes) => run_notes(notes).await,
+        Command::Summary(summary) => run_summary(summary).await,
         Command::Speakers(speakers) => run_speakers(speakers).await,
         Command::Reassign { segment, speaker } => run_reassign(&segment, &speaker).await,
         Command::Diarize(diarize) => run_diarize(diarize).await,
@@ -950,6 +1010,251 @@ fn init_tracing() {
         .with_env_filter(filter)
         .with_target(false)
         .init();
+}
+
+/// Notes: the Operator's own writing (ADR-0018).
+async fn run_notes(command: NotesCommand) -> Result<()> {
+    let mut client = client().await?;
+    match command {
+        NotesCommand::Show { ref meeting } => {
+            let response: MeetingDetailResponse = client
+                .request("meeting/get", Some(serde_json::json!({ "id": meeting })))
+                .await?;
+            match response.meeting.notes.as_deref() {
+                Some(notes) => println!("{notes}"),
+                None => println!("(no notes)"),
+            }
+        }
+        NotesCommand::Set {
+            ref meeting,
+            ref text,
+        } => {
+            // Reading stdin when no text is given is what makes an editor or
+            // a pipe work, which is how anyone actually writes more than a
+            // sentence.
+            let notes = match text {
+                Some(text) => text.clone(),
+                None => {
+                    use std::io::Read;
+                    let mut buffer = String::new();
+                    std::io::stdin().read_to_string(&mut buffer)?;
+                    buffer
+                }
+            };
+            let response: MeetingResponse = client
+                .request(
+                    "meeting/setNotes",
+                    Some(serde_json::json!({ "id": meeting, "notes": notes })),
+                )
+                .await?;
+            println!(
+                "Saved {} character(s) of notes.",
+                response
+                    .meeting
+                    .notes
+                    .as_deref()
+                    .unwrap_or("")
+                    .chars()
+                    .count()
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn run_summary(command: SummaryCommand) -> Result<()> {
+    let mut client = client().await?;
+    match command {
+        SummaryCommand::Show { ref meeting } => {
+            let response: MeetingDetailResponse = client
+                .request("meeting/get", Some(serde_json::json!({ "id": meeting })))
+                .await?;
+            match response.meeting.summary.as_deref() {
+                Some(summary) => {
+                    println!("{summary}");
+                    if let Some(backend) = response.meeting.summary_backend.as_deref() {
+                        // Which Backend produced it, always. An Operator who
+                        // chose Cloud and received local quality is owed the
+                        // reason; one who chose Local is owed the evidence.
+                        println!("\n---\ngenerated by {backend}");
+                    }
+                }
+                None => println!("(no summary yet — `evertranscript summary generate {meeting}`)"),
+            }
+        }
+        SummaryCommand::Generate { ref meeting } => {
+            println!("Generating… this can take a few minutes on a local model.");
+            let response: MeetingResponse = client
+                .request(
+                    "summary/generate",
+                    Some(serde_json::json!({ "id": meeting })),
+                )
+                .await?;
+            println!(
+                "{}",
+                response
+                    .meeting
+                    .summary
+                    .as_deref()
+                    .unwrap_or("(nothing generated)")
+            );
+        }
+        SummaryCommand::Backends { json } => {
+            let response: SummaryBackendsResponse =
+                client.request("summary/backends", None).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&response)?);
+                return Ok(());
+            }
+            match response.chosen.as_deref() {
+                // ADR-0013: unchosen is a state to show, not to default away.
+                None => println!("No Summary Backend chosen yet. Nothing will be generated.\n"),
+                Some(chosen) => println!("Using: {chosen}\n"),
+            }
+            for option in &response.options {
+                let mark = if response.chosen.as_deref() == Some(option.id.as_str()) {
+                    "*"
+                } else {
+                    " "
+                };
+                let where_it_goes = if option.leaves_the_machine {
+                    "sends your meetings to this provider"
+                } else {
+                    "stays on this machine"
+                };
+                println!("{mark} {:<12} {where_it_goes}", option.id);
+                if let Some(handling) = &option.data_handling {
+                    println!(
+                        "    trains on inputs: {} · retention: {} · zero-retention: {} · \
+                         verified: {}",
+                        handling.trains_on_inputs,
+                        handling.retention,
+                        handling.zero_retention_available,
+                        handling.verified_on
+                    );
+                }
+                if option.leaves_the_machine {
+                    println!(
+                        "    api key stored: {}",
+                        if option.has_key { "yes" } else { "no" }
+                    );
+                }
+            }
+            println!(
+                "\nAny other id with --base-url is accepted: {}",
+                response.custom_endpoint_label
+            );
+            if response.strict {
+                println!("Strict Mode is on: a failing Backend is reported, never switched.");
+            }
+        }
+        SummaryCommand::Use {
+            ref backend,
+            ref base_url,
+            i_understand_this_sends_my_meetings,
+        } => {
+            let cloud = backend != "local";
+            if cloud && !i_understand_this_sends_my_meetings {
+                // The hard one-time warning (story 36), in the surface where
+                // the choice is actually made.
+                println!(
+                    "Choosing `{backend}` sends the full text of your meetings to that \
+                     provider.\n\nEverything else in EverTranscript stays on this machine: \
+                     recording, transcription, and speaker attribution are permanently local \
+                     and have no cloud option at all. Summary is the single exception, and \
+                     this is it.\n\nRe-run with \
+                     --i-understand-this-sends-my-meetings to proceed."
+                );
+                return Ok(());
+            }
+            let mut change = serde_json::Map::new();
+            if cloud {
+                change.insert("summaryCloudWarningAccepted".into(), true.into());
+            }
+            change.insert("summaryBackend".into(), backend.clone().into());
+            if let Some(url) = base_url {
+                change.insert("summaryBaseUrl".into(), url.clone().into());
+            }
+            let _: SettingsResponse = client
+                .request("settings/set", Some(serde_json::Value::Object(change)))
+                .await?;
+            println!("Summary Backend is now {backend}.");
+        }
+        SummaryCommand::Strict { ref state } => {
+            let on = matches!(state.as_str(), "on" | "true" | "yes");
+            let _: SettingsResponse = client
+                .request(
+                    "settings/set",
+                    Some(serde_json::json!({ "summaryStrict": on })),
+                )
+                .await?;
+            println!(
+                "Strict Mode {}. {}",
+                if on { "on" } else { "off" },
+                if on {
+                    "A failing Backend is reported, never switched."
+                } else {
+                    "A failing cloud Backend falls back to local. Local never falls back."
+                }
+            );
+        }
+        SummaryCommand::SetKey { ref provider } => {
+            // From stdin, so the key never reaches shell history or `ps`.
+            use std::io::Read;
+            let mut key = String::new();
+            std::io::stdin().read_to_string(&mut key)?;
+            let _: SummaryBackendsResponse = client
+                .request(
+                    "summary/setKey",
+                    Some(serde_json::json!({ "provider": provider, "key": key.trim() })),
+                )
+                .await?;
+            println!("Stored in the OS credential store. It is never read back out.");
+        }
+        SummaryCommand::ClearKey { ref provider } => {
+            let _: SummaryBackendsResponse = client
+                .request(
+                    "summary/setKey",
+                    Some(serde_json::json!({ "provider": provider })),
+                )
+                .await?;
+            println!("Forgot the key for {provider}.");
+        }
+        SummaryCommand::Prompt { ref text, reset } => {
+            if reset {
+                let _: SettingsResponse = client
+                    .request(
+                        "settings/set",
+                        Some(serde_json::json!({ "summaryPrompt": "" })),
+                    )
+                    .await?;
+                println!("Reset to the default.");
+                return Ok(());
+            }
+            match text {
+                Some(text) => {
+                    let _: SettingsResponse = client
+                        .request(
+                            "settings/set",
+                            Some(serde_json::json!({ "summaryPrompt": text })),
+                        )
+                        .await?;
+                    println!("Saved.");
+                }
+                None => {
+                    let response: SettingsResponse = client.request("settings/get", None).await?;
+                    println!(
+                        "{}",
+                        response
+                            .summary_prompt
+                            .as_deref()
+                            .unwrap_or(&response.summary_prompt_default)
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The Voice Registry (ADR-0008's mandatory legibility surface).

@@ -3,6 +3,21 @@ import type { ChineseScript } from "./ChineseScript";
 
 export type SettingsSetParams = { 
 /**
+ * `local`, a preset id, or a custom endpoint id. Setting it to a cloud
+ * destination is refused until the warning has been accepted.
+ */
+summaryBackend?: string, summaryBaseUrl?: string, summaryStrict?: boolean, 
+/**
+ * Set once the Operator has been shown what leaves the machine
+ * (story 36).
+ */
+summaryCloudWarningAccepted?: boolean, 
+/**
+ * The system prompt. An empty string resets to the default (story 42),
+ * which keeps reset a deletion rather than a copy that could drift.
+ */
+summaryPrompt?: string, 
+/**
  * Records that the Operator acknowledged the Briefing. Once true it is
  * never set back to false by a Client: un-acknowledging consent is not
  * a thing that happens, and allowing it would make the pre-capture

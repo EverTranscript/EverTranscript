@@ -47,6 +47,9 @@ use evertranscript_protocol::SpeakerDetailResponse;
 use evertranscript_protocol::SpeakerListResponse;
 use evertranscript_protocol::SpeakerResponse;
 use evertranscript_protocol::StatusResponse;
+use evertranscript_protocol::SummaryBackendOption;
+use evertranscript_protocol::SummaryBackendsResponse;
+use evertranscript_protocol::SummaryDataHandling;
 use evertranscript_protocol::TranscriptCaptionsDroppedParams;
 use evertranscript_protocol::TranscriptReassignResponse;
 use evertranscript_protocol::TranscriptSegment;
@@ -75,6 +78,7 @@ use crate::paths;
 use crate::settings::Settings;
 use crate::store::Store;
 use crate::store::meetings;
+use crate::summary;
 use crate::transport::ConnectionId;
 use crate::transport::TransportEvent;
 
@@ -160,6 +164,33 @@ fn speaker_to_wire(
         first_seen_at,
         created_at: row.created_at,
     })
+}
+
+/// The Backend the Operator chose, and the local one to fall back to.
+///
+/// A named pair rather than an inline tuple, and the naming carries the
+/// guarantee: the second element is **always** local. Nothing in the type
+/// permits a cloud Backend to arrive as a fallback.
+type ChosenBackends = (
+    Box<dyn summary::Backend + 'static>,
+    Option<Box<dyn summary::Backend + 'static>>,
+);
+
+/// Where the Summary sidecar lives.
+///
+/// Beside the Core, because that is how both are installed. Overridable so a
+/// developer running from `cargo` finds the one they just built.
+fn summarizer_binary() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("EVERTRANSCRIPT_SUMMARIZER_BIN") {
+        return Some(std::path::PathBuf::from(path));
+    }
+    let name = if cfg!(windows) {
+        "evertranscript-summarizer.exe"
+    } else {
+        "evertranscript-summarizer"
+    };
+    let beside = std::env::current_exe().ok()?.parent()?.join(name);
+    beside.exists().then_some(beside)
 }
 
 /// Produces a transcription engine for a new Meeting.
@@ -318,6 +349,14 @@ impl Core {
             chinese_script: settings.chinese_script,
             launch_at_login_location: autostart::describe(),
             launch_at_login_registered: autostart::is_enabled(),
+            summary_backend: settings.summary_backend,
+            summary_strict: settings.summary_strict,
+            summary_cloud_warning_accepted: settings.summary_cloud_warning_accepted,
+            summary_prompt: settings.summary_prompt,
+            // Sent so a Client can show the default and offer reset without
+            // keeping its own copy, which would drift the first time this
+            // one is edited.
+            summary_prompt_default: summary::prompt::DEFAULT_SYSTEM_PROMPT.to_string(),
         }
     }
 
@@ -348,6 +387,37 @@ impl Core {
                 if let Err(error) = autostart::set_enabled(launch_at_login) {
                     warn!(%error, "could not change the login item");
                 }
+            }
+            if let Some(accepted) = change.summary_cloud_warning_accepted {
+                // One-way, like the Briefing: a warning that a Client can
+                // un-accept is not a gate.
+                if accepted {
+                    settings.summary_cloud_warning_accepted = true;
+                }
+            }
+            if let Some(backend) = change.summary_backend {
+                // The gate lives here rather than in the UI: a Client that
+                // forgot to show the warning must not be able to route a
+                // transcript to a provider (story 36, ADR-0013).
+                if backend != "local" && !settings.summary_cloud_warning_accepted {
+                    anyhow::bail!(
+                        "choosing a cloud Summary Backend requires accepting the one-time \
+                         warning about what leaves this machine"
+                    );
+                }
+                settings.summary_backend = Some(backend);
+            }
+            if let Some(base_url) = change.summary_base_url {
+                settings.summary_base_url = Some(base_url);
+            }
+            if let Some(strict) = change.summary_strict {
+                settings.summary_strict = strict;
+            }
+            if let Some(prompt) = change.summary_prompt {
+                // Empty resets to the default (story 42). Storing the
+                // default's text instead would freeze a copy that stops
+                // matching the real one the next time it improves.
+                settings.summary_prompt = (!prompt.trim().is_empty()).then_some(prompt);
             }
             settings.save_to(&self.settings_path)?;
         }
@@ -415,6 +485,219 @@ impl Core {
         // transcript.
         self.mirror_wake.notify_one();
         Ok(meeting)
+    }
+
+    // ---- Summary (M4) ----
+
+    /// Builds the Backend the Operator chose, and the local one to fall back
+    /// to.
+    ///
+    /// Returned as a pair on purpose: the fallback is *always* local, and
+    /// constructing it here rather than on demand inside the failure path
+    /// means there is no branch where a failure could reach for a cloud one.
+    fn backends(&self, settings: &crate::settings::Settings) -> Result<ChosenBackends> {
+        let local = || -> Option<Box<dyn summary::Backend + 'static>> {
+            let model = self
+                .models_dir
+                .join(crate::models::registry::SUMMARY_DEFAULT.filename);
+            let binary = summarizer_binary()?;
+            summary::sidecar::SidecarBackend::spawn(&binary, &model.to_string_lossy())
+                .ok()
+                .map(|backend| Box::new(backend) as Box<dyn summary::Backend + 'static>)
+        };
+
+        let choice = settings
+            .summary_backend
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("no Summary Backend has been chosen"))?;
+
+        if choice == "local" {
+            let backend = local()
+                .ok_or_else(|| anyhow::anyhow!("the local Summary model is not available"))?;
+            return Ok((backend, None));
+        }
+
+        let (display, base_url, model) = match summary::cloud::preset(choice) {
+            Some(preset) => (
+                preset.display_name.to_string(),
+                preset.base_url.to_string(),
+                preset.default_model.to_string(),
+            ),
+            // A custom endpoint. Its terms are not ours to characterise
+            // (ADR-0010), and it is offered anyway.
+            None => (
+                choice.to_string(),
+                settings
+                    .summary_base_url
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("no base URL for {choice}"))?,
+                "default".to_string(),
+            ),
+        };
+
+        let key = summary::credentials::get(choice).ok().flatten();
+        let chosen = summary::cloud::CloudBackend::new(&display, &base_url, &model, key)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        Ok((Box::new(chosen), local()))
+    }
+
+    /// Generates a Summary for a finished Meeting.
+    pub async fn summarize_meeting(&self, meeting_id: &str) -> Result<String> {
+        let Some((meeting, segments)) = self.get_meeting(meeting_id).await? else {
+            anyhow::bail!("no Meeting with id {meeting_id}");
+        };
+        if segments.is_empty() {
+            anyhow::bail!("this Meeting has no transcript to summarize");
+        }
+
+        let settings = self.settings.lock().await.clone();
+        let knob = summary::knob::Knob {
+            choice: settings.summary_backend.as_deref().map(|choice| {
+                if choice == "local" {
+                    summary::knob::Choice::Local
+                } else {
+                    summary::knob::Choice::Cloud {
+                        provider: choice.to_string(),
+                    }
+                }
+            }),
+            strict: settings.summary_strict,
+            cloud_warning_accepted: settings.summary_cloud_warning_accepted,
+        };
+        if !knob.is_configured() {
+            anyhow::bail!(
+                "no Summary Backend has been chosen — pick Local or Cloud first (ADR-0013)"
+            );
+        }
+
+        let system = settings
+            .summary_prompt
+            .clone()
+            .unwrap_or_else(|| summary::prompt::DEFAULT_SYSTEM_PROMPT.to_string());
+        let names = self
+            .store
+            .read(crate::store::speakers::list)
+            .await?
+            .into_iter()
+            .filter_map(|speaker| {
+                let label = match (speaker.display_name, speaker.is_operator) {
+                    (Some(name), _) => name,
+                    (None, true) => "You".to_string(),
+                    (None, false) => return None,
+                };
+                Some((speaker.id, label))
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+
+        let (mut chosen, mut fallback) = self.backends(&settings)?;
+        let notes = meeting.notes.clone();
+        let cancel = summary::Cancel::new();
+
+        // Generation is minutes of CPU. Off the async runtime, like
+        // Diarization, so a Summary cannot stall the Core's answers to
+        // Clients — or, worse, a recording.
+        let outcome = tokio::task::spawn_blocking(move || -> Result<summary::knob::Outcome> {
+            let lookup = |id: &str| names.get(id).cloned();
+            let material = summary::generate::Material {
+                segments: &segments,
+                speaker_names: &lookup,
+                notes: notes.as_deref(),
+            };
+            // Chunking and armor first, then the Knob decides who runs it.
+            let transcript = summary::generate::render_transcript(&material);
+            let request = summary::Request {
+                system,
+                user: summary::prompt::build_user_message(notes.as_deref(), &transcript),
+            };
+            // A `match` rather than `Option::map`: the closure's inferred
+            // return lifetime outlives the borrow and the compiler is right
+            // to object.
+            let fallback_ref: Option<&mut dyn summary::Backend> = match fallback.as_mut() {
+                Some(backend) => Some(backend.as_mut()),
+                None => None,
+            };
+            summary::knob::run(&knob, chosen.as_mut(), fallback_ref, &request, &cancel)
+                .map_err(|error| anyhow::anyhow!("{error}"))
+        })
+        .await??;
+
+        let markdown = summary::prompt::scrub(&outcome.text);
+        let used = outcome.used.label();
+        if let Some(from) = &outcome.fell_back_from {
+            // Never silent: an Operator who chose Cloud and received local
+            // quality is owed the reason.
+            tracing::warn!(from = %from, to = %used, "the Summary Backend fell back");
+        }
+
+        let id = meeting_id.to_string();
+        let stored = markdown.clone();
+        let label = used.clone();
+        self.store
+            .write(move |connection| {
+                crate::store::meetings::set_summary(connection, &id, &stored, &label)
+            })
+            .await?;
+        self.mirror_wake.notify_one();
+        Ok(markdown)
+    }
+
+    /// The Summary destinations this build offers.
+    pub async fn summary_backends(&self) -> SummaryBackendsResponse {
+        let settings = self.settings.lock().await.clone();
+        let mut options = vec![SummaryBackendOption {
+            id: "local".into(),
+            display_name: "Local (recommended)".into(),
+            leaves_the_machine: false,
+            has_key: false,
+            data_handling: None,
+        }];
+        for preset in summary::cloud::PRESETS {
+            options.push(SummaryBackendOption {
+                id: preset.id.into(),
+                display_name: preset.display_name.into(),
+                leaves_the_machine: !summary::cloud::is_loopback(preset.base_url),
+                // Whether a key is stored — never the key.
+                has_key: summary::credentials::exists(preset.id),
+                data_handling: preset
+                    .data_handling
+                    .as_ref()
+                    .map(|handling| SummaryDataHandling {
+                        trains_on_inputs: handling.trains_on_inputs,
+                        retention: handling.retention.to_string(),
+                        zero_retention_available: handling.zero_retention_available,
+                        verified_on: handling.verified_on.to_string(),
+                    }),
+            });
+        }
+        SummaryBackendsResponse {
+            options,
+            chosen: settings.summary_backend,
+            strict: settings.summary_strict,
+            cloud_warning_accepted: settings.summary_cloud_warning_accepted,
+            custom_endpoint_label: summary::cloud::CUSTOM_ENDPOINT_LABEL.to_string(),
+        }
+    }
+
+    /// Stores or clears an API key. It is never read back to a Client.
+    pub async fn set_summary_key(
+        &self,
+        provider: &str,
+        key: Option<&str>,
+    ) -> Result<SummaryBackendsResponse> {
+        match key {
+            Some(key) if !key.trim().is_empty() => {
+                summary::credentials::set(provider, key.trim())
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+            }
+            // Clearing is a first-class act, never a side effect of
+            // switching the Knob: an Operator may be going local for one
+            // meeting, and deleting their key would punish that.
+            _ => {
+                summary::credentials::delete(provider)
+                    .map_err(|error| anyhow::anyhow!("{error}"))?;
+            }
+        }
+        Ok(self.summary_backends().await)
     }
 
     // ---- Speakers and the Voice Registry (M3) ----
@@ -1569,6 +1852,28 @@ impl Server {
                 self.announce(MeetingChangeKind::Updated, &meeting).await;
                 Ok(serde_json::to_value(MeetingResponse { meeting })?)
             }
+
+            ClientRequest::SummaryGenerate(params) => {
+                self.core.summarize_meeting(&params.id).await?;
+                let meeting = self
+                    .core
+                    .get_meeting(&params.id)
+                    .await?
+                    .map(|(meeting, _)| meeting)
+                    .ok_or_else(|| anyhow::anyhow!("the Meeting vanished"))?;
+                self.announce(MeetingChangeKind::Updated, &meeting).await;
+                Ok(serde_json::to_value(MeetingResponse { meeting })?)
+            }
+
+            ClientRequest::SummaryBackends(_) => {
+                Ok(serde_json::to_value(self.core.summary_backends().await)?)
+            }
+
+            ClientRequest::SummarySetKey(params) => Ok(serde_json::to_value(
+                self.core
+                    .set_summary_key(&params.provider, params.key.as_deref())
+                    .await?,
+            )?),
 
             ClientRequest::SpeakerList(_) => Ok(serde_json::to_value(self.core.speakers().await?)?),
 

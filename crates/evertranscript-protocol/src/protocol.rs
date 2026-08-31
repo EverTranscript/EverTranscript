@@ -268,6 +268,23 @@ client_request_definitions! {
         params: MeetingSetNotesParams,
         response: MeetingResponse,
     },
+    /// Generates a Summary for a finished Meeting, on the chosen Backend.
+    SummaryGenerate => "summary/generate" {
+        params: MeetingGetParams,
+        response: MeetingResponse,
+    },
+    /// The Summary Backends this build offers, and what is known about each.
+    SummaryBackends => "summary/backends" {
+        params: SummaryBackendsParams,
+        response: SummaryBackendsResponse,
+    },
+    /// Stores an API key in the OS credential store. **Never readable
+    /// back** — a Client may ask whether one exists and replace or clear it,
+    /// and that is all (story 41).
+    SummarySetKey => "summary/setKey" {
+        params: SummarySetKeyParams,
+        response: SummaryBackendsResponse,
+    },
     /// Every Speaker the app holds — the Voice Registry's inventory
     /// (story 30). ADR-0008 makes this surface mandatory rather than
     /// optional: it is half of what was traded for storing Voiceprints
@@ -760,6 +777,27 @@ pub struct SettingsGetParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct SettingsSetParams {
+    /// `local`, a preset id, or a custom endpoint id. Setting it to a cloud
+    /// destination is refused until the warning has been accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_strict: Option<bool>,
+    /// Set once the Operator has been shown what leaves the machine
+    /// (story 36).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_cloud_warning_accepted: Option<bool>,
+    /// The system prompt. An empty string resets to the default (story 42),
+    /// which keeps reset a deletion rather than a copy that could drift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_prompt: Option<String>,
     /// Records that the Operator acknowledged the Briefing. Once true it is
     /// never set back to false by a Client: un-acknowledging consent is not
     /// a thing that happens, and allowing it would make the pre-capture
@@ -814,6 +852,20 @@ pub struct SettingsResponse {
     /// True when the setting and the actual registration disagree — for
     /// example after the Operator deleted the plist themselves.
     pub launch_at_login_registered: bool,
+    /// The Summary Knob. Absent means unchosen (ADR-0013).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_backend: Option<String>,
+    pub summary_strict: bool,
+    pub summary_cloud_warning_accepted: bool,
+    /// The Operator's system prompt, when they have edited it. Absent means
+    /// the default is in use, which is what makes reset a deletion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_prompt: Option<String>,
+    /// The default, so a Client can show it and offer reset without keeping
+    /// its own copy that could drift.
+    pub summary_prompt_default: String,
 }
 
 // ----------------------------------------------------------------- Watchlist
@@ -1188,6 +1240,72 @@ pub struct MeetingSetNotesParams {
     /// Markdown. Replaces whatever was there — Notes are the Operator's, and
     /// a merge would be the product having an opinion about their writing.
     pub notes: String,
+}
+
+/// What is known about one Summary destination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SummaryBackendOption {
+    pub id: String,
+    pub display_name: String,
+    /// Whether choosing this sends meeting content off the machine. The one
+    /// fact this screen exists to make unmissable.
+    pub leaves_the_machine: bool,
+    /// Whether a key is stored for it. **Never the key itself** — a settings
+    /// screen that can display one can leak it into a screenshot.
+    pub has_key: bool,
+    /// Absent for local destinations, where there is nothing to characterise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub data_handling: Option<SummaryDataHandling>,
+}
+
+/// A provider's stated data handling (ADR-0010). Information, never a gate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SummaryDataHandling {
+    pub trains_on_inputs: bool,
+    pub retention: String,
+    pub zero_retention_available: bool,
+    /// When a human last read the terms. `unverified` means nobody has, and
+    /// the surface should say so rather than implying a check that did not
+    /// happen.
+    pub verified_on: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SummaryBackendsParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SummaryBackendsResponse {
+    pub options: Vec<SummaryBackendOption>,
+    /// What the Operator chose. **Absent means nobody has chosen**
+    /// (ADR-0013) — a state to show, not to default away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub chosen: Option<String>,
+    pub strict: bool,
+    pub cloud_warning_accepted: bool,
+    /// The custom endpoint label (ADR-0010).
+    pub custom_endpoint_label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SummarySetKeyParams {
+    pub provider: String,
+    /// None clears the stored key. Clearing is a first-class act, not a side
+    /// effect of switching the Knob.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub key: Option<String>,
 }
 
 #[cfg(test)]
