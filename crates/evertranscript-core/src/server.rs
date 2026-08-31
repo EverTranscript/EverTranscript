@@ -510,6 +510,163 @@ impl Core {
         Ok(TranscriptReassignResponse { segment })
     }
 
+    /// Diarizes a finished Meeting, end to end.
+    ///
+    /// Everything M3 built meets here: decode the kept audio, run the two
+    /// models, resolve clusters to persistent Speakers, and map the result
+    /// onto a Transcript that already exists. Nothing on this path can cost
+    /// the recording — a missing model, a corrupt file, or a panicking
+    /// runtime all leave the Meeting exactly as it was, unattributed.
+    pub async fn diarize_meeting(&self, meeting_id: &str) -> Result<usize> {
+        use crate::diarize;
+
+        let Some(meeting) = self.get_meeting(meeting_id).await?.map(|(m, _)| m) else {
+            anyhow::bail!("no Meeting with id {meeting_id}");
+        };
+        let Some(audio_path) = meeting.audio_path.clone() else {
+            // A Meeting whose audio was never written, or was deleted. Not
+            // an error: there is simply nothing to listen to.
+            return Ok(0);
+        };
+        // Stored relative to the History folder so the record stays portable
+        // (ADR-0035) — resolving it is the caller's job, not the row's.
+        let audio_path = self.history_dir.join(audio_path);
+        if !audio_path.exists() {
+            tracing::info!(path = %audio_path.display(), "the Meeting's audio is gone; nothing to diarize");
+            return Ok(0);
+        }
+
+        let segmentation = self.models_dir.join("diarize-segmentation.onnx");
+        let embedding = self.models_dir.join("diarize-embedding.onnx");
+        if !segmentation.exists() || !embedding.exists() {
+            tracing::info!(
+                "diarization models are not downloaded; leaving the Meeting unattributed"
+            );
+            return Ok(0);
+        }
+
+        let cancel = diarize::Cancel::new();
+        *self.diarization.lock().await = Some(DiarizeJob {
+            meeting_id: meeting_id.to_string(),
+            cancel: cancel.clone(),
+            done_ms: 0,
+            total_ms: 0,
+        });
+        let notifications = self.notifications.clone();
+        let id_for_progress = meeting_id.to_string();
+
+        // The models are CPU-bound C++; keeping them off the async runtime is
+        // what stops a long Meeting from stalling every Client request.
+        let outcome = tokio::task::spawn_blocking(move || -> Result<_> {
+            let _slot = diarize::runner::Slot::claim(&id_for_progress)
+                .map_err(|busy| anyhow::anyhow!("{busy}"))?;
+            let decoded = diarize::runner::decode(&audio_path)?;
+            let mut diarizer = diarize::live::LiveDiarizer::load(&segmentation, &embedding)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+            let mut last_percent = u64::MAX;
+            let result = diarize::runner::run_guarded(
+                &mut diarizer,
+                decoded.audio(),
+                &mut |progress| {
+                    // Throttled to whole percent: a notification per span
+                    // would flood every attached Client with numbers nobody
+                    // reads.
+                    let percent = (progress.fraction() * 100.0) as u64;
+                    if percent != last_percent {
+                        last_percent = percent;
+                        let _ = notifications.send(ServerNotification::DiarizeProgress(
+                            evertranscript_protocol::DiarizeProgressParams {
+                                meeting_id: id_for_progress.clone(),
+                                state: DiarizeState::Running,
+                                done_ms: progress.done_ms as i64,
+                                total_ms: progress.total_ms as i64,
+                            },
+                        ));
+                    }
+                },
+                &cancel,
+            );
+            Ok(result)
+        })
+        .await?;
+
+        *self.diarization.lock().await = None;
+
+        let diarization = match outcome {
+            Ok(Ok(diarization)) => diarization,
+            Ok(Err(diarize::DiarizeError::Cancelled)) => return Ok(0),
+            Ok(Err(error)) => {
+                tracing::warn!(%error, "diarization did not run; the Meeting is unattributed");
+                return Ok(0);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "diarization failed; the Meeting is unattributed");
+                return Ok(0);
+            }
+        };
+
+        let meeting_id = meeting_id.to_string();
+        let written = self
+            .store
+            .write(move |connection| {
+                let assigned =
+                    diarize::cluster::persist(connection, &meeting_id, &diarization.embeddings)?;
+
+                // The Operator's own Speaker, where the evidence supports one
+                // (ADR-0029 as amended).
+                let known = diarize::operator::known_operator(connection)?;
+                if let Some(mine) = diarize::operator::identify(&diarization, known.as_ref())
+                    && let Some(speaker_id) = assigned.get(&mine)
+                {
+                    connection.execute(
+                        "UPDATE speakers SET is_operator = 1 WHERE id = ?1",
+                        rusqlite::params![speaker_id],
+                    )?;
+                }
+
+                let segments = crate::store::meetings::segments(connection, &meeting_id)?;
+                let reconciliation = diarize::reconcile::reconcile(&diarization, &segments);
+                tracing::info!(
+                    boundary_flips = reconciliation.boundary_flips,
+                    attributed = reconciliation.attributed(),
+                    "diarization reconciled"
+                );
+                diarize::reconcile::apply(
+                    connection,
+                    &reconciliation,
+                    &assigned,
+                    crate::store::speakers::Attribution::Clustered,
+                )
+            })
+            .await?;
+
+        self.mirror_wake.notify_one();
+        Ok(written)
+    }
+
+    /// Starts Diarization for a finished Meeting without waiting for it.
+    ///
+    /// Detached on purpose. Attribution arriving minutes later is the design
+    /// (ADR-0009's join exists because the Transcript is already published),
+    /// and anything that made stopping wait for two neural models would make
+    /// the one act the Operator performs by hand feel broken.
+    pub fn diarize_in_background(self: std::sync::Arc<Self>, meeting_id: String) {
+        tokio::spawn(async move {
+            match self.diarize_meeting(&meeting_id).await {
+                Ok(0) => {}
+                Ok(attributed) => {
+                    tracing::info!(meeting = %meeting_id, attributed, "Diarization attributed a Meeting")
+                }
+                // Never fatal, and never the Meeting's problem: the record
+                // stands whether or not anyone could be identified in it.
+                Err(error) => {
+                    tracing::warn!(meeting = %meeting_id, %error, "Diarization did not complete")
+                }
+            }
+        });
+    }
+
     /// What Diarization is doing.
     pub async fn diarize_status(&self) -> DiarizeStatusResponse {
         match self.diarization.lock().await.as_ref() {
@@ -1264,6 +1421,12 @@ impl Server {
 
             ClientRequest::MeetingStop(_) => {
                 let meeting = self.core.stop_meeting().await?;
+                // Diarization runs *after* the Meeting is safely persisted
+                // and detached from this response. Stopping must return at
+                // once — the Operator pressed a button — and a model that
+                // fails or takes four minutes must not be able to make
+                // stopping fail or feel slow.
+                self.core.clone().diarize_in_background(meeting.id.clone());
                 self.announce(MeetingChangeKind::Stopped, &meeting).await;
                 self.broadcast(ServerNotification::CoreStateChanged(
                     CoreStateChangedParams {
@@ -1409,6 +1572,13 @@ impl Server {
             )?),
 
             ClientRequest::DiarizeStatus(_) => {
+                Ok(serde_json::to_value(self.core.diarize_status().await)?)
+            }
+
+            ClientRequest::DiarizeRun(params) => {
+                self.core
+                    .clone()
+                    .diarize_in_background(params.meeting_id.clone());
                 Ok(serde_json::to_value(self.core.diarize_status().await)?)
             }
 

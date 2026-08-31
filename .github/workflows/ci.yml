@@ -36,6 +36,28 @@ jobs:
       - name: Lints
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # M2 ended by discovering that Windows detection had never worked at
+      # all while every CI run was green, because the code compiled, linked,
+      # and was never called. Diarization is the same shape of risk one
+      # milestone later: two ONNX models, an `ort` runtime that ships
+      # different binaries per platform, and tensor layouts that fail
+      # silently rather than loudly. So the models are fetched and the
+      # inference tests actually execute — on both platforms — instead of
+      # being skipped into a green tick.
+      #
+      # 32 MB, pinned by sha256 in `models/registry.rs`. If a checksum ever
+      # stops matching, that is a finding and this job should go red.
+      - name: Fetch the diarization models
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/diarize-models"
+          curl -sL --retry 3 --max-time 300 -o "$RUNNER_TEMP/diarize-models/segmentation.onnx" \
+            "https://huggingface.co/onnx-community/pyannote-segmentation-3.0/resolve/main/onnx/model.onnx"
+          curl -sL --retry 3 --max-time 300 -o "$RUNNER_TEMP/diarize-models/embedding.onnx" \
+            "https://huggingface.co/onnx-community/wespeaker-voxceleb-resnet34-LM/resolve/main/onnx/model.onnx"
+          echo "057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25  $RUNNER_TEMP/diarize-models/segmentation.onnx" | shasum -a 256 -c -
+          echo "3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb  $RUNNER_TEMP/diarize-models/embedding.onnx" | shasum -a 256 -c -
+
       - name: Tests
         # Windows runs one test at a time. Two reasons, both real: these
         # tests open capture devices, and a runner with no audio hardware is
@@ -43,6 +65,8 @@ jobs:
         # happen, sixteen threads dying together makes it unattributable,
         # which is exactly the position this repo was in. Serialised, the
         # last test to report is the one that died.
+        env:
+          EVERTRANSCRIPT_DIARIZE_MODELS: ${{ runner.temp }}/diarize-models
         run: cargo test --workspace ${{ runner.os == 'Windows' && '-- --test-threads=1' || '' }}
 
       # `cargo test` regenerates the TypeScript bindings and JSON schemas.

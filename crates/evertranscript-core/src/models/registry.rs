@@ -52,7 +52,14 @@ pub enum ModelPurpose {
     /// Live transcription — the Anchor, permanently local (ADR-0002).
     Transcription,
     /// Echo cancellation on the mic channel (ADR-0029).
+    ///
+    /// No entry carries this: the AEC shipped as an NLMS adaptive filter
+    /// rather than the ADR's ONNX pair, because both legs are stamped on one
+    /// capture clock and are therefore already aligned — which is the part
+    /// NLMS is good at. Kept because the ADR names the purpose.
     EchoCancellation,
+    /// Diarization: who spoke (ADR-0008, ADR-0029 as amended).
+    Diarization,
 }
 
 impl ModelEntry {
@@ -78,8 +85,47 @@ pub const WHISPER_DEFAULT: ModelEntry = ModelEntry {
     required: true,
 };
 
+/// Speaker segmentation: where speech is, and where two voices overlap.
+///
+/// Sizes and checksums are read off the downloaded artifacts, not copied
+/// from a listing. The signature was read the same way rather than assumed:
+/// `input_values [batch, channels, samples]` of raw waveform, and `logits
+/// [batch, frames, 7]` — the powerset over three speakers the catalog
+/// describes.
+pub const DIARIZE_SEGMENTATION: ModelEntry = ModelEntry {
+    key: "pyannote-segmentation-3.0",
+    display_name: "pyannote segmentation 3.0",
+    filename: "diarize-segmentation.onnx",
+    remote_path: "onnx-community/pyannote-segmentation-3.0/resolve/main/onnx/model.onnx",
+    integrity: Integrity {
+        size_bytes: 5_986_908,
+        sha256: Some("057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25"),
+        crc32: None,
+    },
+    purpose: ModelPurpose::Diarization,
+    required: true,
+};
+
+/// Speaker embedding: the vector a Voiceprint is made of.
+///
+/// `input_features [B, T, 80]` — the 80-mel filterbank `diarize::fbank`
+/// computes — and `last_hidden_state [B, 256]`.
+pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
+    key: "wespeaker-voxceleb-resnet34-lm",
+    display_name: "WeSpeaker VoxCeleb ResNet34-LM",
+    filename: "diarize-embedding.onnx",
+    remote_path: "onnx-community/wespeaker-voxceleb-resnet34-LM/resolve/main/onnx/model.onnx",
+    integrity: Integrity {
+        size_bytes: 26_535_549,
+        sha256: Some("3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb"),
+        crc32: None,
+    },
+    purpose: ModelPurpose::Diarization,
+    required: true,
+};
+
 /// Every artifact this build knows how to fetch.
-pub const ALL: &[ModelEntry] = &[WHISPER_DEFAULT];
+pub const ALL: &[ModelEntry] = &[WHISPER_DEFAULT, DIARIZE_SEGMENTATION, DIARIZE_EMBEDDING];
 
 pub fn find(key: &str) -> Option<&'static ModelEntry> {
     ALL.iter().find(|entry| entry.key == key)

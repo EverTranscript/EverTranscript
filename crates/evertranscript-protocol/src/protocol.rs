@@ -300,6 +300,15 @@ client_request_definitions! {
         params: DiarizeStatusParams,
         response: DiarizeStatusResponse,
     },
+    /// Diarizes a finished Meeting, or re-diarizes one.
+    ///
+    /// Re-running replaces the machine's attribution and preserves every
+    /// Operator correction (ADR-0009 as amended) — which is what makes a
+    /// model upgrade safe to apply to a History that has been corrected.
+    DiarizeRun => "diarize/run" {
+        params: DiarizeCancelParams,
+        response: DiarizeStatusResponse,
+    },
     /// Stops a running Diarization. Whatever attribution completed is kept;
     /// a job the Operator cannot stop is an unaccountable use of their
     /// machine.

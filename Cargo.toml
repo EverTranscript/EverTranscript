@@ -18,6 +18,14 @@ evertranscript-core = { path = "crates/evertranscript-core" }
 evertranscript-protocol = { path = "crates/evertranscript-protocol" }
 
 anyhow = "1"
+# ONNX Runtime, for Diarization's two models (ADR-0029 named it; the AEC
+# ended up not needing it, so this is where it actually arrives).
+ort = "2.0.0-rc.10"
+# Reading a finished Meeting's audio back for post-meeting work. Pure Rust
+# and cross-platform on purpose: the alternative is AVFoundation on one
+# platform and Media Foundation on the other, which is two decoders to be
+# wrong in two different ways.
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive"] }
 dirs = "5"

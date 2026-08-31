@@ -185,6 +185,9 @@ enum DiarizeCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Diarize a finished Meeting, or re-diarize one after a model upgrade.
+    /// Your corrections survive a re-run.
+    Run { meeting: String },
     /// Stop a running Diarization. Whatever attribution finished is kept.
     Cancel { meeting: String },
 }
@@ -1108,6 +1111,18 @@ async fn run_diarize(command: DiarizeCommand) -> Result<()> {
     let mut client = client().await?;
     let response: DiarizeStatusResponse = match command {
         DiarizeCommand::Status { .. } => client.request("diarize/status", None).await?,
+        DiarizeCommand::Run { ref meeting } => {
+            let started: DiarizeStatusResponse = client
+                .request(
+                    "diarize/run",
+                    Some(serde_json::json!({ "meetingId": meeting })),
+                )
+                .await?;
+            println!(
+                "Diarizing in the background. Follow it with `evertranscript diarize status`."
+            );
+            started
+        }
         DiarizeCommand::Cancel { ref meeting } => {
             client
                 .request(

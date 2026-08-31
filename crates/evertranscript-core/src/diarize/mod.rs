@@ -33,9 +33,12 @@
 //! fifty minutes. [`fixture`] exists to produce the ugly shapes on purpose.
 
 pub mod cluster;
+pub mod fbank;
 pub mod fixture;
+pub mod live;
 pub mod operator;
 pub mod reconcile;
+pub mod runner;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
