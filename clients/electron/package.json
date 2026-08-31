@@ -45,16 +45,6 @@
       "dist/**/*",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "../../packaging/out/evertranscript",
-        "to": "evertranscript"
-      },
-      {
-        "from": "../../packaging/out/evertranscript-summarizer",
-        "to": "evertranscript-summarizer"
-      }
-    ],
     "mac": {
       "category": "public.app-category.productivity",
       "entitlements": "../../packaging/macos/entitlements.plist",
@@ -68,6 +58,16 @@
             "arm64"
           ]
         }
+      ],
+      "extraResources": [
+        {
+          "from": "../../packaging/out/evertranscript",
+          "to": "evertranscript"
+        },
+        {
+          "from": "../../packaging/out/evertranscript-summarizer",
+          "to": "evertranscript-summarizer"
+        }
       ]
     },
     "win": {
@@ -77,6 +77,16 @@
           "arch": [
             "x64"
           ]
+        }
+      ],
+      "extraResources": [
+        {
+          "from": "../../packaging/out/evertranscript.exe",
+          "to": "evertranscript.exe"
+        },
+        {
+          "from": "../../packaging/out/evertranscript-summarizer.exe",
+          "to": "evertranscript-summarizer.exe"
         }
       ]
     },

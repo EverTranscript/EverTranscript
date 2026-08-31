@@ -113,6 +113,43 @@ jobs:
             pnpm -C clients/electron exec electron-builder --mac --publish never
           fi
 
+      # **electron-builder skips a missing `extraResources` source in
+      # silence** — no warning, exit 0, and a 94 MB installer with no product
+      # inside it. That is exactly what shipped: the staged Windows binaries
+      # carry `.exe`, the reference did not, and every check that existed
+      # passed. So the artifact is now searched for the two binaries rather
+      # than trusted to contain them.
+      - name: The package must actually contain the product
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            resources="packaging/out/installers/win-unpacked/resources"
+            suffix=".exe"
+          else
+            resources="packaging/out/installers/mac-arm64/EverTranscript.app/Contents/Resources"
+            suffix=""
+          fi
+          missing=0
+          for binary in evertranscript evertranscript-summarizer; do
+            if [[ -f "$resources/${binary}${suffix}" ]]; then
+              echo "  present: ${binary}${suffix}"
+            else
+              echo "  MISSING: ${binary}${suffix}"
+              missing=1
+            fi
+          done
+          if [[ $missing -ne 0 ]]; then
+            echo
+            echo "what is in $resources:"
+            ls -la "$resources" || echo "  (the directory does not exist)"
+            echo
+            echo "A Client without the Core is a UI for a product that is not"
+            echo "there. Check extraResources in clients/electron/package.json"
+            echo "against the names the staging step wrote."
+            exit 1
+          fi
+
       - name: Checksums
         shell: bash
         run: |
@@ -159,7 +196,12 @@ jobs:
           $core = Join-Path $root 'resources\evertranscript.exe'
           $sidecar = Join-Path $root 'resources\evertranscript-summarizer.exe'
           foreach ($binary in @($core, $sidecar)) {
-            if (-not (Test-Path $binary)) { throw "missing from the install: $binary" }
+            if (-not (Test-Path $binary)) {
+              Write-Host "what the installer wrote to resources:"
+              Get-ChildItem (Join-Path $root 'resources') -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "  $($_.Name)" }
+              throw "missing from the install: $binary"
+            }
           }
 
           # The Core must run from where it was installed. A package that
@@ -173,8 +215,11 @@ jobs:
           # stdin closed means it reads EOF and exits, which is the orphan
           # protection ADR-0031 asks for — so this checks the process starts
           # and leaves rather than hanging.
-          $exited = Start-Process -FilePath $sidecar -RedirectStandardInput 'NUL' `
-            -PassThru -NoNewWindow
+          # An empty file, because -RedirectStandardInput takes a path and
+          # reading it gives the sidecar immediate EOF.
+          $empty = New-TemporaryFile
+          $exited = Start-Process -FilePath $sidecar `
+            -RedirectStandardInput $empty.FullName -PassThru -NoNewWindow
           if (-not $exited.WaitForExit(30000)) {
             $exited.Kill()
             throw "the sidecar did not exit on stdin EOF"

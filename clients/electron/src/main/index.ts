@@ -44,8 +44,19 @@ let startFailure: string | null = null;
 /**
  * Where the Core binary is, or `null` if it cannot be found.
  *
- * `EVERTRANSCRIPT_BIN` wins, so an unusual install can say outright. `PATH`
- * is searched by hand rather than left to `spawn`, because a GUI app
+ * `EVERTRANSCRIPT_BIN` wins, so an unusual install can say outright.
+ *
+ * **Then the bundle's own copy, ahead of `PATH`.** The Core ships inside the
+ * package and is replaced wholesale when the Client updates itself
+ * (ADR-0016). If `PATH` won, an Operator who had ever installed a Core by
+ * hand would keep launching that one after every update — the protocol skew
+ * ADR-0028's additive-only rule exists to *survive*, arrived at on purpose
+ * rather than by accident. It is also the only entry that a real install
+ * populates: neither the macOS zip nor the NSIS installer puts anything on
+ * `PATH`, so before this existed a packaged Client could not find the Core
+ * it had just shipped with.
+ *
+ * `PATH` is searched by hand rather than left to `spawn`, because a GUI app
  * inherits a much smaller `PATH` than a shell — a Core installed in
  * `/opt/homebrew/bin` is invisible to an app launched from Finder — and
  * because knowing the name resolved to nothing is what lets this say so.
@@ -60,6 +71,11 @@ function coreBinary(): string | null {
   const explicit = process.env.EVERTRANSCRIPT_BIN;
   if (explicit) return explicit;
   const name = process.platform === "win32" ? "evertranscript.exe" : "evertranscript";
+  // `resourcesPath` in a checkout points inside Electron's own dist, where
+  // this file will not exist — so the guard costs a stat and the dev path
+  // falls through to `target/` below as it always did.
+  const bundled = join(process.resourcesPath, name);
+  if (existsSync(bundled)) return bundled;
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
     const candidate = join(dir, name);
