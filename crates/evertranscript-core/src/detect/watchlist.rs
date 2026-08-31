@@ -188,30 +188,41 @@ const WEBKIT_PREFIX: &str = "com.apple.WebKit";
 /// without any mapping. Those names deliberately stay out of this table so
 /// the two mechanisms cannot disagree about a browser.
 ///
-/// **Checked against a shipping product, not read off a running machine.**
+/// **Read off a running machine, after a detour through a shipping product.**
 /// These were first written from memory, which is the mistake the whole
-/// module is a record of, so they were then checked against the exe→bundle
-/// table in Granola's shipped bundle — the source the absorption catalog
-/// names for exactly this. Three survived. One did not: VooV was written
-/// here as `wemeetapp.exe → com.tencent.meeting` and is wrong in both
-/// halves. Only identifiers for rows this product already watches were
-/// taken; nothing else from that table is reproduced.
+/// module is a record of, so they were checked against the exe→bundle table
+/// in Granola's shipped bundle — the source the absorption catalog names for
+/// exactly this. That looked like it had found one error: `wemeetapp.exe`
+/// was replaced with `voovmeetingapp.exe`.
 ///
-/// That is a stronger provenance than memory and still weaker than
-/// observation, and the difference matters: it establishes what the names
-/// are, not that the Windows detector reports them. That is the open
-/// criterion in ticket 05, and `windows-check.md` asks for it. A wrong name
-/// fails exactly as today's absence does, matching nothing, so the table
-/// cannot regress the platform while it waits.
+/// Running both Tencent builds on Windows showed the replacement was itself
+/// the error. Granola's table carries only the *international* VooV build,
+/// and 腾讯会议 is a different build with a different launcher, so a name
+/// that was right for one product was swapped for the name of the other.
+/// Neither was wrong; there were simply two. The cost was live: 腾讯会议
+/// held the microphone through a whole meeting with the Core at Idle.
+///
+/// The lesson is about provenance rather than about Tencent. Checking a
+/// name against a second source establishes that the name exists somewhere;
+/// it cannot tell you which of a vendor's products it belongs to, or that
+/// the detector reports it. Only running it does that, which is why the
+/// entries here now name what was seen and `examples/mic-holders.rs` exists
+/// to see it.
 const WINDOWS_EXECUTABLES: &[(&str, &str)] = &[
     ("zoom.exe", "us.zoom.xos"),
     // New Teams ships as `ms-teams.exe`; classic Teams as `teams.exe`. Both
     // map, since which one an Operator runs is not ours to choose.
     ("ms-teams.exe", "com.microsoft.teams2"),
     ("teams.exe", "com.microsoft.teams2"),
-    // The corrected one. Note it resolves to `com.tencent.tencentmeeting`
-    // and not `com.tencent.meeting` — which is also the id VooV was
-    // observed under live on macOS, so the two agree.
+    // Tencent ships this product as two builds with two launchers, and both
+    // names are real. 腾讯会议 installs `WeMeetApp.exe` under
+    // `Program Files\Tencent\WeMeet`; VooV Meeting installs
+    // `VooVMeetingApp.exe` under `Program Files (x86)\Tencent\VooVMeeting`.
+    // Both were observed holding their own capture session in that
+    // top-level process. They resolve to one row on purpose:
+    // `com.tencent.tencentmeeting` is also the id VooV was observed under
+    // live on macOS.
+    ("wemeetapp.exe", "com.tencent.tencentmeeting"),
     ("voovmeetingapp.exe", "com.tencent.tencentmeeting"),
 ];
 
@@ -570,6 +581,43 @@ mod tests {
             let responsible = responsible_app(browser);
             assert_eq!(responsible, browser, "{browser} is responsible for itself");
             assert!(list.watches(&app(&responsible)), "{browser} still matches");
+        }
+    }
+
+    /// 腾讯会议 and VooV Meeting are two products, and both names were right.
+    ///
+    /// Observed on Windows 11 on 2026-08-31 with both builds installed side
+    /// by side. They ship different launchers from different directories —
+    /// `C:\Program Files\Tencent\WeMeet\WeMeetApp.exe` for 腾讯会议 and
+    /// `C:\Program Files (x86)\Tencent\VooVMeeting\VooVMeetingApp.exe` for
+    /// VooV — and each holds its capture session in that top-level process
+    /// rather than in a helper, which is what the run checked.
+    ///
+    /// `wemeetapp.exe` was watched holding the microphone through a live
+    /// meeting while the Core sat at Idle and logged nothing, because this
+    /// table carried only VooV's name. Q23 had replaced `wemeetapp.exe` with
+    /// `voovmeetingapp.exe` against a competitor's table that covers only the
+    /// international build, reading two products as one name to correct.
+    /// Both are real, so both belong here.
+    ///
+    /// They deliberately resolve to the same row: `com.tencent.tencentmeeting`
+    /// is the id VooV was observed under live on macOS, so one row serves the
+    /// product under either name. Whether the separate shipped `VooV Meeting`
+    /// row (`com.tencent.meeting`) is reachable by anything at all is *not*
+    /// settled here and is not guessed at.
+    #[test]
+    fn both_tencent_meeting_builds_reach_a_row() {
+        let list = Watchlist::shipped();
+        for executable in ["wemeetapp.exe", "voovmeetingapp.exe"] {
+            let responsible = responsible_app(executable);
+            assert_eq!(
+                responsible, "com.tencent.tencentmeeting",
+                "attributing {executable}"
+            );
+            assert!(
+                list.watches(&app(&responsible)),
+                "{executable} should reach a shipped row"
+            );
         }
     }
 
