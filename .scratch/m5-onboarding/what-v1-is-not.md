@@ -6,7 +6,7 @@ list, assembled from the open criteria across M1–M5 and grouped by what
 would actually be needed to close each.
 
 Counts at the time of writing: **M1 65/65, M2 85/85, M3 69/71, M4 66/74,
-M5 55/60.**
+M5 56/60.**
 
 ---
 
@@ -18,9 +18,14 @@ from somewhere else, and each is already labelled that way in its ticket.
 - **A clean-machine install by someone who is not the author.** The single
   most valuable untaken step in the project. Every milestone found its real
   defects by running the real thing on real input — M2 found six, M3 three,
-  M4 two — and every one of those had passed its unit tests. The M5 form of
-  that is an Operator installing from a package on a machine that has never
-  built this, and it is the one thing the repository cannot self-serve.
+  M4 two, and the closest local approximation of *this* one found three more
+  (Q43). Every one of those had passed its unit tests. What is still
+  untaken is an Operator installing from a package on a machine that has
+  never built this, and it is the one thing the repository cannot
+  self-serve.
+- **Installing on Windows.** `EverTranscript Setup 0.1.0.exe` is built and
+  its checksum published; nobody has run it. That is also where the Summary
+  sidecar has never run.
 - **The Briefing read by someone other than its author.** It has one job: to
   make a stranger able to say what the product does before they let it
   record. Nobody has tried.
