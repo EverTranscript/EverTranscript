@@ -1,0 +1,108 @@
+name: Package
+
+# Artifacts are built where they can be built, which for Windows means on
+# Windows. `cargo xwin check` type-checks the workspace for
+# x86_64-pc-windows-msvc from a Mac and CI runs it on every push — but
+# *linking* pulls in whisper.cpp's and llama.cpp's static libraries, which
+# have to be compiled for the target. That is a real limit rather than a
+# missing flag, and it is why this job exists instead of a cross-build
+# script somebody would run locally and be surprised by.
+#
+# Unsigned unless the signing secrets are present. A fork, or this
+# repository before its certificates exist, gets working unsigned artifacts
+# and a log line saying so — never something that looks signed and is not.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  package:
+    name: Package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: clients/electron/pnpm-lock.yaml
+
+      # The Core and the Summary sidecar. Both ship inside the bundle: the
+      # Core is the process that records and runs at login without a window,
+      # so an installer carrying only the Client would install a UI for a
+      # product that is not there.
+      - name: Build the Core and the sidecar
+        run: cargo build --release -p evertranscript -p evertranscript-summarizer
+
+      - name: Stage the binaries
+        shell: bash
+        run: |
+          mkdir -p packaging/out
+          suffix=""
+          [[ "${{ runner.os }}" == "Windows" ]] && suffix=".exe"
+          cp "target/release/evertranscript${suffix}" packaging/out/
+          cp "target/release/evertranscript-summarizer${suffix}" packaging/out/
+
+      - name: Build the Client
+        run: |
+          pnpm -C clients/electron install --frozen-lockfile
+          pnpm -C clients/electron build
+
+      # electron-builder signs when it finds an identity and says so when it
+      # does not. The secrets are absent in a fork and in this repository
+      # until the Operator adds them, and both cases produce a usable
+      # unsigned artifact rather than a failed job.
+      - name: Package
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.MACOS_CERTIFICATE }}
+          CSC_KEY_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            pnpm -C clients/electron exec electron-builder --win --publish never
+          else
+            pnpm -C clients/electron exec electron-builder --mac --publish never
+          fi
+
+      - name: Checksums
+        shell: bash
+        run: |
+          cd packaging/out/installers
+          # The manifests are generated from these rather than hand-edited:
+          # a checksum kept by hand is one that will eventually be wrong, and
+          # a wrong one in a package manager fails with a message about
+          # tampering.
+          if command -v sha256sum >/dev/null 2>&1; then
+            find . -maxdepth 1 -type f -exec sha256sum {} + | tr -d '\\' > SHA256SUMS
+          else
+            find . -maxdepth 1 -type f -exec shasum -a 256 {} + > SHA256SUMS
+          fi
+          cat SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evertranscript-${{ matrix.os }}
+          path: |
+            packaging/out/installers/*.zip
+            packaging/out/installers/*.exe
+            packaging/out/installers/SHA256SUMS
+          if-no-files-found: error

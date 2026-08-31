@@ -13,6 +13,7 @@ import { app, BrowserWindow, ipcMain } from "electron";
 import { delimiter, join } from "node:path";
 
 import { CoreClient } from "./core-client.js";
+import { downloadUpdate, installUpdate, startUpdateChecks } from "./updates.js";
 
 /**
  * The app icon, for the surfaces packaging does not cover yet.
@@ -202,10 +203,45 @@ function forgetClient(): void {
   startAttempted = false;
 }
 
+
+/**
+ * Starts update checks only if the Operator has them on.
+ *
+ * The setting is read from the Core rather than kept here, because it is
+ * the same switch the trust surface shows and the Core's own check reads —
+ * two sources for one switch is how a switch ends up meaning different
+ * things in two places. A Core that is not up yet simply means no check
+ * this launch, which is the safe direction: the failure mode of asking
+ * later is a missed update, and of assuming yes is traffic the Operator
+ * turned off.
+ */
+async function maybeCheckForUpdates(): Promise<void> {
+  // Unpackaged builds have no update to install and no signature to check.
+  if (!app.isPackaged) return;
+  try {
+    const core = await connectWithRetry();
+    const settings = (await core.request("settings/get", {})) as {
+      checkForUpdates?: boolean;
+    };
+    startUpdateChecks(settings.checkForUpdates === true);
+  } catch {
+    // No Core, no check.
+  }
+}
+
+ipcMain.handle("updates:download", async () => {
+  await downloadUpdate();
+});
+
+ipcMain.handle("updates:install", () => {
+  installUpdate();
+});
+
 void app.whenReady().then(() => {
   // An unpackaged Client has no bundle for the Dock to read an icon from.
   if (!app.isPackaged && app.dock) app.dock.setIcon(ICON_PNG);
   createWindow();
+  void maybeCheckForUpdates();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
