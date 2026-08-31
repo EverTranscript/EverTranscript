@@ -34,6 +34,7 @@
 
 pub mod cluster;
 pub mod fixture;
+pub mod operator;
 pub mod reconcile;
 
 use std::collections::BTreeMap;
