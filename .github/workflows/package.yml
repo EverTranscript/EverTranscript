@@ -133,6 +133,54 @@ jobs:
           fi
           cat SHA256SUMS
 
+      # **Installing the artifact, not just building it.** Every milestone in
+      # this project found its real defects by running the real thing, and
+      # "the installer builds" is a claim about a file. This runs it: silent
+      # install, then the Core is launched from where the installer put it.
+      #
+      # It is also the only place the Summary sidecar has ever executed on
+      # Windows — it cross-compiles, which M3 taught is worth nothing about
+      # runtime.
+      - name: Install it and run what was installed (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem packaging/out/installers/*.exe |
+            Where-Object { $_.Name -like '*Setup*' } | Select-Object -First 1
+          if (-not $installer) { throw "no installer to install" }
+          Write-Host "installing $($installer.Name)"
+
+          # /S is NSIS's silent flag; the installer is per-user, so this
+          # needs no elevation.
+          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          $root = Join-Path $env:LOCALAPPDATA 'Programs\EverTranscript'
+          if (-not (Test-Path $root)) { throw "installer wrote nothing to $root" }
+
+          $core = Join-Path $root 'resources\evertranscript.exe'
+          $sidecar = Join-Path $root 'resources\evertranscript-summarizer.exe'
+          foreach ($binary in @($core, $sidecar)) {
+            if (-not (Test-Path $binary)) { throw "missing from the install: $binary" }
+          }
+
+          # The Core must run from where it was installed. A package that
+          # ships a binary the OS refuses to launch is a package that
+          # installs nothing.
+          $version = & $core --version
+          Write-Host "installed Core reports: $version"
+          if (-not $version) { throw "the installed Core produced no output" }
+
+          # And the sidecar, which has never executed on Windows before.
+          # stdin closed means it reads EOF and exits, which is the orphan
+          # protection ADR-0031 asks for — so this checks the process starts
+          # and leaves rather than hanging.
+          $exited = Start-Process -FilePath $sidecar -RedirectStandardInput 'NUL' `
+            -PassThru -NoNewWindow
+          if (-not $exited.WaitForExit(30000)) {
+            $exited.Kill()
+            throw "the sidecar did not exit on stdin EOF"
+          }
+          Write-Host "sidecar started and exited on EOF"
+
       - uses: actions/upload-artifact@v4
         with:
           name: evertranscript-${{ matrix.os }}
