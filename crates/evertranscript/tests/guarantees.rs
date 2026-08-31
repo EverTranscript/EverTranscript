@@ -275,7 +275,12 @@ fn diarization_opens_no_network_connections_either() {
     let dir = tempfile::tempdir().expect("tempdir");
     let history = dir.path().join("History");
     let runtime = dir.path().join("run");
-    let models_dir = dir.path().join("models");
+    // Under an isolated Application Support, which is what the Core
+    // actually reads. The previous version set EVERTRANSCRIPT_MODELS_DIR —
+    // a variable nothing read — so it copied models somewhere the Core
+    // never looked and ran against the developer's own.
+    let support = dir.path().join("support");
+    let models_dir = support.join("models");
     std::fs::create_dir_all(&models_dir).expect("models dir");
     // Under the names the Core looks for.
     std::fs::copy(
@@ -293,7 +298,7 @@ fn diarization_opens_no_network_connections_either() {
         .arg("daemon")
         .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
         .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
-        .env("EVERTRANSCRIPT_MODELS_DIR", &models_dir)
+        .env("EVERTRANSCRIPT_APP_SUPPORT_DIR", &support)
         .env(evertranscript_core::tray::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -302,6 +307,18 @@ fn diarization_opens_no_network_connections_either() {
     wait_for_core(&history, &runtime);
 
     run(&history, &runtime, &["acknowledge"]);
+
+    // The Core must actually see the models, or this test proves nothing: a
+    // Core with none to load finds no network traffic because it never
+    // tries, which is a true sentence about the wrong thing.
+    let models = String::from_utf8_lossy(&run(&history, &runtime, &["models", "status"]).stdout)
+        .into_owned();
+    assert!(
+        models.contains("pyannote-segmentation-3.0"),
+        "the Core cannot see the diarization models, so this would pass \
+         without running any:\n{models}"
+    );
+
     run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
     std::thread::sleep(std::time::Duration::from_millis(800));
     run(&history, &runtime, &["record", "stop"]);
@@ -348,7 +365,12 @@ fn a_full_cycle_with_summary_and_updates_off_opens_no_sockets() {
     let dir = tempfile::tempdir().expect("tempdir");
     let history = dir.path().join("History");
     let runtime = dir.path().join("run");
-    let models_dir = dir.path().join("models");
+    // Under an isolated Application Support, which is what the Core
+    // actually reads. The previous version set EVERTRANSCRIPT_MODELS_DIR —
+    // a variable nothing read — so it copied models somewhere the Core
+    // never looked and ran against the developer's own.
+    let support = dir.path().join("support");
+    let models_dir = support.join("models");
     std::fs::create_dir_all(&models_dir).expect("models dir");
     std::fs::copy(
         source.join("segmentation.onnx"),
@@ -360,12 +382,25 @@ fn a_full_cycle_with_summary_and_updates_off_opens_no_sockets() {
         models_dir.join("diarize-embedding.onnx"),
     )
     .expect("embedding");
+    // The Summary model, when the machine running this has one. Its absence
+    // makes generation unavailable, which is still a valid thing to assert
+    // no traffic about — but its presence is what makes the assertion
+    // interesting.
+    let summary_model = std::path::PathBuf::from(&models)
+        .parent()
+        .map(|parent| parent.join("summary-qwen2.5-0.5b-instruct-q4_k_m.gguf"));
+    if let Some(model) = summary_model.filter(|path| path.exists()) {
+        let _ = std::fs::copy(
+            &model,
+            models_dir.join("summary-qwen2.5-0.5b-instruct-q4_k_m.gguf"),
+        );
+    }
 
     let mut daemon = Command::new(binary())
         .arg("daemon")
         .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
         .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
-        .env("EVERTRANSCRIPT_MODELS_DIR", &models_dir)
+        .env("EVERTRANSCRIPT_APP_SUPPORT_DIR", &support)
         .env(evertranscript_core::tray::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -374,14 +409,35 @@ fn a_full_cycle_with_summary_and_updates_off_opens_no_sockets() {
     wait_for_core(&history, &runtime);
 
     run(&history, &runtime, &["acknowledge"]);
+
+    // Same reason as above, and one more: without an isolated Application
+    // Support the next line wrote a Backend choice into the *real* machine's
+    // settings.
+    let models = String::from_utf8_lossy(&run(&history, &runtime, &["models", "status"]).stdout)
+        .into_owned();
+    assert!(
+        models.contains("pyannote-segmentation-3.0"),
+        "the Core cannot see the models, so this would pass without \
+         diarizing or summarizing anything:\n{models}"
+    );
+
     // Updates off, and Summary on the local Backend. Both are the
     // configuration this guarantee is about.
     run(&history, &runtime, &["summary", "use", "local"]);
     run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
     std::thread::sleep(std::time::Duration::from_millis(800));
     run(&history, &runtime, &["record", "stop"]);
-    // Stopping spawns Diarization; a Summary is requested straight after.
+    // Stopping spawns Diarization.
     std::thread::sleep(std::time::Duration::from_secs(3));
+
+    // And a Summary is actually requested. The first version of this test
+    // chose a Backend and never generated anything — a test named "with
+    // summary" that exercised no Summary at all, which is the same class of
+    // mistake as the models it was not loading.
+    let listed = String::from_utf8_lossy(&run(&history, &runtime, &["list"]).stdout).into_owned();
+    if let Some(id) = listed.split_whitespace().next() {
+        run(&history, &runtime, &["summary", "generate", id]);
+    }
 
     let outcome = open_sockets(daemon.id());
     let _ = daemon.kill();

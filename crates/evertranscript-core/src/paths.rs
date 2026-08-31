@@ -18,6 +18,23 @@ pub const HISTORY_DIR_ENV: &str = "EVERTRANSCRIPT_HISTORY_DIR";
 /// Environment override for the runtime directory (socket, lock).
 pub const RUNTIME_DIR_ENV: &str = "EVERTRANSCRIPT_RUNTIME_DIR";
 
+/// Overrides Application Support — models, settings, logs.
+///
+/// **Added because its absence made two guarantee tests prove less than
+/// they claimed.** Both set `EVERTRANSCRIPT_MODELS_DIR`, which nothing read;
+/// they copied models into a directory the Core never looked at and then ran
+/// against whatever the developer's machine happened to have. On a runner
+/// with no models they would have exercised a Core that could not diarize or
+/// summarize at all, found no network traffic, and passed — which is a true
+/// sentence about nothing.
+///
+/// It also isolates `settings.json`, and that half is worse: without it a
+/// test that chose a Summary Backend wrote to the real machine's settings,
+/// and a "fresh install" on any machine that has ever run this product
+/// inherits its acknowledgment — so the pre-capture invariant appears to be
+/// violated when it is only being read from the wrong file.
+pub const APP_SUPPORT_DIR_ENV: &str = "EVERTRANSCRIPT_APP_SUPPORT_DIR";
+
 /// The hidden machine store inside the History folder.
 pub const DATA_DIR_NAME: &str = ".data";
 
@@ -48,6 +65,9 @@ pub fn database_path() -> PathBuf {
 
 /// Re-creatable state: models, caches, logs.
 pub fn app_support_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os(APP_SUPPORT_DIR_ENV) {
+        return PathBuf::from(dir);
+    }
     dirs::data_dir()
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
         .join("EverTranscript")
