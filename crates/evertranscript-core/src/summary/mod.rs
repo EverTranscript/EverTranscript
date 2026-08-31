@@ -23,6 +23,7 @@
 //!    [`Backend::identity`] is part of the contract rather than a logging
 //!    nicety.
 
+pub mod cloud;
 pub mod credentials;
 pub mod fake;
 pub mod generate;

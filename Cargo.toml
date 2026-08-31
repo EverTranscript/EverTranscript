@@ -64,6 +64,11 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "stream",
     "http2",
+    "json",
+    # The cloud Summary Backend runs on a blocking worker, not the async
+    # runtime: a ninety-minute meeting can take minutes to summarize, and
+    # that must not sit on the executor the Core answers Clients from.
+    "blocking",
 ] }
 rubato = "0.16"
 rusqlite = { version = "0.37", features = ["bundled"] }
