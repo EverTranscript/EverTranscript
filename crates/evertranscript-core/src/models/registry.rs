@@ -30,8 +30,75 @@ impl Integrity {
     }
 }
 
-/// One required artifact.
+/// How a model wants its prompt shaped.
+///
+/// A property of the model rather than of the product: an instruct model
+/// trained on ChatML answers a ChatML prompt better than a flat one, and the
+/// next model may want neither. Hardcoding one framing in the sidecar is what
+/// makes swapping a model a code change instead of a data change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Framing {
+    /// System, then user, then a bare `Summary:` cue. What every model here
+    /// was driven with before framing became a property.
+    Plain,
+    /// The chat template embedded in the GGUF, applied to system and user as
+    /// separate turns. Applying one has no fallback, so a model without a
+    /// template must say `Plain`.
+    EmbeddedChatTemplate,
+}
+
+/// How a model wants to be sampled.
+///
+/// **Greedy is a choice, not an absence of one**, and some models' own
+/// documentation forbids it — degenerate repetition is the failure it invites,
+/// which is why the sidecar needed a repetition penalty in the first place.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Sampling {
+    /// Always the highest-probability token.
+    Greedy,
+    /// A distribution, narrowed by the model's published settings.
+    Nucleus {
+        temperature: f32,
+        top_p: f32,
+        top_k: i32,
+        min_p: f32,
+    },
+}
+
+/// Everything about driving a model that is true of the model rather than of
+/// the product.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Driving {
+    pub framing: Framing,
+    pub sampling: Sampling,
+    /// Text appended to the system turn to stop a reasoning model thinking
+    /// aloud. **Not part of the Operator's editable prompt**: an Operator who
+    /// rewrote their prompt would silently re-enable reasoning, and pay for
+    /// tokens that are discarded before they ever see them.
+    pub suppress_reasoning: Option<&'static str>,
+    /// Context to allocate, and the size below which a meeting is summarized
+    /// in one pass. Both were constants sized for a 0.5B.
+    pub context_tokens: u32,
+    pub single_pass_tokens: usize,
+}
+
+/// Where an artifact came from and under what terms.
+///
+/// This repository keeps a careful ledger for every *file* it ported
+/// (`PORTS.md`), and said nothing about the half-gigabyte artifacts it
+/// downloads. Recorded per entry rather than in that ledger because a model
+/// has no attribution header and no upstream revision — the discipline
+/// PORTS.md enforces does not apply to it, and diluting that ledger would
+/// cost more than it gains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Provenance {
+    /// SPDX identifier, e.g. `Apache-2.0`.
+    pub license: &'static str,
+    /// Where it is published, for a human following it up.
+    pub source: &'static str,
+}
+
+/// One required artifact.
 pub struct ModelEntry {
     /// Stable key used by the protocol and the CLI.
     pub key: &'static str,
@@ -45,6 +112,11 @@ pub struct ModelEntry {
     pub purpose: ModelPurpose,
     /// False for artifacts a feature can run without.
     pub required: bool,
+    /// Licence and source. Every entry carries one.
+    pub provenance: Provenance,
+    /// How a generative model wants to be driven. `None` for models that are
+    /// not prompted at all — the ONNX pair, and whisper.
+    pub driving: Option<Driving>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +157,12 @@ pub const WHISPER_DEFAULT: ModelEntry = ModelEntry {
     },
     purpose: ModelPurpose::Transcription,
     required: true,
+    provenance: Provenance {
+        license: "MIT",
+        source: "https://huggingface.co/ggerganov/whisper.cpp",
+    },
+    // Not prompted: whisper is handed audio, not a conversation.
+    driving: None,
 };
 
 /// Speaker segmentation: where speech is, and where two voices overlap.
@@ -106,6 +184,11 @@ pub const DIARIZE_SEGMENTATION: ModelEntry = ModelEntry {
     },
     purpose: ModelPurpose::Diarization,
     required: true,
+    provenance: Provenance {
+        license: "MIT",
+        source: "https://huggingface.co/onnx-community/pyannote-segmentation-3.0",
+    },
+    driving: None,
 };
 
 /// Speaker embedding: the vector a Voiceprint is made of.
@@ -124,6 +207,11 @@ pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
     },
     purpose: ModelPurpose::Diarization,
     required: true,
+    provenance: Provenance {
+        license: "Apache-2.0",
+        source: "https://huggingface.co/onnx-community/wespeaker-voxceleb-resnet34-LM",
+    },
+    driving: None,
 };
 
 /// The local Summary model (ADR-0031: "its small instruct model downloads
@@ -152,6 +240,20 @@ pub const SUMMARY_DEFAULT: ModelEntry = ModelEntry {
     // would make a fresh install refuse to record until half a gigabyte had
     // downloaded, for a feature the Operator may not have chosen.
     required: false,
+    provenance: Provenance {
+        license: "Apache-2.0",
+        source: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+    },
+    // **Exactly how the sidecar drove this model before it was described**,
+    // so introducing the seam changes no output. Greedy and plain framing are
+    // recorded as the choices they always were rather than adopted here.
+    driving: Some(Driving {
+        framing: Framing::Plain,
+        sampling: Sampling::Greedy,
+        suppress_reasoning: None,
+        context_tokens: 8_192,
+        single_pass_tokens: 4_000,
+    }),
 };
 
 /// Every artifact this build knows how to fetch.
@@ -239,5 +341,81 @@ mod tests {
         if !weak.is_empty() {
             eprintln!("note: these models are release-blocked until a SHA-256 is pinned: {weak:?}");
         }
+    }
+
+    #[test]
+    fn every_model_records_where_it_came_from_and_under_what_terms() {
+        // This repository keeps a careful ledger for every file it ported and
+        // said nothing about the artifacts it downloads, which is an odd
+        // silence for a public Apache-2.0 project.
+        for entry in ALL {
+            assert!(
+                !entry.provenance.license.is_empty(),
+                "{} has no licence",
+                entry.key
+            );
+            assert!(
+                entry.provenance.source.starts_with("https://"),
+                "{} has no followable source, got {:?}",
+                entry.key,
+                entry.provenance.source
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_prompted_model_says_how_to_drive_it() {
+        // Whisper is handed audio and the ONNX pair are handed tensors; a
+        // sampling temperature would be meaningless on any of them.
+        for entry in ALL {
+            match entry.purpose {
+                ModelPurpose::Summary => assert!(
+                    entry.driving.is_some(),
+                    "{} is prompted and must say how",
+                    entry.key
+                ),
+                _ => assert!(
+                    entry.driving.is_none(),
+                    "{} is not prompted and should not describe driving",
+                    entry.key
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn the_registered_summary_model_is_described_as_it_has_always_been_driven() {
+        // The guard on this ticket: introducing the seam must change no
+        // output. When the model changes, this test changes with it — and
+        // that is the point, because then the change is visible in a diff
+        // rather than absorbed silently.
+        let driving = SUMMARY_DEFAULT
+            .driving
+            .expect("the Summary model is prompted");
+        assert_eq!(driving.framing, Framing::Plain);
+        assert_eq!(driving.sampling, Sampling::Greedy);
+        assert_eq!(driving.suppress_reasoning, None);
+        assert_eq!(driving.context_tokens, 8_192);
+        assert_eq!(driving.single_pass_tokens, 4_000);
+    }
+
+    #[test]
+    fn a_model_that_wants_a_chat_template_can_say_so() {
+        // The shape exists before the model that needs it, so adopting one is
+        // a data change rather than a code change.
+        let driving = Driving {
+            framing: Framing::EmbeddedChatTemplate,
+            sampling: Sampling::Nucleus {
+                temperature: 0.7,
+                top_p: 0.8,
+                top_k: 20,
+                min_p: 0.0,
+            },
+            suppress_reasoning: Some("/no_think"),
+            context_tokens: 16_384,
+            single_pass_tokens: 12_000,
+        };
+        assert_ne!(driving.framing, Framing::Plain);
+        assert_ne!(driving.sampling, Sampling::Greedy);
     }
 }

@@ -22,20 +22,18 @@ use std::io::BufRead;
 use std::io::Write;
 use std::num::NonZeroU32;
 
+use evertranscript_core::summary::sidecar::Driving;
+use evertranscript_core::summary::sidecar::Sampling;
 use evertranscript_core::summary::sidecar::SidecarRequest;
 use evertranscript_core::summary::sidecar::SidecarResponse;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::AddBos;
+use llama_cpp_2::model::LlamaChatMessage;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
-
-/// Context window. Large enough for a chunk plus its prompt, small enough
-/// that the KV cache does not evict the Operator's other work from memory —
-/// this runs on a laptop that is also in a meeting.
-const CONTEXT_TOKENS: u32 = 8_192;
 
 /// Text that means the model has stopped summarizing and started inventing.
 ///
@@ -88,6 +86,7 @@ fn main() -> anyhow::Result<()> {
 
     let backend = LlamaBackend::init()?;
     let mut loaded: Option<(String, LlamaModel)> = None;
+    let mut how = Driving::default();
 
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
@@ -102,8 +101,15 @@ fn main() -> anyhow::Result<()> {
         }
 
         let response = match serde_json::from_str::<SidecarRequest>(line) {
-            Ok(SidecarRequest::Load { model_path }) => match load(&backend, &model_path) {
+            Ok(SidecarRequest::Load {
+                model_path,
+                driving,
+            }) => match load(&backend, &model_path) {
                 Ok((name, model)) => {
+                    // How this model wants to be driven, as the Core's
+                    // registry describes it. Absent means the defaults this
+                    // file used before a model could describe itself.
+                    how = driving.clone().unwrap_or_default();
                     loaded = Some((name.clone(), model));
                     SidecarResponse::Ready { model: name }
                 }
@@ -112,7 +118,7 @@ fn main() -> anyhow::Result<()> {
                 },
             },
             Ok(SidecarRequest::Generate { system, user }) => match loaded.as_ref() {
-                Some((_, model)) => match generate(&backend, model, &system, &user) {
+                Some((_, model)) => match generate(&backend, model, &system, &user, &how) {
                     Ok(text) => SidecarResponse::Generated { text },
                     Err(error) => SidecarResponse::Error {
                         message: error.to_string(),
@@ -204,21 +210,55 @@ fn load(backend: &LlamaBackend, path: &str) -> anyhow::Result<(String, LlamaMode
     Ok((name, model))
 }
 
+/// Frames the prompt with the template baked into the GGUF.
+///
+/// The model was trained on a particular turn structure; handing it a flat
+/// string asks it to infer one. Reading the template from the model rather
+/// than naming a format keeps this correct for whatever is registered next.
+fn chat_prompt(model: &LlamaModel, system: &str, user: &str) -> anyhow::Result<String> {
+    let template = model
+        .chat_template(None)
+        .map_err(|error| anyhow::anyhow!("this model has no embedded chat template: {error}"))?;
+    let messages = vec![
+        LlamaChatMessage::new("system".to_string(), system.to_string())?,
+        LlamaChatMessage::new("user".to_string(), user.to_string())?,
+    ];
+    // `add_ass` leaves the prompt ending at the assistant's opening tag,
+    // which is where generation should begin.
+    Ok(model.apply_chat_template(&template, &messages, true)?)
+}
+
 fn generate(
     backend: &LlamaBackend,
     model: &LlamaModel,
     system: &str,
     user: &str,
+    how: &Driving,
 ) -> anyhow::Result<String> {
     let mut context = model.new_context(
         backend,
-        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(CONTEXT_TOKENS)),
+        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(how.context_tokens)),
     )?;
 
-    // A plain instruct framing rather than a model-specific chat template.
-    // The Core has already escaped anything in `user` that could be read as
-    // a turn boundary, so this cannot be steered by the transcript.
-    let prompt = format!("{system}\n\n{user}\n\nSummary:\n");
+    // Reasoning suppression rides on the system turn, and comes from the
+    // model's registry entry rather than the Operator's editable prompt: an
+    // Operator who rewrote their prompt would otherwise silently re-enable
+    // it and pay for tokens they never see.
+    let system = match how.suppress_reasoning.as_deref() {
+        Some(marker) => format!("{system}\n\n{marker}"),
+        None => system.to_string(),
+    };
+
+    // Framed the way this model was trained. The Core has already escaped
+    // anything in `user` — and, when a chat template is in play, in the
+    // Operator's system prompt too — that could be read as a turn boundary,
+    // so neither can be steered by what someone pasted.
+    let prompt = match how.framing.as_str() {
+        "chatTemplate" => chat_prompt(model, &system, user)?,
+        // Plain: what every model here was driven with before framing became
+        // a property of the model.
+        _ => format!("{system}\n\n{user}\n\nSummary:\n"),
+    };
     let tokens = model.str_to_token(&prompt, AddBos::Always)?;
 
     let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
@@ -234,10 +274,36 @@ fn generate(
     // a window of recent tokens is what stops it, and greedy selection after
     // it keeps a summary reproducible for the same input, which matters for
     // a record somebody may re-generate and compare.
-    let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::penalties(REPEAT_WINDOW, REPEAT_PENALTY, 0.0, 0.0),
-        LlamaSampler::greedy(),
-    ]);
+    // Order matters: llama.cpp applies chain members as inserted, and the
+    // chain must end with something that selects a token. Penalties first,
+    // then the narrowing filters, then temperature, then the selector.
+    let mut sampler = match how.sampling {
+        Sampling::Greedy => LlamaSampler::chain_simple([
+            LlamaSampler::penalties(REPEAT_WINDOW, REPEAT_PENALTY, 0.0, 0.0),
+            LlamaSampler::greedy(),
+        ]),
+        Sampling::Nucleus {
+            temperature,
+            top_p,
+            top_k,
+            min_p,
+        } => LlamaSampler::chain_simple([
+            LlamaSampler::penalties(REPEAT_WINDOW, REPEAT_PENALTY, 0.0, 0.0),
+            LlamaSampler::top_k(top_k),
+            LlamaSampler::top_p(top_p, 1),
+            LlamaSampler::min_p(min_p, 1),
+            LlamaSampler::temp(temperature),
+            // Seeded from the clock: a Summary is not a build artifact, and
+            // a fixed seed would make every regeneration identical, which is
+            // not what "regenerate" means to an Operator.
+            LlamaSampler::dist(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|since| since.as_secs() as u32)
+                    .unwrap_or(0),
+            ),
+        ]),
+    };
     let mut decoder = evertranscript_core::summary::sidecar::IncrementalUtf8::new();
     let mut out = String::new();
 

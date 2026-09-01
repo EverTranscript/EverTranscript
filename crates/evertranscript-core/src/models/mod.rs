@@ -404,6 +404,11 @@ mod tests {
             },
             purpose: registry::ModelPurpose::Transcription,
             required: true,
+            provenance: registry::Provenance {
+                license: "MIT",
+                source: "https://example.invalid/fixture",
+            },
+            driving: None,
         }
     }
 

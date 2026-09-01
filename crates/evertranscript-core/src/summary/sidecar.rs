@@ -53,8 +53,81 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(900);
 /// How long a cancelled child gets to exit before it is killed outright.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
+/// How to drive the loaded model, as it travels to the sidecar.
+///
+/// A mirror of the registry's `Driving` with owned strings: the registry's
+/// version is `&'static str` because it is a compile-time table, and that
+/// does not serialize into a message.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Driving {
+    pub framing: String,
+    pub sampling: Sampling,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suppress_reasoning: Option<String>,
+    pub context_tokens: u32,
+}
+
+/// The sampling half, on the wire.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum Sampling {
+    Greedy,
+    Nucleus {
+        temperature: f32,
+        top_p: f32,
+        top_k: i32,
+        min_p: f32,
+    },
+}
+
+impl Default for Driving {
+    /// What the sidecar did before a model could describe itself.
+    ///
+    /// Not a recommendation — a record of the previous behaviour, so a
+    /// `Load` that carries no properties changes nothing.
+    fn default() -> Self {
+        Self {
+            framing: "plain".to_string(),
+            sampling: Sampling::Greedy,
+            suppress_reasoning: None,
+            context_tokens: 8_192,
+        }
+    }
+}
+
+impl Driving {
+    /// From the registry's table into something sendable.
+    pub fn from_entry(driving: &crate::models::registry::Driving) -> Self {
+        use crate::models::registry::Framing;
+        use crate::models::registry::Sampling as Registry;
+        Self {
+            framing: match driving.framing {
+                Framing::Plain => "plain".to_string(),
+                Framing::EmbeddedChatTemplate => "chatTemplate".to_string(),
+            },
+            sampling: match driving.sampling {
+                Registry::Greedy => Sampling::Greedy,
+                Registry::Nucleus {
+                    temperature,
+                    top_p,
+                    top_k,
+                    min_p,
+                } => Sampling::Nucleus {
+                    temperature,
+                    top_p,
+                    top_k,
+                    min_p,
+                },
+            },
+            suppress_reasoning: driving.suppress_reasoning.map(str::to_string),
+            context_tokens: driving.context_tokens,
+        }
+    }
+}
+
 /// What the Core sends the sidecar.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 // `rename_all` renames *variants*; fields need their own attribute. Without
 // the second one the wire is camelCase for the tag and snake_case for the
 // fields, which both sides tolerate because they share this type — and which
@@ -67,8 +140,14 @@ pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 )]
 pub enum SidecarRequest {
     /// Load a model, or confirm the loaded one matches.
+    ///
+    /// Carries how to drive it. The sidecar could not read this from the
+    /// registry — it is a separate process by design (ADR-0031) and the
+    /// registry is the Core's — so the properties travel with the path.
     Load {
         model_path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        driving: Option<Driving>,
     },
     Generate {
         system: String,
@@ -125,7 +204,21 @@ impl SidecarBackend {
     /// child reads EOF and exits. Without it a crashed Core leaves a model
     /// resident in memory with nobody to stop it.
     pub fn spawn(binary: &std::path::Path, model_path: &str) -> Result<Self, BackendError> {
-        Self::spawn_with_timeout(binary, model_path, REQUEST_TIMEOUT)
+        Self::spawn_with_timeout(binary, model_path, REQUEST_TIMEOUT, None)
+    }
+
+    /// As `spawn`, telling the sidecar how this model wants to be driven.
+    ///
+    /// Separate from `spawn` rather than replacing it: a caller with no
+    /// registry entry to hand — the tests that drive a stub sidecar — should
+    /// not have to invent one, and omitting the properties means the sidecar
+    /// falls back to what it did before they existed.
+    pub fn spawn_driven(
+        binary: &std::path::Path,
+        model_path: &str,
+        driving: Option<Driving>,
+    ) -> Result<Self, BackendError> {
+        Self::spawn_with_timeout(binary, model_path, REQUEST_TIMEOUT, driving)
     }
 
     /// As `spawn`, with the exchange bound named.
@@ -137,6 +230,7 @@ impl SidecarBackend {
         binary: &std::path::Path,
         model_path: &str,
         request_timeout: Duration,
+        driving: Option<Driving>,
     ) -> Result<Self, BackendError> {
         let mut child = Command::new(binary)
             .stdin(Stdio::piped())
@@ -190,6 +284,7 @@ impl SidecarBackend {
 
         match backend.exchange(&SidecarRequest::Load {
             model_path: model_path.to_string(),
+            driving,
         })? {
             SidecarResponse::Ready { model } => {
                 backend.model = model;
@@ -592,9 +687,13 @@ while true; do sleep 1; done
         // race a shell's startup under sixteen parallel tests would make
         // this flaky in the direction of failing when the code is right,
         // which is the worst way for a test about hangs to behave.
-        let mut backend =
-            SidecarBackend::spawn_with_timeout(&path, "/models/fake.gguf", Duration::from_secs(5))
-                .expect("spawns and loads");
+        let mut backend = SidecarBackend::spawn_with_timeout(
+            &path,
+            "/models/fake.gguf",
+            Duration::from_secs(5),
+            None,
+        )
+        .expect("spawns and loads");
 
         let started = Instant::now();
         let error = backend
@@ -691,6 +790,31 @@ while true; do sleep 1; done
         assert!(
             started.elapsed() < SHUTDOWN_GRACE + Duration::from_secs(5),
             "shutdown must not hang on a child that ignores it"
+        );
+    }
+    #[test]
+    fn the_registered_model_is_driven_exactly_as_the_sidecar_used_to_drive_it() {
+        // **The guard on introducing this seam**: describing the model must
+        // change no output, and the way to know that is that its description
+        // equals the behaviour the sidecar had before descriptions existed.
+        //
+        // This test is expected to fail when the registered model changes,
+        // and that failure is the point — it is the moment someone must
+        // decide the new behaviour deliberately. Whoever swaps the model
+        // should replace this with an assertion about what the new model
+        // wants, not delete it.
+        let described = Driving::from_entry(
+            crate::models::registry::SUMMARY_DEFAULT
+                .driving
+                .as_ref()
+                .expect("the Summary model is prompted"),
+        );
+        assert_eq!(
+            described,
+            Driving::default(),
+            "the registered model is described differently from how the sidecar \
+             behaved before it could be described — which means this change is \
+             not the no-op it claims to be"
         );
     }
 }

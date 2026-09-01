@@ -12,12 +12,12 @@ also debugging a new seam.
 
 **Blocked by:** 01 (both touch the sidecar's load path; sequencing avoids a collision).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A registry entry carries how to frame a prompt for that model, how to sample, whether to suppress reasoning, and its context budget
-- [ ] Entries carry licence and source; all four existing models are filled in, not only the one about to change
-- [ ] The sidecar drives a model from those properties rather than from hardcoded constants
-- [ ] Raw framing stays expressible for a model with no embedded chat template, since applying one has no fallback
-- [ ] Summaries from the registered 0.5B are unchanged — asserted, not assumed
-- [ ] The entry data is asserted without loading a model
-- [ ] The local gate is green
+- [x] All four, plus the single-pass threshold, carried on the entry and sent to the sidecar with the load — the sidecar is a separate process by design, so the properties travel with the path rather than being read from a registry it cannot see
+- [x] All four filled in, asserted by a test that every entry has a licence and a followable source. Recorded per entry rather than in `PORTS.md`, whose discipline is file-level — attribution headers and upstream revisions, neither of which a downloaded model has
+- [x] Framing, sampling, reasoning suppression and context all come from the message; `CONTEXT_TOKENS` is gone. Reasoning suppression joins the system turn from the entry, never the Operator's editable prompt
+- [x] `Framing::Plain` is a first-class choice, and the model currently registered uses it
+- [x] Run against the real model: same `None noted.`, same invented timestamps, same 3/3 verbatim echo Q45 recorded. A test also asserts the entry's description equals the sidecar's previous behaviour, so the no-op claim is checkable rather than trusted — it is written to fail when the model changes, which is the moment someone must choose deliberately
+- [x] Provenance, and that only the prompted model describes driving — a sampling temperature on the ONNX pair would be meaningless
+- [x] The local gate is green

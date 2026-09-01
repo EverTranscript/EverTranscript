@@ -615,9 +615,19 @@ impl Core {
                 .models_dir
                 .join(crate::models::registry::SUMMARY_DEFAULT.filename);
             let binary = summarizer_binary()?;
-            summary::sidecar::SidecarBackend::spawn(&binary, &model.to_string_lossy())
-                .ok()
-                .map(|backend| Box::new(backend) as Box<dyn summary::Backend + 'static>)
+            // How this model wants to be driven, from the registry rather
+            // than from constants in the sidecar.
+            let driving = crate::models::registry::SUMMARY_DEFAULT
+                .driving
+                .as_ref()
+                .map(summary::sidecar::Driving::from_entry);
+            summary::sidecar::SidecarBackend::spawn_driven(
+                &binary,
+                &model.to_string_lossy(),
+                driving,
+            )
+            .ok()
+            .map(|backend| Box::new(backend) as Box<dyn summary::Backend + 'static>)
         };
 
         let choice = settings

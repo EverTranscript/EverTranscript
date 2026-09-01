@@ -149,6 +149,11 @@ fn entry_for(payload: &[u8]) -> ModelEntry {
         },
         purpose: ModelPurpose::Transcription,
         required: true,
+        provenance: evertranscript_core::models::registry::Provenance {
+            license: "MIT",
+            source: "https://example.invalid/fixture",
+        },
+        driving: None,
     }
 }
 
