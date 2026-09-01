@@ -16,6 +16,13 @@ jobs:
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # GitHub's default is six hours of silence before a stuck job is reaped.
+    # That was a fine default while this job only compiled and ran fast
+    # tests; it stopped being one when the job started loading a real model
+    # and supervising a child process to do it (Q45). The slowest healthy
+    # job observed is 27m30s, so an hour never fires on a cold cache and
+    # still turns a wedged run into a red X within the hour.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -112,6 +119,16 @@ jobs:
         # happen, sixteen threads dying together makes it unattributable,
         # which is exactly the position this repo was in. Serialised, the
         # last test to report is the one that died.
+        #
+        # Tighter than the job's hour because this is the step with the
+        # unbounded work in it: the only one that runs a real model, with
+        # two long poles — `meeting_lifecycle` at 452 s and
+        # `summary_inference` at 339 s on macOS, where llama.cpp takes the
+        # Metal path and spends most of that compiling pipelines rather than
+        # decoding. The step itself has been observed at 16m and 21m51s, so
+        # 45 minutes is about double the worse of those, and failing *here*
+        # names the step instead of cancelling the job out from under it.
+        timeout-minutes: 45
         env:
           EVERTRANSCRIPT_DIARIZE_MODELS: ${{ runner.temp }}/diarize-models
           EVERTRANSCRIPT_SUMMARY_MODEL: ${{ runner.temp }}/summary-model/summary.gguf

@@ -21,6 +21,9 @@ use std::io::Write;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::channel;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -37,6 +40,14 @@ use super::Request;
 ///
 /// Ninety minutes of meeting through a small model on a laptop is genuinely
 /// slow, and a timeout tuned for a demo would fire on every real meeting.
+///
+/// **This was declared and never enforced.** `exchange` blocked in
+/// `read_line` with no deadline, so the bound the catalog specifies existed
+/// only as documentation — `cloud::REQUEST_TIMEOUT` was applied to its
+/// request and this one was applied to nothing. A sidecar that loaded a
+/// model and then stopped answering wedged its caller for as long as the
+/// child lived. Clippy cannot say so, because a `pub` constant nobody reads
+/// is not dead code (DECISIONS Q46).
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// How long a cancelled child gets to exit before it is killed outright.
@@ -91,8 +102,19 @@ pub struct SidecarBackend {
     /// that tells the child to exit, and it is the only stop signal that
     /// works on a child which has stopped answering.
     stdin: Option<std::process::ChildStdin>,
-    stdout: BufReader<std::process::ChildStdout>,
+    /// Lines the child has written, delivered by a reader thread.
+    ///
+    /// **A thread rather than a direct `read_line` because a pipe read
+    /// cannot be given a deadline portably**, and a deadline is the whole
+    /// point: `recv_timeout` on this channel is what makes `REQUEST_TIMEOUT`
+    /// real. The thread ends when the pipe reaches EOF, so a `Disconnected`
+    /// here means the same thing `read_line` returning `Ok(0)` used to — the
+    /// child is gone.
+    lines: Receiver<std::io::Result<String>>,
     model: String,
+    /// Bound on one exchange. `REQUEST_TIMEOUT` outside tests; a test that
+    /// waited fifteen minutes to prove a timeout works would never be run.
+    request_timeout: Duration,
 }
 
 impl SidecarBackend {
@@ -103,6 +125,19 @@ impl SidecarBackend {
     /// child reads EOF and exits. Without it a crashed Core leaves a model
     /// resident in memory with nobody to stop it.
     pub fn spawn(binary: &std::path::Path, model_path: &str) -> Result<Self, BackendError> {
+        Self::spawn_with_timeout(binary, model_path, REQUEST_TIMEOUT)
+    }
+
+    /// As `spawn`, with the exchange bound named.
+    ///
+    /// Private: nothing in the Core wants a bound other than the catalog's.
+    /// It exists so the timeout can be *tested*, which the 900-second one
+    /// cannot be.
+    fn spawn_with_timeout(
+        binary: &std::path::Path,
+        model_path: &str,
+        request_timeout: Duration,
+    ) -> Result<Self, BackendError> {
         let mut child = Command::new(binary)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -121,11 +156,36 @@ impl SidecarBackend {
             .take()
             .ok_or_else(|| BackendError::Unavailable("sidecar has no stdout".into()))?;
 
+        // Detached on purpose. It blocks in `read_line` and ends at EOF, and
+        // every path that abandons a sidecar — `shutdown`, `Drop`, a timeout
+        // — kills the child, which is what produces that EOF. There is no
+        // state to join for.
+        let (sender, lines) = channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        if sender.send(Ok(line)).is_err() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = sender.send(Err(error));
+                        break;
+                    }
+                }
+            }
+        });
+
         let mut backend = Self {
             child,
             stdin: Some(stdin),
-            stdout: BufReader::new(stdout),
+            lines,
             model: String::new(),
+            request_timeout,
         };
 
         match backend.exchange(&SidecarRequest::Load {
@@ -142,29 +202,53 @@ impl SidecarBackend {
         }
     }
 
-    /// One request, one response.
+    /// One request, one response, **bounded by `request_timeout`**.
+    ///
+    /// The bound is not decoration. A child that crashes is easy — the pipe
+    /// EOFs and the wait ends — and that case had a test. A child that stays
+    /// alive holding half a gigabyte and simply stops answering produces no
+    /// EOF at all, and an unbounded read waits for it forever. That is the
+    /// shape ADR-0031 bought the process boundary to survive, and it was the
+    /// one shape this could not.
     fn exchange(&mut self, request: &SidecarRequest) -> Result<SidecarResponse, BackendError> {
         let line = serde_json::to_string(request)
             .map_err(|error| BackendError::Malformed(error.to_string()))?;
         let stdin = self
             .stdin
             .as_mut()
-            .ok_or_else(|| BackendError::Unreachable("the sidecar is shutting down".into()))?;
+            // Covers both a `shutdown` in progress and a child this method
+            // has already killed for missing its deadline.
+            .ok_or_else(|| BackendError::Unreachable("the sidecar is no longer running".into()))?;
         writeln!(stdin, "{line}")
             .and_then(|()| stdin.flush())
             .map_err(|error| BackendError::Unreachable(error.to_string()))?;
 
-        let mut answer = String::new();
-        let read = self
-            .stdout
-            .read_line(&mut answer)
-            .map_err(|error| BackendError::Unreachable(error.to_string()))?;
-        if read == 0 {
-            // EOF: the child is gone. Distinguished from a malformed reply
-            // because they call for different responses — one is a crashed
-            // sidecar to restart, the other is a protocol bug.
-            return Err(BackendError::Unreachable("the sidecar exited".into()));
-        }
+        let answer = match self.lines.recv_timeout(self.request_timeout) {
+            Ok(Ok(answer)) => answer,
+            Ok(Err(error)) => return Err(BackendError::Unreachable(error.to_string())),
+            // The reader thread ended, which it only does at EOF: the child
+            // is gone. Distinguished from a malformed reply because they
+            // call for different responses — one is a crashed sidecar to
+            // restart, the other is a protocol bug.
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(BackendError::Unreachable("the sidecar exited".into()));
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                // **Kill, don't ask.** A child past its deadline is either
+                // wedged or in a decode that cannot be interrupted, and
+                // both are the case `shutdown`'s comment describes: asking
+                // politely and waiting is not a stop. Leaving it alive
+                // would also leave the model resident with nobody to end
+                // it, which is the orphan the stdin pipe exists to prevent.
+                self.stdin = None;
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return Err(BackendError::Unreachable(format!(
+                    "the sidecar did not answer within {}s and was killed",
+                    self.request_timeout.as_secs()
+                )));
+            }
+        };
         serde_json::from_str(answer.trim())
             .map_err(|error| BackendError::Malformed(format!("{error}: {}", answer.trim())))
     }
@@ -482,6 +566,69 @@ exit 1
             matches!(error, BackendError::Unreachable(_)),
             "got {error:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sidecar_that_stops_answering_is_killed_rather_than_waited_on() {
+        // The gap the test above leaves. That child *dies*, and dying is
+        // what makes it detectable — the pipe EOFs and the read ends. This
+        // one loads its model and then goes silent while staying alive, so
+        // there is no EOF to notice, and an unbounded read waits for it as
+        // long as the process lives.
+        //
+        // `REQUEST_TIMEOUT` was declared for exactly this case and applied
+        // to nothing, so until now the only bound on a silent sidecar was
+        // the lifetime of the process (DECISIONS Q46).
+        let path = fake_sidecar(
+            r##"#!/bin/sh
+IFS= read -r line
+printf '%s\n' '{"type":"ready","model":"silent"}'
+while true; do sleep 1; done
+"##,
+        );
+        // Five seconds, not one. The same bound covers the `load` exchange,
+        // and that one is *supposed* to answer — a bound tight enough to
+        // race a shell's startup under sixteen parallel tests would make
+        // this flaky in the direction of failing when the code is right,
+        // which is the worst way for a test about hangs to behave.
+        let mut backend =
+            SidecarBackend::spawn_with_timeout(&path, "/models/fake.gguf", Duration::from_secs(5))
+                .expect("spawns and loads");
+
+        let started = Instant::now();
+        let error = backend
+            .generate(
+                &Request {
+                    system: "rules".into(),
+                    user: "text".into(),
+                },
+                &Cancel::new(),
+            )
+            .expect_err("a silent sidecar must not be waited on forever");
+        assert!(
+            matches!(error, BackendError::Unreachable(_)),
+            "got {error:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(30),
+            "the deadline did not fire: waited {:?}",
+            started.elapsed()
+        );
+
+        // **And the child is gone.** Returning an error while leaving a
+        // process holding the model resident would trade a visible hang for
+        // an invisible leak, which is the worse of the two.
+        assert!(
+            backend.child.try_wait().expect("try_wait").is_some(),
+            "the timed-out sidecar is still alive"
+        );
+
+        // A dead Backend says so rather than blocking again.
+        assert!(matches!(
+            backend.exchange(&SidecarRequest::Ping),
+            Err(BackendError::Unreachable(_))
+        ));
     }
 
     #[cfg(unix)]

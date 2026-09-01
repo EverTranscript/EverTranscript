@@ -634,3 +634,21 @@ The test **reports** that measurement and does not assert on it. Asserting would
 One assumption checked rather than reasoned about: `cargo test --workspace` does **not** build `target/<profile>/evertranscript-summarizer`. It builds the summarizer's unit-test harness into `deps/` and stops. Found by deleting the file and re-running, which is the only reason CI is not red.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q46 — m4-summary/04-local-sidecar — finding
+
+**Question:** The CI run for `d89445c` looked like it had sat in its `Tests` step for over seven hours while Windows finished in eleven minutes, and the diff cannot cause that — it is behaviourally identical whenever the model exists. What makes a stall unbounded?
+**Options considered:** wait for the log and fix what it names / read for the mechanism first
+**Chosen:** Read for the mechanism, which was the only option available while the run was in progress and its log undownloadable. **The hang was not real** — this machine's clock was running about six hours and forty minutes fast, and `gh` computes a running job's elapsed time against local time, so a healthy 24m51s job read as seven hours. The run finished green. **The defect the false alarm turned up is real:** `sidecar::REQUEST_TIMEOUT` was declared and enforced nowhere.
+**Decided-by:** agent
+**Justification:** Recording the wrong premise rather than quietly keeping the right answer, because the two are worth different things. The premise was an artifact and is worth one line. The finding is a grep result and stands on its own: the constant is the catalog's M4 bound, and its only reference anywhere in the workspace was its own doc comment. `cloud::REQUEST_TIMEOUT` is applied at `cloud.rs:171`; this one was applied to nothing, so `exchange` blocked in `read_line` with no deadline. Clippy cannot say so, because a `pub` constant nobody reads is not dead code — the same reason a `pub` helper nobody calls survives review.
+
+**The test that looks like it covers this does not.** `a_sidecar_that_dies_is_unreachable_rather_than_a_hang` drives a child that exits, and exiting is precisely what makes that case detectable: the pipe reaches EOF and the read ends on its own. A child that stays alive holding half a gigabyte and simply stops answering produces no EOF, so the read never ends — that is the shape ADR-0031 bought the process boundary to survive, and it was the one with neither a bound nor a test. The new one drives a fake that loads, replies `ready`, then goes silent while staying alive.
+
+A pipe read cannot be given a deadline portably, so the reader moved to a thread feeding a channel and `exchange` now uses `recv_timeout`. **On expiry the child is killed rather than asked.** A child past its deadline is either wedged or inside a decode that cannot be interrupted, and both are the case `shutdown` already describes: asking politely and waiting is not a stop. Returning an error while leaving the process alive would trade a visible hang for an invisible leak — a resident model with nobody left to end it, which is the orphan the stdin pipe exists to prevent — so the test asserts the child is reaped, not merely that the call returned.
+
+Numbers for the bound, measured rather than guessed. The two inference tests take **339 s on macOS** and **7.45 s on Windows** for identical work; the macOS log is hundreds of `ggml_metal_library_compile_pipeline` lines, so most of that is Metal pipeline compilation on a virtualised GPU rather than decode. 900 s is roughly 2.6× the slowest healthy observation, which is the right side of a bound that must never fire on a real ninety-minute meeting.
+
+CI gets `timeout-minutes` too — 60 on the job, 45 on the `Tests` step — and that is worth keeping **despite** the false alarm rather than because of it. GitHub's default is six hours of silence, which was a reasonable default while this job only compiled and ran fast tests and stopped being one when it started loading a real model and supervising a child to do it. The step is tighter than the job because it holds the unbounded work and because failing there names the step instead of cancelling the job out from under it.
+**Outcome:** applied
+**Ref:** (pending)
