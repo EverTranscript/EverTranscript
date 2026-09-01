@@ -37,9 +37,26 @@ Frank: The migration is blocked on the staging database being out of date.
 Priya: I'll refresh staging from last night's snapshot before Thursday.
 Frank: Thanks. Then we can cut over on Friday morning.";
 
+/// The model, or `None` only when nobody asked for one.
+///
+/// **A set variable pointing at nothing is a failure, not a skip.** The
+/// obvious spelling — `var(..).ok()?` then `path.exists().then_some(path)` —
+/// turns a typo'd path, a failed download or a renamed artifact into a silent
+/// green tick, and CI sets this variable on every run, so the whole test
+/// would report success for work it never did. That is exactly the vacuous
+/// pass DECISIONS Q43 had to go back and correct in two guarantee tests, and
+/// the correction is worth applying before it is earned rather than after.
 fn model() -> Option<PathBuf> {
-    let path = PathBuf::from(std::env::var("EVERTRANSCRIPT_SUMMARY_MODEL").ok()?);
-    path.exists().then_some(path)
+    let configured = std::env::var_os("EVERTRANSCRIPT_SUMMARY_MODEL")?;
+    let path = PathBuf::from(configured);
+    assert!(
+        path.exists(),
+        "EVERTRANSCRIPT_SUMMARY_MODEL points at {}, which does not exist — \
+         a set-but-missing model must fail rather than skip, or this test \
+         reports green without loading anything",
+        path.display()
+    );
+    Some(path)
 }
 
 /// The sidecar binary, beside this test's own executable.
