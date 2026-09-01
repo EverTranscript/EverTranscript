@@ -357,3 +357,57 @@ async fn the_suggested_title_survives_the_chunked_path() {
         "the name should come from the reduced Summary, not a chunk's"
     );
 }
+
+/// Why Summary is unavailable, not merely that it is.
+///
+/// These four used to be one sentence. With Local preselected and a
+/// multi-gigabyte fetch running in the background, the likeliest case is a
+/// model that is *arriving* — and "not available" for a model with a gigabyte
+/// already on disk is the DECISIONS Q47 mistake: true, and useless.
+mod why_summary_is_unavailable {
+    use super::*;
+
+    async fn reason(dir: &std::path::Path) -> String {
+        let core = core_in(dir, "local").await;
+        let id = meeting_of(&core, 3).await;
+        core.summarize_meeting(&id)
+            .await
+            .expect_err("no model is staged, so this cannot succeed")
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_model_that_was_never_downloaded_says_so_and_names_its_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let message = reason(dir.path()).await;
+        assert!(
+            message.contains("not been downloaded") && message.contains("MB"),
+            "an absent model should say it is absent and how big it is, got {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_model_still_arriving_says_how_far_along_it_is() {
+        // The case Local-preselected makes common: a partial file on disk.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let models = dir.path().join("History").join(".data").join("models");
+        std::fs::create_dir_all(&models).expect("models dir");
+        // At the *partial* path, which is where an in-flight download lives.
+        // A short file at the final name is a different state — corrupt — and
+        // the Downloader is right to distinguish them: one is arriving, the
+        // other is wrong.
+        let entry = evertranscript_core::models::registry::SUMMARY_DEFAULT;
+        std::fs::write(
+            models.join(format!("{}.partial", entry.filename)),
+            vec![0u8; 4096],
+        )
+        .expect("partial");
+
+        let message = reason(dir.path()).await;
+        assert!(
+            message.contains("still downloading") && message.contains("of"),
+            "a partial model should report its progress rather than reading as absent, \
+             got {message}"
+        );
+    }
+}

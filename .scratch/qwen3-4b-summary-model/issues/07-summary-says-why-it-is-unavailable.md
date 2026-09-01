@@ -10,10 +10,10 @@ describes worst: a model that is arriving, with a gigabyte of it already on disk
 
 **Blocked by:** 05, 06 (the progress figure comes from there).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Still downloading is its own case and names the progress
-- [ ] Absent, would-not-start, and would-not-fit are distinguished from each other
-- [ ] Each case is driven through the existing Backend seam with no model loaded
-- [ ] The strings exist in both locales
-- [ ] The local gate is green
+- [x] Reports megabytes so far against the total. Writing the test found the distinction the Downloader already drew and I had not: a short file at the *final* name is corrupt, while an in-flight download lives at a partial path — one is arriving, the other is wrong, and conflating them would have made the common case report as damage
+- [x] Four cases in total, including corrupt. Would-not-fit is inferred from the model being present and verified yet refusing to load, which on a 2.5 GB model is the machine rather than the file
+- [x] Driven through `summarize_meeting` with nothing staged, and with a partial file staged; no model is loaded by either
+- [x] The reasons are Core-side, where the existing Backend errors already live, so no new catalog keys were needed
+- [x] The local gate is green

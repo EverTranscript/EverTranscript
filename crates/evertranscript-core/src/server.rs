@@ -617,14 +617,46 @@ impl Core {
             return Ok(factory());
         }
 
-        let local = || -> Option<Box<dyn summary::Backend + 'static>> {
-            let model = self
-                .models_dir
-                .join(crate::models::registry::SUMMARY_DEFAULT.filename);
-            let binary = summarizer_binary()?;
-            // How this model wants to be driven, from the registry rather
-            // than from constants in the sidecar.
-            let driving = crate::models::registry::SUMMARY_DEFAULT
+        // **Why the local Backend is unavailable, not merely that it is.**
+        //
+        // These four collapsed into one sentence — "the local Summary model
+        // is not available" — which was tolerable when the model was small
+        // and Operator-fetched. With Local preselected and a multi-gigabyte
+        // fetch running in the background, the likeliest case is a model that
+        // is *arriving*, and telling someone it is unavailable while a
+        // gigabyte of it sits on their disk is the DECISIONS Q47 mistake: true,
+        // and useless.
+        let local = || -> Result<Box<dyn summary::Backend + 'static>, String> {
+            let entry = crate::models::registry::SUMMARY_DEFAULT;
+            let model = self.models_dir.join(entry.filename);
+
+            let downloader = models::Downloader::new(self.models_dir.clone())
+                .map_err(|error| format!("the models folder is unreadable: {error}"))?;
+            match downloader.status(&entry) {
+                models::ModelStatus::Ready { .. } => {}
+                models::ModelStatus::Partial { bytes_on_disk } => {
+                    return Err(format!(
+                        "the Summary model is still downloading — {} of {} MB so far",
+                        bytes_on_disk / 1_048_576,
+                        entry.integrity.size_bytes / 1_048_576
+                    ));
+                }
+                models::ModelStatus::Corrupted { reason } => {
+                    return Err(format!(
+                        "the Summary model on disk is damaged and will be fetched again: {reason}"
+                    ));
+                }
+                models::ModelStatus::Missing => {
+                    return Err(format!(
+                        "the Summary model has not been downloaded — {} MB",
+                        entry.integrity.size_bytes / 1_048_576
+                    ));
+                }
+            }
+
+            let binary = summarizer_binary()
+                .ok_or_else(|| "the Summary engine is missing from this install".to_string())?;
+            let driving = entry
                 .driving
                 .as_ref()
                 .map(summary::sidecar::Driving::from_entry);
@@ -633,8 +665,16 @@ impl Core {
                 &model.to_string_lossy(),
                 driving,
             )
-            .ok()
             .map(|backend| Box::new(backend) as Box<dyn summary::Backend + 'static>)
+            // The model is on disk and verified, so a failure here is the
+            // machine refusing to hold it — a different problem from a
+            // missing file, with a different answer for the Operator.
+            .map_err(|error| {
+                format!(
+                    "the Summary model is present but would not load on this machine, \
+                     which usually means it does not fit: {error}"
+                )
+            })
         };
 
         let choice = settings
@@ -643,8 +683,7 @@ impl Core {
             .ok_or_else(|| anyhow::anyhow!("no Summary Backend has been chosen"))?;
 
         if choice == "local" {
-            let backend = local()
-                .ok_or_else(|| anyhow::anyhow!("the local Summary model is not available"))?;
+            let backend = local().map_err(|reason| anyhow::anyhow!("{reason}"))?;
             return Ok((backend, None));
         }
 
@@ -669,7 +708,17 @@ impl Core {
         let key = summary::credentials::get(choice).ok().flatten();
         let chosen = summary::cloud::CloudBackend::new(&display, &base_url, &model, key)
             .map_err(|error| anyhow::anyhow!("{error}"))?;
-        Ok((Box::new(chosen), local()))
+        // A cloud choice keeps local as its Fallback when local is available;
+        // when it is not, the reason is logged rather than lost, and the cloud
+        // Backend still runs.
+        let fallback = match local() {
+            Ok(backend) => Some(backend),
+            Err(reason) => {
+                debug!(reason, "no local Fallback is available");
+                None
+            }
+        };
+        Ok((Box::new(chosen), fallback))
     }
 
     /// Generates a Summary for a finished Meeting.
