@@ -13,8 +13,11 @@ use std::sync::Arc;
 
 use evertranscript_core::Core;
 use evertranscript_core::Server;
+use evertranscript_core::audio::fixture::FixtureSource;
+use evertranscript_core::audio::fixture::Step;
 use evertranscript_core::client::CoreClient;
 use evertranscript_core::transport;
+use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::HistorySearchResponse;
 use evertranscript_protocol::MeetingDeleteResponse;
 use evertranscript_protocol::MeetingDetailResponse;
@@ -40,6 +43,21 @@ impl TestCore {
         let history_dir = dir.path().join("History");
 
         let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
+        // **A script, not a microphone.** Without this the Core falls back to
+        // `LiveSource` (`server.rs`), so every `meeting/start` here opened a
+        // real capture device — which nothing in this file is about. It went
+        // unnoticed because the file was `#![cfg(unix)]` and the machine that
+        // ran it had audio hardware; the first Windows runner to see it
+        // returned `STATUS_ACCESS_VIOLATION` (DECISIONS Q55). Its siblings
+        // `capture_vertical` and `live_captions` already script their audio
+        // and passed on that same runner.
+        core.set_source_factory(Arc::new(|| {
+            Box::new(FixtureSource::new(vec![
+                Step::audio(AudioChannel::Mic, 400, 0.3),
+                Step::audio(AudioChannel::System, 400, -0.3),
+            ]))
+        }))
+        .await;
         let listener = transport::bind(&socket_path).await.expect("bind");
         let (events_tx, events_rx) = mpsc::channel(64);
         let shutdown = CancellationToken::new();

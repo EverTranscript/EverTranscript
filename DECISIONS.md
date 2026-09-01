@@ -803,3 +803,21 @@ Replaced with polling on the state the test is actually waiting for, up to a dea
 **Not established:** a real Windows audio stack. Every one of these drives `FixtureSource` and `FixtureDetectionSource`, so what is now covered on Windows is the Core, the store, the driver and the transport — not a microphone. Auto-Record, dual-channel capture and the device-churn path on physical Windows hardware remain exactly as unobserved as before, and remain the thing only an Operator's own machine can supply.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q55 — m1-walking-skeleton/02-storage-spine-meeting-lifecycle — finding
+
+**Question:** Removing the `cfg(unix)` gates (Q54) turned CI red on Windows only: `meeting_lifecycle` died with `STATUS_ACCESS_VIOLATION` two tests in, while macOS passed. What crashed?
+**Options considered:** re-gate the file / find what it does that its siblings do not
+**Chosen:** Found it. **`TestCore::start` set no source factory, so every `meeting/start` in that file opened a real capture device.** Scripted the audio, as its siblings already do.
+**Decided-by:** agent
+**Justification:** `Core` falls back to `LiveSource::new()` when nothing installs a factory (`server.rs`). `capture_vertical` and `live_captions` both script theirs and both passed on the same runner; `protocol_contract` installs none either but never starts a recording, so it was never exposed. `meeting_lifecycle` starts one in five of its seven tests, on a runner with no audio hardware.
+
+Nothing in the file is about capture — it says so itself, standing in for the audio with `std::fs::write(&audio_path, b"not really audio")`. It was opening a microphone to test that deleting a Meeting removes its rows.
+
+**Why nobody saw it, and why I could not reproduce it.** `#![cfg(unix)]` meant the only machines that ever ran this had audio hardware, and so does mine: with CI's exact flags, with `--test-threads=1` and `--nocapture`, with the diarization models present, it passed every time. The environment that finds this defect is one without a microphone, which is precisely what a CI runner is and precisely what the gate excluded. The fix is now visibly correct in a second way: the suite runs in 0.38 s instead of 0.66 s, because it is no longer opening a device.
+
+**What is not established is the more interesting half.** Whether the Core actually segfaults when capture starts with no input device is *evidenced but unproven* — the crash was reached through a test that should never have been opening a device, on a machine I cannot reproduce, and the access violation was not attributed to a frame. If it is real it is an ADR-0019 problem rather than a test problem: degradation is supposed to be honest, and an access violation is not a degradation. `capture_vertical`'s `BrokenSource` covers a source whose *reads* fail; it does not cover a device that is not there.
+
+Settling it needs one of two things: a Windows machine with no input device, or a test that deliberately opens live capture on the runner and asserts it degrades rather than dies. The second is cheap and belongs with the M2 criteria that already say Auto-Record and dual-channel capture are unobserved on physical Windows hardware — this is the same gap, reached from the other side.
+**Outcome:** applied
+**Ref:** (pending)
