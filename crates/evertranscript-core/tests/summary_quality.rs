@@ -78,9 +78,7 @@ const TIMESTAMP_END: &str = "] ";
 const MEASURE_ENV: &str = "EVERTRANSCRIPT_MEASURE_SUMMARY_QUALITY";
 
 fn model() -> Option<PathBuf> {
-    if std::env::var_os(MEASURE_ENV).is_none() {
-        return None;
-    }
+    std::env::var_os(MEASURE_ENV)?;
     let configured = std::env::var_os("EVERTRANSCRIPT_SUMMARY_MODEL")
         .expect("set EVERTRANSCRIPT_SUMMARY_MODEL to measure a model's quality");
     let path = PathBuf::from(configured);
