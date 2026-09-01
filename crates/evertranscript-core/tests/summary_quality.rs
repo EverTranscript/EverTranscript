@@ -78,8 +78,14 @@ const TIMESTAMP_END: &str = "] ";
 const MEASURE_ENV: &str = "EVERTRANSCRIPT_MEASURE_SUMMARY_QUALITY";
 
 fn model() -> Option<PathBuf> {
-    std::env::var_os(MEASURE_ENV)?;
+    std::env::var_os(MEASURE_ENV).filter(|value| !value.is_empty())?;
+    // **Empty is unset.** A workflow that supplies this conditionally sets it
+    // to the empty string on the platforms that skip, and `var_os` reports
+    // that as present — so the set-but-missing assertion below fired on the
+    // very platform meant to opt out. An empty path is not a path, which is
+    // the same thing ticket 01 settled for empty Meeting names.
     let configured = std::env::var_os("EVERTRANSCRIPT_SUMMARY_MODEL")
+        .filter(|value| !value.is_empty())
         .expect("set EVERTRANSCRIPT_SUMMARY_MODEL to measure a model's quality");
     let path = PathBuf::from(configured);
     assert!(

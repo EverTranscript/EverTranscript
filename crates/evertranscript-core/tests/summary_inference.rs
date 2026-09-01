@@ -47,7 +47,13 @@ Frank: Thanks. Then we can cut over on Friday morning.";
 /// pass DECISIONS Q43 had to go back and correct in two guarantee tests, and
 /// the correction is worth applying before it is earned rather than after.
 fn model() -> Option<PathBuf> {
-    let configured = std::env::var_os("EVERTRANSCRIPT_SUMMARY_MODEL")?;
+    // **Empty is unset.** A workflow that supplies this conditionally sets it
+    // to the empty string on the platforms that skip, and `var_os` reports
+    // that as present — so the set-but-missing assertion below fired on the
+    // very platform meant to opt out. An empty path is not a path, which is
+    // the same thing ticket 01 settled for empty Meeting names.
+    let configured =
+        std::env::var_os("EVERTRANSCRIPT_SUMMARY_MODEL").filter(|value| !value.is_empty())?;
     let path = PathBuf::from(configured);
     assert!(
         path.exists(),
