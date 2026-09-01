@@ -411,3 +411,54 @@ mod why_summary_is_unavailable {
         );
     }
 }
+
+/// A fresh install has a working Summary configuration without the Operator
+/// having to research a choice they have no basis for (ADR-0013 as amended).
+mod preselection {
+    use super::*;
+
+    async fn backend_of(core: &Core) -> Option<String> {
+        core.settings().await.summary_backend
+    }
+
+    #[tokio::test]
+    async fn a_fresh_install_gets_local_without_choosing_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        assert_eq!(backend_of(&core).await, None, "starts unchosen");
+
+        core.preselect_local_backend().await.expect("preselect");
+        assert_eq!(backend_of(&core).await.as_deref(), Some("local"));
+    }
+
+    #[tokio::test]
+    async fn an_operator_who_chose_cloud_is_never_reset_by_an_upgrade() {
+        // The failure that would matter: installing a newer version silently
+        // moving someone off the Backend they deliberately chose.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        core.update_settings(SettingsSetParams {
+            summary_backend: Some("openai".to_string()),
+            summary_cloud_warning_accepted: Some(true),
+            ..Default::default()
+        })
+        .await
+        .expect("choose cloud");
+
+        core.preselect_local_backend().await.expect("preselect");
+        assert_eq!(
+            backend_of(&core).await.as_deref(),
+            Some("openai"),
+            "a deliberate choice must survive"
+        );
+    }
+
+    #[tokio::test]
+    async fn preselecting_twice_changes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        core.preselect_local_backend().await.expect("first");
+        core.preselect_local_backend().await.expect("second");
+        assert_eq!(backend_of(&core).await.as_deref(), Some("local"));
+    }
+}

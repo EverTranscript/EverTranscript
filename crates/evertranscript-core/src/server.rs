@@ -1748,6 +1748,31 @@ impl Core {
     /// feature disabled.
     ///
     /// Returns what it decided, so a caller can say so rather than guess.
+    /// Records Local as the Summary Backend on a first start.
+    ///
+    /// **Preselected, not defaulted.** ADR-0013 was written when neither
+    /// option was obviously right — Local meant a model that might be absent
+    /// and, when present, invented action items. With a provisioned model
+    /// that measures well, an Operator who has no basis for the choice is
+    /// better served by a working configuration than by a disabled Continue.
+    ///
+    /// The value is *written* rather than inferred from absence, so a running
+    /// configuration still traces to something rather than to a `None` that
+    /// means two different things. Choosing Cloud is untouched: still
+    /// deliberate, still behind its one-time warning.
+    pub async fn preselect_local_backend(&self) -> Result<()> {
+        let mut settings = self.settings.lock().await;
+        // Never clobber a choice. An Operator who chose Cloud must not be
+        // reset to Local by installing a newer version.
+        if settings.summary_backend.is_some() {
+            return Ok(());
+        }
+        settings.summary_backend = Some("local".to_string());
+        settings.save_to(&self.settings_path)?;
+        info!("preselected the local Summary Backend for a fresh install");
+        Ok(())
+    }
+
     pub async fn provision_if_fresh(
         &self,
         cancel: CancellationToken,

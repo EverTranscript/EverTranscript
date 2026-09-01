@@ -350,6 +350,12 @@ fn run_daemon_owning_the_main_thread(runtime: tokio::runtime::Runtime) -> Result
         let core = Arc::clone(daemon.core());
         let cancel = shutdown.clone();
         runtime.spawn(async move {
+            // Preselect before provisioning: the two describe the same fresh
+            // install, and an Operator who opens Settings while the download
+            // runs should already see a Backend chosen.
+            if let Err(error) = core.preselect_local_backend().await {
+                tracing::warn!(%error, "could not record the preselected Backend");
+            }
             if let Err(error) = core.provision_if_fresh(cancel).await {
                 tracing::warn!(%error, "provisioning did not complete; models can be fetched later");
             }
