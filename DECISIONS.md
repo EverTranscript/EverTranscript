@@ -749,3 +749,21 @@ The guard is `real_speech_echo_is_cancelled_by_a_measurable_amount`, its bar rai
 **Not established:** any of this on a real speakerphone. The room is synthetic, which is the case Q1 already reserved DTLN for — "revisit if real speakerphone recordings show the linear filter failing on nonlinear speaker distortion, which synthetic fixtures cannot exhibit". That is still true and still untested.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q52 — m1-walking-skeleton/08-aec-dsp-quality — finding
+
+**Question:** Q50 concluded the speakerphone guard's failure "is not a regression", by elimination over `echo.rs`, `english_meeting.wav`, `aec.rs` and `dsp.rs`. That set omits `pipeline.rs`, `vad.rs` and `filters.rs` — six commits, and the code that decides what whisper is fed. Was something in there moving the number too?
+**Options considered:** accept the elimination / bisect the number on the shipping model
+**Chosen:** Bisected. There is a real, deterministic shift — and its cause is neither a regression nor anything in the ASR pipeline. **Adding the `hanconv` dependency, with no code change whatsoever, moves the measured fidelity from 70.3% to 64.9%.**
+**Decided-by:** agent
+**Justification:** On the shipping `large-v3-turbo`, the guard read 70.3% at `3b463f1` and 64.9% from `75426c8` onward — a clean split across seven commits, each measured twice, stable. So Q50's headline is right but its margin was thinner than it says: the guard did not only pass because tiny could not read the residual, it also passed on the shipping model, by 0.3 points.
+
+The cause was isolated by subtraction. Disabling the `t2s` normalisation at `75426c8` left it at 64.9%, so the filter is innocent; `hanconv::t2s` is byte-identical on the English in question, checked directly. Applying **only** `Cargo.toml` and `Cargo.lock` from that commit onto its parent — no source change, the dependency merely present — reproduces 64.9%. The lockfile diff is purely additive: `hanconv` and its transitive `ahash`, `getrandom`, `zerocopy`, `r-efi`, `wasip2`, `wit-bindgen`. Nothing near whisper.
+
+Clean speech is unmoved: English WER is 0.0% with and without. Only the heavily attenuated residual flips, which is the signature of an input sitting on a decision boundary being tipped by tiny numeric differences — plausibly alignment- or layout-dependent SIMD paths in ggml changing an accumulation order. **That mechanism is a hypothesis; the measurements above are not.**
+
+The consequence is methodological and outlives this test. **A WER threshold over a near-silent input is not a stable function of the product's logic** — it can move five points because a lockfile grew. Q50's replacement of that assertion with ERLE in decibels is therefore better founded than it claimed: ERLE cannot be moved by a dependency, and the WER stays printed rather than asserted. This entry exists so the next person who sees the number drift does not go looking for a regression in the pipeline, as I did.
+
+Q51's fix has since made the point moot for this fixture — the mic channel now transcribes to the empty string, 100% against the far end, zero leaked words where 64.9% left thirteen.
+**Outcome:** applied
+**Ref:** (pending)
