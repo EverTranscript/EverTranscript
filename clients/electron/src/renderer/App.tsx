@@ -834,6 +834,14 @@ function WritingPanel({ meetingId }: { meetingId: string }): React.JSX.Element {
         <h2 className="text-sm font-medium">{t("summary.title")}</h2>
         {meeting?.summary ? (
           <>
+            {meeting.summaryGaps ? (
+              /* Above the Summary, not below it: what follows is only as
+                 complete as the run that produced it, and a partial Summary
+                 must not be read as a complete one first. */
+              <p className="mt-2 rounded border border-[--color-line] px-2 py-1 text-xs text-[--color-ink-muted]">
+                <strong>{t("summary.incomplete")}</strong> {meeting.summaryGaps}
+              </p>
+            ) : null}
             <pre className="mt-2 whitespace-pre-wrap font-sans text-sm">
               {meeting.summary}
             </pre>

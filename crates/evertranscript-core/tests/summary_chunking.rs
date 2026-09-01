@@ -187,6 +187,84 @@ async fn one_failed_chunk_does_not_lose_the_whole_meeting() {
 }
 
 #[tokio::test]
+async fn a_partial_summary_says_so_in_the_record() {
+    // Ticket 03 tolerates the loss; this is where the Operator learns of it.
+    // The Core's log knows already, and the Operator cannot read the log.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core_in(dir.path(), "local").await;
+    let backend = Arc::new(std::sync::Mutex::new(Some(FakeBackend::scripted(
+        BackendIdentity::LocalSidecar {
+            model: "fake".into(),
+        },
+        vec![
+            Response::Text("# First\n\nBody.".into()),
+            Response::Fails(Failure::TimedOut),
+            Response::Text("# Rest\n\nBody.".into()),
+        ],
+    ))));
+    core.set_summary_backend_factory(Arc::new(move || {
+        (
+            Box::new(backend.lock().unwrap().take().expect("built once")),
+            None,
+        )
+    }));
+
+    let id = meeting_of(&core, 400).await;
+    core.summarize_meeting(&id).await.expect("summarize");
+
+    let meeting = core
+        .get_meeting(&id)
+        .await
+        .expect("get")
+        .expect("the Meeting")
+        .0;
+    let gaps = meeting
+        .summary_gaps
+        .expect("a Summary that lost a chunk must say so");
+    assert!(
+        gaps.contains("could not be summarized"),
+        "the note should say what happened, got {gaps}"
+    );
+
+    // And it has to reach the folder the Operator actually reads.
+    let mirror = meeting.mirror_filename.expect("a Mirror");
+    let body = std::fs::read_to_string(dir.path().join("History").join(&mirror))
+        .expect("the Mirror on disk");
+    assert!(
+        body.contains("This Summary is incomplete"),
+        "the Mirror must disclose the gap: {body}"
+    );
+}
+
+#[tokio::test]
+async fn a_complete_summary_says_nothing() {
+    // The other half, and the one that keeps the notice meaningful: a run
+    // that lost nothing must not carry a disclaimer.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core_in(dir.path(), "local").await;
+    core.set_summary_backend_factory(Arc::new(|| {
+        (
+            Box::new(FakeBackend::returning("# All of it\n\nBody.")),
+            None,
+        )
+    }));
+
+    let id = meeting_of(&core, 400).await;
+    core.summarize_meeting(&id).await.expect("summarize");
+
+    let meeting = core
+        .get_meeting(&id)
+        .await
+        .expect("get")
+        .expect("the Meeting")
+        .0;
+    assert_eq!(
+        meeting.summary_gaps, None,
+        "a complete Summary must not claim to be partial"
+    );
+}
+
+#[tokio::test]
 async fn a_failed_reduce_keeps_the_parts_rather_than_wasting_every_call_before_it() {
     // The parts are still a record of the meeting. Discarding them because the
     // last call timed out would waste every call before it.

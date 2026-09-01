@@ -22,7 +22,7 @@ use super::now_rfc3339;
 const MEETING_COLUMNS: &str = "id, started_at, ended_at, title, detected_app, \
                                mirror_filename, audio_path, audio_notes, \
                                calendar_event_id, calendar_attendees, notes, summary, \
-                               summary_backend, summary_generated_at";
+                               summary_backend, summary_generated_at, summary_gaps";
 
 fn row_to_meeting(row: &Row<'_>) -> rusqlite::Result<Meeting> {
     let started_at: String = row.get(1)?;
@@ -53,6 +53,7 @@ fn row_to_meeting(row: &Row<'_>) -> rusqlite::Result<Meeting> {
         summary: row.get(11)?,
         summary_backend: row.get(12)?,
         summary_generated_at: row.get(13)?,
+        summary_gaps: row.get(14)?,
     })
 }
 
@@ -82,6 +83,7 @@ pub fn set_summary(
     summary: &str,
     backend: &str,
     suggested_title: Option<&str>,
+    gaps: Option<&str>,
 ) -> Result<Meeting> {
     // One transaction, because the Suggested Title is part of what this
     // Summary produced. A Meeting named by a Summary it does not have would
@@ -91,8 +93,8 @@ pub fn set_summary(
     let now = now_rfc3339();
     let changed = transaction.execute(
         "UPDATE meetings SET summary = ?2, summary_backend = ?3, summary_generated_at = ?4, \
-         updated_at = ?4 WHERE id = ?1",
-        params![id, summary, backend, now],
+         summary_gaps = ?5, updated_at = ?4 WHERE id = ?1",
+        params![id, summary, backend, now, gaps],
     )?;
     if changed == 0 {
         anyhow::bail!("no Meeting with id {id}");
@@ -702,6 +704,7 @@ mod tests {
             "# Budget\n\nDeferred.",
             "Local (qwen2.5-3b)",
             None,
+            None,
         )
         .expect("summary");
 
@@ -723,7 +726,15 @@ mod tests {
             .expect("generation");
         acknowledge(&connection, &meeting.id, generation).expect("ack");
 
-        set_summary(&mut connection, &meeting.id, "# Summary", "Local", None).expect("summary");
+        set_summary(
+            &mut connection,
+            &meeting.id,
+            "# Summary",
+            "Local",
+            None,
+            None,
+        )
+        .expect("summary");
         assert!(
             dirty_meetings(&connection, 10)
                 .expect("dirty")

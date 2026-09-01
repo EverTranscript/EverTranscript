@@ -43,7 +43,13 @@ summary?: string,
  * got local quality is owed the reason (story 38); one who chose Local
  * is owed evidence that is what ran.
  */
-summaryBackend?: string, summaryGeneratedAt?: string, 
+summaryBackend?: string, 
+/**
+ * What this Summary could not cover, when chunks of the Meeting failed.
+ * Additive and optional (ADR-0028): a Client that predates it sees a
+ * Meeting exactly as before.
+ */
+summaryGaps?: string, summaryGeneratedAt?: string, 
 /**
  * The app detection attributed this Meeting to; the Mirror's slug
  * before a Title exists.

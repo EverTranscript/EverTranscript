@@ -811,16 +811,21 @@ impl Core {
         // Already scrubbed per part inside the run.
         let markdown = outcome.text.clone();
         let used = outcome.used.label();
-        if outcome.failed_chunks > 0 {
-            // Logged here, recorded beside the Summary in the next ticket. An
-            // Operator cannot read the Core's log, so this line is for whoever
-            // is debugging, not for the person whose record is incomplete.
+        // **What the Summary lost, in the record rather than only the log.**
+        // A Summary assembled from five chunks of six is a different thing
+        // from a complete one, and the Operator cannot read the Core's log.
+        let gaps = (outcome.failed_chunks > 0).then(|| {
             tracing::warn!(
                 failed = outcome.failed_chunks,
                 of = outcome.chunks,
                 "some chunks of this Meeting could not be summarized"
             );
-        }
+            format!(
+                "{} of {} parts of this meeting could not be summarized, \
+                 so this Summary does not cover all of it.",
+                outcome.failed_chunks, outcome.chunks
+            )
+        });
         if let Some(from) = &outcome.fell_back_from {
             // Never silent: an Operator who chose Cloud and received local
             // quality is owed the reason.
@@ -844,6 +849,7 @@ impl Core {
                     &stored,
                     &label,
                     suggested_title.as_deref(),
+                    gaps.as_deref(),
                 )
             })
             .await?;

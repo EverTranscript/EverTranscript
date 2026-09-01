@@ -287,6 +287,13 @@
             "null"
           ]
         },
+        "summaryGaps": {
+          "description": "What this Summary could not cover, when chunks of the Meeting failed.\nAdditive and optional (ADR-0028): a Client that predates it sees a\nMeeting exactly as before.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "summaryGeneratedAt": {
           "type": [
             "string",

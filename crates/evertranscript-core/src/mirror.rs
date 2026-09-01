@@ -154,6 +154,18 @@ pub fn render(meeting: &Meeting, segments: &[TranscriptSegment], names: &Speaker
     }
 
     out.push_str("## Summary\n\n");
+    // Before the Summary, for the same reason the capture notes sit before
+    // everything derived from the audio: what follows is only as complete as
+    // the run that produced it, and a partial Summary must not read like a
+    // complete one.
+    if let Some(gaps) = meeting
+        .summary_gaps
+        .as_deref()
+        .map(str::trim)
+        .filter(|gaps| !gaps.is_empty())
+    {
+        out.push_str(&format!("> **This Summary is incomplete.** {gaps}\n\n"));
+    }
     match meeting
         .summary
         .as_deref()
@@ -503,6 +515,7 @@ mod tests {
             mirror_filename: None,
             audio_path: Some(".data/audio/0199a1b2.m4a".to_string()),
             audio_notes: Vec::new(),
+            summary_gaps: None,
             calendar_event_id: None,
             calendar_attendees: Vec::new(),
         }

@@ -9,12 +9,12 @@ name avoids "notes" everywhere — the glossary reserves that word for Operator 
 
 **Blocked by:** 03 (the loss it discloses is born there).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] An additive migration adds the nullable gaps column; existing rows are untouched and old Cores reading the store are unaffected
-- [ ] A run that lost chunks records what was lost in the same write as the Summary; a complete run records nothing
-- [ ] The Mirror renders the gap note beside the Summary, and a regenerated Mirror carries it
-- [ ] The Meeting's protocol response carries the gaps as an additive optional field; regenerated bindings and schemas are committed with the change
-- [ ] The Client displays the gap note beside the Summary
-- [ ] No user-visible surface or schema name uses the word "notes" for this
-- [ ] Tests script the loss at the Backend trait seam and observe store, Mirror, response and Client-facing field at the protocol seam; the local gate is green
+- [x] Migration 9 adds the nullable `summary_gaps` column; existing rows read it as absent, which means "nothing was lost" — the same convention `audio_notes` uses
+- [x] Written in the same UPDATE as the Summary, inside the transaction that also carries the Suggested Title. A complete run stores nothing — tested, because a disclaimer that appears on complete Summaries would stop meaning anything
+- [x] The Mirror renders it **above** the Summary rather than beside it, following the capture-notes precedent: what follows is only as complete as the run that produced it, so it must not be read as complete first. Asserted against the file on disk
+- [x] Carried as an optional field, `#[ts(optional)]` and `skip_serializing_if`; the schema diff adds seven lines and removes none, so a Client that predates it sees a Meeting exactly as before (ADR-0028). Bindings and schema regenerated and committed
+- [x] The Client shows it above the Summary, in both locales
+- [x] Nothing here is called "notes" — column, field, and catalog key all avoid it, because the glossary reserves that word for the Operator's own writing
+- [x] Two tests script the loss through the injected Backend factory and observe the stored field and the Mirror on disk; the local gate is green

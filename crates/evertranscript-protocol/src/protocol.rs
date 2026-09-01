@@ -572,6 +572,12 @@ pub struct Meeting {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub summary_backend: Option<String>,
+    /// What this Summary could not cover, when chunks of the Meeting failed.
+    /// Additive and optional (ADR-0028): a Client that predates it sees a
+    /// Meeting exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary_gaps: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub summary_generated_at: Option<String>,

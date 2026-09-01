@@ -267,6 +267,21 @@ const MIGRATIONS: &[&str] = &[
         ON CONFLICT (meeting_id) DO UPDATE SET generation = generation + 1;
     END;
     "#,
+    // 9 — what a Summary lost (summary-chunking-and-suggested-title/04).
+    //
+    // A Summary assembled from five chunks of six is a different thing from a
+    // complete one, and until now only the Core's log knew the difference —
+    // which the Operator cannot read. This is the audio-notes pattern applied
+    // one layer up: the record states its own incompleteness where the person
+    // holding it will see it.
+    //
+    // **Deliberately not called `summary_notes`.** Notes are the Operator's
+    // own writing (ADR-0018) and the glossary reserves the word; a
+    // machine-written column wearing it would be the vocabulary collision
+    // CONTEXT.md exists to prevent.
+    r#"
+    ALTER TABLE meetings ADD COLUMN summary_gaps TEXT;
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.
