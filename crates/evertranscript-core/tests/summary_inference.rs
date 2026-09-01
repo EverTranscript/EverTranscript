@@ -84,6 +84,10 @@ fn sidecar() -> Option<PathBuf> {
 /// for work that did not happen — which is the exact shape of the vacuous
 /// guarantee tests DECISIONS Q43 had to correct.
 fn spawn() -> Option<SidecarBackend> {
+    // One model load per test in this binary was affordable at 491 MB and is
+    // not at 2.5 GB — see the CI note about two loading at once. The tests
+    // below each want their own backend because one of them deliberately
+    // shuts it down, so the saving here is serialisation rather than sharing.
     let model = model()?;
     let binary = sidecar().expect(
         "EVERTRANSCRIPT_SUMMARY_MODEL is set, so the sidecar was meant to run, \
