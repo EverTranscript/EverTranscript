@@ -767,3 +767,19 @@ The consequence is methodological and outlives this test. **A WER threshold over
 Q51's fix has since made the point moot for this fixture — the mic channel now transcribes to the empty string, 100% against the far end, zero leaked words where 64.9% left thirteen.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q53 — m5-onboarding/09-m5-closeout — finding
+
+**Question:** Q47 found that the macOS artifact had been verified for a year in a way that skipped what an Operator actually receives — `unzip` sets no quarantine, and the real attribute makes Gatekeeper kill the Core. CI's Windows install had the mirror-image gap: it runs an installer built minutes earlier, which has never crossed a network. What does a *downloaded* one do?
+**Options considered:** assume NSIS behaves like the macOS bundle / mark the installer and run it
+**Chosen:** Marked it `ZoneId=3` and ran it. **Windows refuses to launch it at all** — `ERROR_CANCELLED`, "The operation was canceled by the user", cancelled by the absence of one. And then the more useful half: unlike macOS, **the mark does not reach the installed binaries**.
+**Decided-by:** agent
+**Justification:** Two facts, and the second is the one worth having. Windows raises the Attachment Manager prompt for an unsigned file from the Internet zone; a session with nobody to answer it gets the cancellation. A real Operator sees SmartScreen's "Windows protected your PC" and clicks More info → Run anyway. That is the gate, it is a consequence of shipping unsigned rather than a defect, and the job now *asserts* the refusal — a marked unsigned installer that one day launches silently is a thing to know about.
+
+After `Unblock-File` — the same gesture as the Unblock checkbox in file properties — the installer exits 0 and both binaries land with **no zone stream on either**. So NSIS extraction does not propagate the mark, and the installed Core runs freely. macOS is the opposite: quarantine reaches inside the bundle and the Core is SIGKILLed until the bundle is approved.
+
+That asymmetry retroactively justifies a decision Q47 made on a guess. `classifyCoreExit` returns `core.start.killedQuarantine` only on macOS and a platform-neutral `core.start.killed` elsewhere, and the reason given was that "the advice differs by platform". It does, and now for a measured reason rather than an intuition: telling a Windows Operator to clear a quarantine flag would have sent them after something that was never set.
+
+The pattern is the one this milestone keeps repeating and is worth naming plainly: **every check of a release artifact so far has verified the file we built rather than the file someone receives.** Q44 was the packaged binary, Q47 the macOS attribute, this the Windows one. Each was found by making CI do the thing rather than describe it.
+**Outcome:** applied
+**Ref:** (pending)

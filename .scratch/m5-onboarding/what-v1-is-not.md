@@ -42,9 +42,14 @@ from somewhere else, and each is already labelled that way in its ticket.
   record. Nobody has tried.
 - **Signing and notarization.** Both installers now build in CI — a macOS
   `.app` with the Core running from inside it, and a 94 MB NSIS installer
-  built on Windows — and both are **unsigned**. Needs a Developer ID
-  certificate, an App Store Connect key, and a Windows code-signing
-  certificate. Those are the Operator's and should not live here.
+  built on Windows — and both are **unsigned**. What that costs is now
+  measured rather than described (Q47, Q53): a downloaded macOS bundle has
+  its Core killed by Gatekeeper until the app is opened once from Finder,
+  and a downloaded Windows installer will not launch at all until SmartScreen
+  is clicked through. Both are one gesture, both look like the product being
+  broken, and both go away with certificates — a Developer ID certificate, an
+  App Store Connect key, and a Windows code-signing certificate. Those are
+  the Operator's and should not live here.
 - **Installing an update.** electron-updater is wired and CI produces its
   `latest.yml` feed, but nothing has installed an update: doing so needs a
   signed release to install.
