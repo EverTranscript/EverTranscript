@@ -160,8 +160,11 @@ pub fn scrub(output: &str) -> String {
 
 /// The title, per the catalog's output contract: the first `#` heading.
 ///
-/// This is the transcript-derived suggestion the M2 title chain reserved for
-/// this milestone — manual > calendar > **this** > detected-app placeholder.
+/// The transcript-derived suggestion in the Title Chain — manual > calendar >
+/// **this** > detected-app placeholder (ADR-0030 as amended by ADR-0036). The
+/// summarize path offers whatever this returns to the store, which applies it
+/// only where the Meeting has no name: the precedence is a `WHERE` clause
+/// rather than a rule this function has to know.
 pub fn title_from(summary: &str) -> Option<String> {
     summary
         .lines()

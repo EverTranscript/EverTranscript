@@ -77,19 +77,41 @@ pub fn set_notes(connection: &Connection, id: &str, notes: &str) -> Result<Meeti
 
 /// Records a generated Summary, and which Backend produced it.
 pub fn set_summary(
-    connection: &Connection,
+    connection: &mut Connection,
     id: &str,
     summary: &str,
     backend: &str,
+    suggested_title: Option<&str>,
 ) -> Result<Meeting> {
-    let changed = connection.execute(
+    // One transaction, because the Suggested Title is part of what this
+    // Summary produced. A Meeting named by a Summary it does not have would
+    // be a record disagreeing with itself, and the crash between two separate
+    // writes is exactly how that happens.
+    let transaction = connection.transaction()?;
+    let now = now_rfc3339();
+    let changed = transaction.execute(
         "UPDATE meetings SET summary = ?2, summary_backend = ?3, summary_generated_at = ?4, \
          updated_at = ?4 WHERE id = ?1",
-        params![id, summary, backend, now_rfc3339()],
+        params![id, summary, backend, now],
     )?;
     if changed == 0 {
         anyhow::bail!("no Meeting with id {id}");
     }
+
+    // **`WHERE title IS NULL` is the whole precedence rule.** Slots one and
+    // two of the Title Chain — a person's word and the calendar's — are
+    // already in this column, so declining to overwrite it is what makes the
+    // suggestion rank third, structurally rather than by a check somebody
+    // could forget. It is also what makes the write once-only: the second
+    // Summary finds a name and leaves it alone.
+    if let Some(title) = suggested_title {
+        transaction.execute(
+            "UPDATE meetings SET title = ?2, updated_at = ?3 WHERE id = ?1 AND title IS NULL",
+            params![id, title, now],
+        )?;
+    }
+    transaction.commit()?;
+
     get(connection, id)?.ok_or_else(|| anyhow::anyhow!("the Meeting vanished after summarizing"))
 }
 
@@ -672,13 +694,14 @@ mod tests {
     fn a_summary_records_which_backend_produced_it() {
         // Story 38: an Operator who chose Cloud and received local quality
         // is owed the reason, and one who chose Local is owed evidence.
-        let connection = connection();
+        let mut connection = connection();
         let meeting = start(&connection, None, None).expect("meeting");
         let after = set_summary(
-            &connection,
+            &mut connection,
             &meeting.id,
             "# Budget\n\nDeferred.",
             "Local (qwen2.5-3b)",
+            None,
         )
         .expect("summary");
 
@@ -689,7 +712,7 @@ mod tests {
 
     #[test]
     fn generating_a_summary_marks_the_mirror_dirty_too() {
-        let connection = connection();
+        let mut connection = connection();
         let meeting = start(&connection, None, None).expect("meeting");
         let generation: i64 = connection
             .query_row(
@@ -700,7 +723,7 @@ mod tests {
             .expect("generation");
         acknowledge(&connection, &meeting.id, generation).expect("ack");
 
-        set_summary(&connection, &meeting.id, "# Summary", "Local").expect("summary");
+        set_summary(&mut connection, &meeting.id, "# Summary", "Local", None).expect("summary");
         assert!(
             dirty_meetings(&connection, 10)
                 .expect("dirty")

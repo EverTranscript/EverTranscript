@@ -117,6 +117,10 @@ pub struct Core {
     /// How to open transcription. Overridden in tests so the caption path
     /// can be driven without a 900 MB model.
     transcriber_factory: Mutex<Option<TranscriberFactory>>,
+    /// A std mutex rather than a tokio one: `backends` is sync, and making it
+    /// async to read a test override would push `.await` through a call path
+    /// that has no other reason for it.
+    summary_backend_factory: std::sync::Mutex<Option<SummaryBackendFactory>>,
     /// This installation's settings, including the Briefing acknowledgment
     /// that gates all capture.
     settings: Mutex<Settings>,
@@ -208,6 +212,17 @@ const NOTIFICATION_CAPACITY: usize = 512;
 
 /// Produces a capture source for a new Meeting.
 pub type SourceFactory = Arc<dyn Fn() -> Box<dyn audio::AudioSource> + Send + Sync>;
+
+/// Produces the Backends a Summary run will use: the chosen one, and the
+/// local one to fall back to.
+///
+/// The same shape as [`TranscriberFactory`] and [`SourceFactory`], and for the
+/// same reason: a test cannot drive a real Backend without half a gigabyte of
+/// model or a network call, and the behaviour worth testing here — which
+/// Backend answered, what a failed chunk does, what the record ends up
+/// holding — is about everything *around* generation rather than generation
+/// itself.
+pub type SummaryBackendFactory = Arc<dyn Fn() -> ChosenBackends + Send + Sync>;
 
 /// Persists transcript segments as they are produced, and announces them.
 async fn write_segments(
@@ -335,6 +350,7 @@ impl Core {
             source_factory: Mutex::new(live_source_factory()),
             notifications: broadcast::channel(NOTIFICATION_CAPACITY).0,
             transcriber_factory: Mutex::new(None),
+            summary_backend_factory: std::sync::Mutex::new(None),
             settings: Mutex::new(Settings::load_from(&settings_path)),
             settings_path,
             models_dir,
@@ -572,6 +588,15 @@ impl Core {
     /// constructing it here rather than on demand inside the failure path
     /// means there is no branch where a failure could reach for a cloud one.
     fn backends(&self, settings: &crate::settings::Settings) -> Result<ChosenBackends> {
+        if let Some(factory) = self
+            .summary_backend_factory
+            .lock()
+            .expect("the summary backend factory mutex is never held across a panic")
+            .as_ref()
+        {
+            return Ok(factory());
+        }
+
         let local = || -> Option<Box<dyn summary::Backend + 'static>> {
             let model = self
                 .models_dir
@@ -705,14 +730,29 @@ impl Core {
             tracing::warn!(from = %from, to = %used, "the Summary Backend fell back");
         }
 
+        // The Title Chain's third slot (ADR-0030 as amended by ADR-0036). The
+        // heading is only ever a *suggestion*: the store applies it where the
+        // name is still absent, so a person's word and the calendar's both
+        // outrank it without this call site having to know the rule.
+        let suggested_title = summary::prompt::title_from(&markdown);
+
         let id = meeting_id.to_string();
         let stored = markdown.clone();
         let label = used.clone();
         self.store
             .write(move |connection| {
-                crate::store::meetings::set_summary(connection, &id, &stored, &label)
+                crate::store::meetings::set_summary(
+                    connection,
+                    &id,
+                    &stored,
+                    &label,
+                    suggested_title.as_deref(),
+                )
             })
             .await?;
+        // The Mirror's filename follows the title, so a Meeting the Summary
+        // just named needs its file renamed before anyone looks.
+        self.mirror.rebuild_pending().await?;
         self.mirror_wake.notify_one();
         Ok(markdown)
     }
@@ -1096,6 +1136,15 @@ impl Core {
 
     /// Replaces the capture source. Tests use this to drive the whole
     /// pipeline from a script instead of a microphone.
+    /// Replaces the Backends a Summary run will use. Tests only.
+    pub fn set_summary_backend_factory(&self, factory: SummaryBackendFactory) {
+        *self
+            .summary_backend_factory
+            .lock()
+            .expect("the summary backend factory mutex is never held across a panic") =
+            Some(factory);
+    }
+
     pub async fn set_source_factory(&self, factory: SourceFactory) {
         *self.source_factory.lock().await = factory;
     }
