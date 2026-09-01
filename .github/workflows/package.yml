@@ -203,7 +203,23 @@ jobs:
 
           # /S is NSIS's silent flag; the installer is per-user, so this
           # needs no elevation.
-          Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
+          #
+          # Wrapped, because the first marked run died here with no message at
+          # all: a bare exit 1 says a marked installer was refused, but not by
+          # what, and "Windows blocked it" is a claim that needs the error.
+          try {
+            $run = Start-Process -FilePath $installer.FullName -ArgumentList '/S' `
+              -Wait -PassThru -ErrorAction Stop
+            Write-Host "installer exit code: $($run.ExitCode)"
+            if ($run.ExitCode -ne 0) {
+              throw "the marked installer refused to install, exit $($run.ExitCode)"
+            }
+          } catch {
+            Write-Host "Start-Process failed on a marked installer:"
+            Write-Host "  $($_.Exception.GetType().FullName)"
+            Write-Host "  $($_.Exception.Message)"
+            throw
+          }
           $root = Join-Path $env:LOCALAPPDATA 'Programs\EverTranscript'
           if (-not (Test-Path $root)) { throw "installer wrote nothing to $root" }
 
