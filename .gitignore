@@ -23,6 +23,9 @@ node_modules
 
 # build
 dist/
+# Compiled main-process tests. A separate output dir so electron-builder,
+# which ships `dist/**/*`, never packages test code.
+dist-test/
 build/
 out/
 storybook-static/

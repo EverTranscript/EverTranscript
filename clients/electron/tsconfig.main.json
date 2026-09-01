@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "CommonJS",
     "moduleResolution": "node",
     "strict": true,
@@ -12,11 +14,22 @@
     "esModuleInterop": true,
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node", "electron"],
+    "types": [
+      "node",
+      "electron"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@protocol/*": ["src/protocol/*"]
+      "@protocol/*": [
+        "src/protocol/*"
+      ]
     }
   },
-  "include": ["src/main/**/*", "src/preload/**/*"]
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*"
+  ],
+  "exclude": [
+    "src/**/*.test.ts"
+  ]
 }

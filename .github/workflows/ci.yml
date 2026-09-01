@@ -168,6 +168,12 @@ jobs:
       - name: Typecheck
         run: pnpm -C clients/electron typecheck
 
+      # The main process is not only typechecked. `locateCore` decides
+      # whether a packaged Client can find the Core it shipped with, and it
+      # shipped wrong once already (Q44) because nothing here ran it.
+      - name: Tests
+        run: pnpm -C clients/electron test
+
       - name: Build
         run: pnpm -C clients/electron build
 

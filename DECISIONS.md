@@ -652,3 +652,17 @@ Numbers for the bound, measured rather than guessed. The two inference tests tak
 CI gets `timeout-minutes` too — 60 on the job, 45 on the `Tests` step — and that is worth keeping **despite** the false alarm rather than because of it. GitHub's default is six hours of silence, which was a reasonable default while this job only compiled and ran fast tests and stopped being one when it started loading a real model and supervising a child to do it. The step is tighter than the job because it holds the unbounded work and because failing there names the step instead of cancelling the job out from under it.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q46 — m5-onboarding/09-m5-closeout — finding
+
+**Question:** Q44 changed how the Client finds the Core — the search that decides whether a fresh install works at all — and shipped it on reasoning. What actually ran that code?
+**Options considered:** leave it to the clean-machine install / make it testable and test it
+**Chosen:** Nothing ran it. **The Electron Client had no test runner and no test files**, so `coreBinary()` was typechecked and never executed. Extracted the search into `core-location.ts`, added `node --test` (built into the Node CI already uses, so no dependency), and wrote ten tests for it.
+**Decided-by:** agent
+**Justification:** CI's packaging guard proves the binary is *in* the artifact. It says nothing about whether the Client would *find* it — and confusing those two claims is precisely what Q44 was about, so repeating the confusion one layer up would have been the same mistake twice. The fix inverted a preference order on the strength of an argument about ADR-0016, which is exactly the kind of change that looks obviously right and is worth one execution before it reaches an Operator.
+
+**The suite was checked against a mutant rather than trusted because it was green**: reverting the order so `PATH` wins again — the pre-Q44 behaviour — fails `the bundle's own Core beats one on PATH` and nothing else. A test that has never failed has not been shown to test anything, and this project has now twice shipped a check that passed vacuously (Q43's `EVERTRANSCRIPT_MODELS_DIR`, and a guarantee test whose name promised a Summary it never asked for).
+
+Two details worth keeping. `node --test <dir>` executes every compiled module in it, and `index.js` calls into Electron at import time, so the runner is pointed at `*.test.js`. And tests compile to `dist-test/` rather than `dist/`, because electron-builder ships `dist/**/*` and would otherwise have packaged test code into the product — verified by building and finding zero `*.test.js` in the bundle rather than by assuming the glob.
+**Outcome:** applied
+**Ref:** (pending)

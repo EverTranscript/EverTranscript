@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.main.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "noEmit": false
+  },
+  "include": [
+    "src/main/**/*",
+    "src/preload/**/*"
+  ],
+  "exclude": []
+}

@@ -40,5 +40,10 @@ git diff --exit-code -- \
 echo "== client =="
 pnpm -C clients/electron typecheck
 
+echo "== client tests =="
+# The main process has logic worth running, not just typechecking: the Core
+# search decides whether a fresh install works at all (DECISIONS Q44).
+pnpm -C clients/electron test
+
 echo
 echo "all checks passed"
