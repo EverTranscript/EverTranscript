@@ -187,6 +187,20 @@ jobs:
           if (-not $installer) { throw "no installer to install" }
           Write-Host "installing $($installer.Name)"
 
+          # **Marked as downloaded, because that is what an Operator has.**
+          # A file built here has never crossed a network and carries none of
+          # what Windows attaches to one that has. The macOS half of this was
+          # verified for a year by extracting with `unzip`, which does not set
+          # `com.apple.quarantine` — and when the real attribute was finally
+          # applied, Gatekeeper killed the Core outright (DECISIONS Q47). This
+          # is that test's Windows twin: ZoneId=3 is the Internet zone, the
+          # mark a browser writes.
+          Set-Content -Path "$($installer.FullName):Zone.Identifier" `
+            -Value "[ZoneTransfer]`r`nZoneId=3"
+          $mark = Get-Content -Path "$($installer.FullName):Zone.Identifier" -ErrorAction SilentlyContinue
+          if (-not $mark) { throw "the mark-of-the-web did not stick; this test would prove nothing" }
+          Write-Host "installer marked as downloaded from the Internet zone"
+
           # /S is NSIS's silent flag; the installer is per-user, so this
           # needs no elevation.
           Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait
@@ -204,9 +218,24 @@ jobs:
             }
           }
 
+          # Did the mark reach what was installed? On macOS it does, and it
+          # is what kills the Core. Reported either way rather than assumed,
+          # because "NSIS does not propagate it" is exactly the kind of
+          # reasoning this job exists to replace.
+          foreach ($binary in @($core, $sidecar)) {
+            $inherited = Get-Content -Path "${binary}:Zone.Identifier" -ErrorAction SilentlyContinue
+            $name = Split-Path $binary -Leaf
+            if ($inherited) {
+              Write-Host "  $name carries the mark of the web"
+            } else {
+              Write-Host "  $name has no mark"
+            }
+          }
+
           # The Core must run from where it was installed. A package that
           # ships a binary the OS refuses to launch is a package that
-          # installs nothing.
+          # installs nothing. If the mark did propagate, this is where
+          # Windows would refuse — the way macOS did.
           $version = & $core --version
           Write-Host "installed Core reports: $version"
           if (-not $version) { throw "the installed Core produced no output" }
