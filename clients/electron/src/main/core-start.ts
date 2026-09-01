@@ -13,7 +13,7 @@
  * thirty-second fix the Operator can do.
  *
  * Pure and separate so it can be run by a test. The Client had no test runner
- * until Q46, and the lesson there was that a change to the start path which
+ * until Q49, and the lesson there was that a change to the start path which
  * looks obviously right is exactly the kind worth executing once.
  */
 

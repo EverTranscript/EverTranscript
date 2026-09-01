@@ -653,20 +653,6 @@ CI gets `timeout-minutes` too — 60 on the job, 45 on the `Tests` step — and 
 **Outcome:** applied
 **Ref:** (pending)
 
-## Q46 — m5-onboarding/09-m5-closeout — finding
-
-**Question:** Q44 changed how the Client finds the Core — the search that decides whether a fresh install works at all — and shipped it on reasoning. What actually ran that code?
-**Options considered:** leave it to the clean-machine install / make it testable and test it
-**Chosen:** Nothing ran it. **The Electron Client had no test runner and no test files**, so `coreBinary()` was typechecked and never executed. Extracted the search into `core-location.ts`, added `node --test` (built into the Node CI already uses, so no dependency), and wrote ten tests for it.
-**Decided-by:** agent
-**Justification:** CI's packaging guard proves the binary is *in* the artifact. It says nothing about whether the Client would *find* it — and confusing those two claims is precisely what Q44 was about, so repeating the confusion one layer up would have been the same mistake twice. The fix inverted a preference order on the strength of an argument about ADR-0016, which is exactly the kind of change that looks obviously right and is worth one execution before it reaches an Operator.
-
-**The suite was checked against a mutant rather than trusted because it was green**: reverting the order so `PATH` wins again — the pre-Q44 behaviour — fails `the bundle's own Core beats one on PATH` and nothing else. A test that has never failed has not been shown to test anything, and this project has now twice shipped a check that passed vacuously (Q43's `EVERTRANSCRIPT_MODELS_DIR`, and a guarantee test whose name promised a Summary it never asked for).
-
-Two details worth keeping. `node --test <dir>` executes every compiled module in it, and `index.js` calls into Electron at import time, so the runner is pointed at `*.test.js`. And tests compile to `dist-test/` rather than `dist/`, because electron-builder ships `dist/**/*` and would otherwise have packaged test code into the product — verified by building and finding zero `*.test.js` in the bundle rather than by assuming the glob.
-**Outcome:** applied
-**Ref:** (pending)
-
 ## Q47 — m5-onboarding/09-m5-closeout — finding
 
 **Question:** The clean-machine criterion needs a person. But a clean machine differs from this one in a way nothing had tested: a downloaded artifact carries `com.apple.quarantine`, and these builds are unsigned. What does an Operator's copy actually do?
@@ -677,7 +663,7 @@ Two details worth keeping. `node --test <dir>` executes every compiled module in
 
 The product-visible defect is in the Client. `child.on("error")` fires when a spawn *fails*; it does not fire when a spawn succeeds and the process is killed a moment later, so a quarantined install reported only "no Core is listening" — true, and useless, when the cause has a thirty-second fix. `classifyCoreExit` now distinguishes a signal death from a refusal, and macOS gets a message naming quarantine and the Finder gesture that clears it.
 
-**And the fix's own premise was wrong until it was measured.** The first version claimed the Core exits 0 when another Core already holds the socket, and treated that as the case worth staying quiet about. It exits **1**, with `another EverTranscript Core is already listening` — so the code was silent about a case that does not occur and would have spoken about the ordinary one. It is harmless only because the caller reaches the message solely after every connection attempt has failed, which means the socket, not the exit code, is the authority. The comment now says that, because the next person to read it would otherwise inherit the same false belief. Three checked assumptions this session have gone the same way: `cargo test --workspace` not building the sidecar (Q45), `node --test <dir>` running non-test modules (Q46), and this.
+**And the fix's own premise was wrong until it was measured.** The first version claimed the Core exits 0 when another Core already holds the socket, and treated that as the case worth staying quiet about. It exits **1**, with `another EverTranscript Core is already listening` — so the code was silent about a case that does not occur and would have spoken about the ordinary one. It is harmless only because the caller reaches the message solely after every connection attempt has failed, which means the socket, not the exit code, is the authority. The comment now says that, because the next person to read it would otherwise inherit the same false belief. Three checked assumptions this session have gone the same way: `cargo test --workspace` not building the sidecar (Q45), `node --test <dir>` running non-test modules (Q49), and this.
 **Outcome:** applied
 **Ref:** (pending)
 
@@ -700,5 +686,20 @@ Second, `--nocapture`. Cargo swallows a passing test's stdout, so without it thi
 Third, the model is verified by **crc32 and size, not sha256**, because `WHISPER_DEFAULT` carries `sha256: None` and `crc32: Some(3_055_274_469)`. Checking a number the registry does not hold would mean inventing a second source of truth for the same artifact.
 
 **Not established: the numbers.** This makes the measurement run; it does not yet say what it reports. The M1 close-out recorded WER 2.5% on English and a bilingual CER measured on the tiny model, both by hand — whether the registered large-v3-turbo reproduces that on a runner, on either platform, is what the next green run will say. The crc32 helper is also the one piece not executed locally: no Python on this machine. It fails closed — an unusable interpreter is diagnosed and a missing one reddens the job rather than passing it.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q49 — m5-onboarding/09-m5-closeout — finding
+
+**Question:** Q44 changed how the Client finds the Core — the search that decides whether a fresh install works at all — and shipped it on reasoning. What actually ran that code?
+**Options considered:** leave it to the clean-machine install / make it testable and test it
+**Chosen:** Nothing ran it. **The Electron Client had no test runner and no test files**, so `coreBinary()` was typechecked and never executed. Extracted the search into `core-location.ts`, added `node --test` (built into the Node CI already uses, so no dependency), and wrote ten tests for it.
+**Decided-by:** agent
+**Justification:** CI's packaging guard proves the binary is *in* the artifact. It says nothing about whether the Client would *find* it — and confusing those two claims is precisely what Q44 was about, so repeating the confusion one layer up would have been the same mistake twice. The fix inverted a preference order on the strength of an argument about ADR-0016, which is exactly the kind of change that looks obviously right and is worth one execution before it reaches an Operator.
+
+**The suite was checked against a mutant rather than trusted because it was green**: reverting the order so `PATH` wins again — the pre-Q44 behaviour — fails `the bundle's own Core beats one on PATH` and nothing else. A test that has never failed has not been shown to test anything, and this project has now twice shipped a check that passed vacuously (Q43's `EVERTRANSCRIPT_MODELS_DIR`, and a guarantee test whose name promised a Summary it never asked for).
+
+Two details worth keeping. `node --test <dir>` executes every compiled module in it, and `index.js` calls into Electron at import time, so the runner is pointed at `*.test.js`. And tests compile to `dist-test/` rather than `dist/`, because electron-builder ships `dist/**/*` and would otherwise have packaged test code into the product — verified by building and finding zero `*.test.js` in the bundle rather than by assuming the glob.
+**Numbering:** filed as Q46 and renumbered. Another session had already taken Q46 two commits earlier, and this was appended with the number read before that landed — an append-only journal is exactly where a duplicate identifier does damage, because every later reference to "Q46" becomes ambiguous. Renumbered here rather than in the other entry, which was first.
 **Outcome:** applied
 **Ref:** (pending)
