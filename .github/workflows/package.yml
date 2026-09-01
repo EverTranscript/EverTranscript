@@ -207,18 +207,37 @@ jobs:
           # Wrapped, because the first marked run died here with no message at
           # all: a bare exit 1 says a marked installer was refused, but not by
           # what, and "Windows blocked it" is a claim that needs the error.
+          # **First: the marked installer must be refused.** Windows raises the
+          # Attachment Manager prompt for an unsigned file from the Internet
+          # zone, and a session with nobody to answer it gets ERROR_CANCELLED
+          # — "The operation was canceled by the user", cancelled by the
+          # absence of one. An Operator sees SmartScreen's "Windows protected
+          # your PC" and clicks through More info → Run anyway.
+          #
+          # Asserted rather than merely observed: if a future change makes a
+          # marked installer launch silently, that is a thing to know.
+          $refused = $false
           try {
-            $run = Start-Process -FilePath $installer.FullName -ArgumentList '/S' `
-              -Wait -PassThru -ErrorAction Stop
-            Write-Host "installer exit code: $($run.ExitCode)"
-            if ($run.ExitCode -ne 0) {
-              throw "the marked installer refused to install, exit $($run.ExitCode)"
-            }
+            Start-Process -FilePath $installer.FullName -ArgumentList '/S' `
+              -Wait -ErrorAction Stop
           } catch {
-            Write-Host "Start-Process failed on a marked installer:"
-            Write-Host "  $($_.Exception.GetType().FullName)"
-            Write-Host "  $($_.Exception.Message)"
-            throw
+            $refused = $true
+            Write-Host "marked installer refused, as it should be: $($_.Exception.Message)"
+          }
+          if (-not $refused) {
+            throw "an unsigned installer marked as downloaded ran without a prompt"
+          }
+
+          # **Then the Operator's gesture.** Unblock-File strips the zone
+          # stream, which is what the Unblock checkbox in file properties and
+          # SmartScreen's Run anyway both amount to. Everything after this
+          # measures the product; everything before it measured the gate.
+          Unblock-File -Path $installer.FullName
+          $run = Start-Process -FilePath $installer.FullName -ArgumentList '/S' `
+            -Wait -PassThru -ErrorAction Stop
+          Write-Host "installer exit code after unblocking: $($run.ExitCode)"
+          if ($run.ExitCode -ne 0) {
+            throw "the installer failed, exit $($run.ExitCode)"
           }
           $root = Join-Path $env:LOCALAPPDATA 'Programs\EverTranscript'
           if (-not (Test-Path $root)) { throw "installer wrote nothing to $root" }
