@@ -5,9 +5,12 @@ them hands the next person a discovery instead of a list. This is that
 list, assembled from the open criteria across M1–M5 and grouped by what
 would actually be needed to close each.
 
-Counts at the time of writing: **M1 65/65, M2 85/85, M3 69/71, M4 66/74,
+Counts at the time of writing: **M1 65/65, M2 85/85, M3 69/71, M4 68/74,
 M5 58/60** — M4 gained two when the Summary sidecar was finally made to
 infer on Windows in CI (Q45).
+
+Counted from the checkboxes rather than carried forward, because the line
+above said 66 in the same sentence that said M4 had gained two.
 
 ---
 
