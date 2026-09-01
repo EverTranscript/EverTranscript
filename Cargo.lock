@@ -657,6 +657,7 @@ dependencies = [
  "hanconv",
  "hound",
  "keyring",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-core-audio",

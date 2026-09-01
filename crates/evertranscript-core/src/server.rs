@@ -1682,6 +1682,74 @@ impl Core {
         Ok(ModelsStatusResponse { models, ready })
     }
 
+    /// Fetches what a fresh install is missing, if this is one.
+    ///
+    /// **Called by the binary, never by construction.** A Core that is built
+    /// and never asked provisions nothing — which is what lets the guarantee
+    /// tests keep building fresh Cores against isolated directories and
+    /// asserting no socket ever opens. Suppressing an implicit fetch with a
+    /// test-only switch would have proved that guarantee only with this
+    /// feature disabled.
+    ///
+    /// Returns what it decided, so a caller can say so rather than guess.
+    pub async fn provision_if_fresh(
+        &self,
+        cancel: CancellationToken,
+    ) -> Result<models::provision::Provision> {
+        let status = self.models_status()?;
+        let missing: Vec<&models::registry::ModelEntry> = models::registry::ALL
+            .iter()
+            .filter(|entry| entry.required)
+            .filter(|entry| {
+                status
+                    .models
+                    .iter()
+                    .any(|model| model.key == entry.key && model.state != ModelAvailability::Ready)
+            })
+            .collect();
+
+        let settings = self.settings.lock().await.clone();
+        let machine = models::provision::Machine {
+            // Anything the Operator has settled counts as configured. A fresh
+            // install has acknowledged nothing and chosen nothing.
+            configured: settings.briefing_acknowledged || settings.summary_backend.is_some(),
+            models_present: missing.is_empty(),
+            free_bytes: models::free_space_bytes(&self.models_dir),
+            needed_bytes: missing.iter().map(|entry| entry.integrity.size_bytes).sum(),
+        };
+
+        let decision = models::provision::decide(machine);
+        match decision {
+            models::provision::Provision::Fetch => {
+                let total: u64 = machine.needed_bytes;
+                // Said before it starts, not after. An automatic transfer of
+                // this size that nobody was told about is the surprise
+                // Nothing Ambient exists to prevent.
+                info!(
+                    megabytes = total / 1_048_576,
+                    models = missing.len(),
+                    "provisioning a fresh install"
+                );
+                self.fetch_models(None, cancel).await?;
+            }
+            models::provision::Provision::NotEnoughSpace {
+                free_bytes,
+                needed_bytes,
+            } => {
+                warn!(
+                    free_megabytes = free_bytes / 1_048_576,
+                    needed_megabytes = needed_bytes / 1_048_576,
+                    "not provisioning: there is not enough room"
+                );
+            }
+            models::provision::Provision::AskFirst => {
+                info!("not provisioning: this install is already configured");
+            }
+            models::provision::Provision::NothingMissing => {}
+        }
+        Ok(decision)
+    }
+
     /// Downloads what is missing. A corrupted file is removed first so the
     /// fetch starts from a clean slate rather than trying to resume garbage.
     pub async fn fetch_models(&self, key: Option<&str>, cancel: CancellationToken) -> Result<()> {

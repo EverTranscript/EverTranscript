@@ -293,6 +293,14 @@ fn diarization_opens_no_network_connections_either() {
         models_dir.join("diarize-embedding.onnx"),
     )
     .expect("embedding");
+    // **Every required model, not only the ones this test uses.** A fresh
+    // install fetches what it is missing, so an install missing anything is
+    // not the state ADR-0034's "with models downloaded" describes — and a
+    // Core provisioning in the background is a Core with sockets open, which
+    // is what this test would then catch and blame on Diarization.
+    if !stage_required_models(&models, &models_dir) {
+        return;
+    }
 
     let mut daemon = Command::new(binary())
         .arg("daemon")
@@ -382,18 +390,8 @@ fn a_full_cycle_with_summary_and_updates_off_opens_no_sockets() {
         models_dir.join("diarize-embedding.onnx"),
     )
     .expect("embedding");
-    // The Summary model, when the machine running this has one. Its absence
-    // makes generation unavailable, which is still a valid thing to assert
-    // no traffic about — but its presence is what makes the assertion
-    // interesting.
-    let summary_model = std::path::PathBuf::from(&models)
-        .parent()
-        .map(|parent| parent.join("summary-qwen2.5-0.5b-instruct-q4_k_m.gguf"));
-    if let Some(model) = summary_model.filter(|path| path.exists()) {
-        let _ = std::fs::copy(
-            &model,
-            models_dir.join("summary-qwen2.5-0.5b-instruct-q4_k_m.gguf"),
-        );
+    if !stage_required_models(&models, &models_dir) {
+        return;
     }
 
     let mut daemon = Command::new(binary())
@@ -623,4 +621,48 @@ fn walk(root: &Path) -> Vec<PathBuf> {
         }
     }
     found
+}
+
+/// Stages every model a fresh install would otherwise fetch.
+///
+/// **Every required model, not the ones a given test happens to use.** A Core
+/// that is missing any of them is a fresh install, and a fresh install
+/// provisions — so an incompletely staged test watches the Core open sockets
+/// to a CDN and reports it as a broken guarantee. The cause is the staging,
+/// not the thing under test.
+///
+/// ADR-0034's guarantee is worded "with updates off **and models downloaded**,
+/// literally zero". This is what puts a test in the state that sentence
+/// describes, and it reads the list from the registry so it cannot go stale
+/// when the registered models change — which the hardcoded filename it
+/// replaces had already done.
+fn stage_required_models(models: &str, models_dir: &std::path::Path) -> bool {
+    let diarize = std::path::PathBuf::from(models);
+    for entry in evertranscript_core::models::registry::ALL
+        .iter()
+        .filter(|entry| entry.required)
+    {
+        // Beside the diarization models, or in the directory holding them —
+        // a real machine keeps them all in one place, and this test's own
+        // fixtures rename two of them.
+        let candidates = [
+            diarize.join(entry.filename),
+            diarize
+                .parent()
+                .map(|parent| parent.join(entry.filename))
+                .unwrap_or_default(),
+        ];
+        let Some(source) = candidates.iter().find(|path| path.exists()) else {
+            eprintln!(
+                "skipped: this guarantee asserts silence *with models downloaded*, and \
+                 {} is not staged",
+                entry.filename
+            );
+            return false;
+        };
+        if !models_dir.join(entry.filename).exists() {
+            std::fs::copy(source, models_dir.join(entry.filename)).expect("staging a model");
+        }
+    }
+    true
 }

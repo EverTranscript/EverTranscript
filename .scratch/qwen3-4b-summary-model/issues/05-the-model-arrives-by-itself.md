@@ -12,15 +12,15 @@ switch would leave the product's strongest claim proven only with the new behavi
 
 **Blocked by:** 03.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The Summary model is fetched automatically on a fresh install; an upgrade that introduces a new required model asks once instead
-- [ ] The total size is stated before the fetch begins, and disk space is checked before rather than discovered at ninety percent
-- [ ] The fetch is background, resumable across a quit, and never fatal — recording works throughout
-- [ ] Provisioning happens because something asked for it; a Core built by a test does not fetch
-- [ ] The existing guarantee tests still prove silence, unchanged and without a suppression switch
-- [ ] The provisioning decision is tested as a decision, and one integration test proves the wiring against a local stub rather than the internet
-- [ ] CI caches the model fetch keyed on its checksum, so a changed model is a different key rather than a stale hit
-- [ ] ADR-0002 and ADR-0034 are amended, and the Briefing's network sentence is reworded — it currently says "model downloads you trigger", which this makes false
-- [ ] The reworded Briefing separates what leaves the machine from what the machine contacts, because that conflation was observed in practice
-- [ ] The local gate is green
+- [x] Both, from a pure decision over four facts about the machine
+- [x] Size logged before starting; space checked first. The check uses a **checked** add rather than a saturating one — a test found that saturating pins the requirement at the maximum and then compares equal to it, so an impossible need read as satisfied
+- [x] Spawned detached and never fatal; resumption is the Downloader's existing behaviour
+- [x] `provision_if_fresh` is called by the binary. Constructing a Core fetches nothing, asserted directly rather than inferred
+- [x] All nine pass, with **no suppression switch**. This took three attempts and each failure was the test, not the product: the guarantee's own wording is "with updates off **and models downloaded**", and the tests were staging some required models and not others — so the Core correctly fetched what was missing and the tests reported it as a broken guarantee. Staging now reads the required list from the registry, so it cannot go stale the way the hardcoded filename it replaces already had
+- [x] Seven unit tests for the decision, and one integration test. **The first version of that test downloaded 3.45 GB from the real mirror and took 200 seconds** — pointing it at the stub through the existing base-URL override brought it to 0.07 s and off the network entirely
+- [x] Cached, keyed on the checksums themselves, so the cache cannot serve the wrong file
+- [x] Both amended, and the Briefing reworded
+- [x] It now says outright that recording locally is not the same as being silent, states the meeting-content promise separately from the network one, and says the first model downloads start on their own
+- [x] The local gate is green

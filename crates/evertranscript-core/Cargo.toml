@@ -40,6 +40,11 @@ async-trait = "0.1.92"
 # capture channel starts dropping frames.
 whisper-rs = { workspace = true, features = ["metal"] }
 
+# Free-space probing before an automatic download, which has no portable
+# spelling and no crate worth adding for one call.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "windows")'.dependencies]
 windows.workspace = true
 windows-future.workspace = true

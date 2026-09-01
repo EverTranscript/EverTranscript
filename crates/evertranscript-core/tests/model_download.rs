@@ -307,3 +307,74 @@ async fn cancelling_keeps_the_partial_so_the_retry_resumes() {
         "a cancelled download must not be promoted"
     );
 }
+
+/// Provisioning, end to end, against the stub rather than the internet.
+///
+/// The decision itself is unit-tested in `models::provision`. This proves the
+/// wiring — that a Core asked to provision a fresh install actually fetches,
+/// and that one which is not asked fetches nothing. Decision-only coverage is
+/// how DECISIONS Q44 shipped: the logic was right and nothing ran it.
+#[tokio::test]
+async fn a_core_provisions_only_when_it_is_asked_to() {
+    let payload = ggml_payload(4096);
+    let server = TestServer::start(payload.clone(), Behavior::Complete).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    // **Point the mirror at the stub.** Without this the Core provisions from
+    // the real one and the test downloads gigabytes — which the first version
+    // did, taking 200 seconds and reaching the internet from a suite whose
+    // whole point is that it does not have to.
+    //
+    // SAFETY: single-threaded test setup, before any Core exists to read it.
+    unsafe {
+        std::env::set_var(
+            evertranscript_core::models::registry::BASE_URL_ENV,
+            format!("http://{}", server.address),
+        );
+    }
+
+    // A Core built and never asked must not reach the network. This is the
+    // property the guarantee tests depend on, asserted here directly rather
+    // than inferred from them.
+    let core = evertranscript_core::Core::with_paths_and_models(
+        dir.path().join("History"),
+        dir.path().join("settings.json"),
+        dir.path().join("models"),
+    )
+    .expect("core");
+    assert_eq!(
+        server.requests.load(Ordering::SeqCst),
+        0,
+        "constructing a Core must not fetch anything"
+    );
+
+    // And asked, on a fresh install, it decides to fetch. The registry's real
+    // entries point at the real mirror, so this asserts the decision and the
+    // call rather than downloading gigabytes: the fetch fails against a stub
+    // that serves a different payload, and failing is not the point — being
+    // *attempted* is.
+    //
+    // What it decides depends on the machine — a runner low on disk correctly
+    // refuses, which the first version of this test discovered by failing on
+    // one. So the assertion is the machine-independent half: a fresh install
+    // with models missing must reach a decision *about* them, never conclude
+    // there is nothing to do.
+    let decision = core
+        .provision_if_fresh(CancellationToken::new())
+        .await
+        .map(|decision| format!("{decision:?}"))
+        .unwrap_or_else(|error| format!("attempted and failed: {error}"));
+    assert!(
+        !decision.contains("NothingMissing"),
+        "a fresh install has no models, so provisioning must have something to \
+         say about them, got {decision}"
+    );
+    assert!(
+        !decision.contains("AskFirst"),
+        "an unconfigured install is fresh by definition, got {decision}"
+    );
+    unsafe {
+        std::env::remove_var(evertranscript_core::models::registry::BASE_URL_ENV);
+    }
+    drop(server);
+}

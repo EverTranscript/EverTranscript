@@ -82,10 +82,16 @@ someone, syncing it, or backing it up takes the biometric data with it.
 
 It does not index your files, read your contacts, or look at your screen. It \
 reads your calendar only if you grant that, and only the calendar already on \
-this machine — never a cloud calendar account. The only things it ever sends \
-over the network are an update check you can switch off, model downloads you \
-trigger, and — if you explicitly choose a cloud service for summaries — the \
-text of those meetings.
+this machine — never a cloud calendar account.
+
+**Recording and transcribing on this machine is not the same as being \
+silent.** Nothing said in a meeting leaves — not the audio, not the \
+transcript, not the voice profiles — unless you explicitly choose a cloud \
+service for summaries, and then it is the text of those meetings that goes. \
+That is a promise about your meetings, not about the network. Separately, this \
+app makes three kinds of call: an update check you can switch off, the model \
+downloads it needs to work — the first ones start on their own, the rest when \
+you ask — and that cloud summary service if you chose one. Nothing else.
 
 The source is open. You can check all of this rather than believe it.";
 

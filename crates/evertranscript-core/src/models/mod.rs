@@ -6,6 +6,49 @@
 //! stall timeout rather than hanging forever, and nothing is promoted into
 //! place until its bytes verify.
 
+/// Free bytes on the volume holding `path`, or `0` when it cannot be read.
+///
+/// Zero refuses the download rather than starting one that cannot finish: a
+/// probe that fails should cost the convenience, never the disk.
+pub fn free_space_bytes(path: &std::path::Path) -> u64 {
+    // Walk up to something that exists — the models directory may not have
+    // been created yet on the fresh install this is about.
+    let mut probe = path;
+    loop {
+        if probe.exists() {
+            break;
+        }
+        match probe.parent() {
+            Some(parent) => probe = parent,
+            None => return 0,
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(c_path) = std::ffi::CString::new(probe.as_os_str().as_bytes()) else {
+            return 0;
+        };
+        // SAFETY: a zeroed statvfs is a valid initial value, and the path is a
+        // NUL-terminated C string that outlives the call.
+        unsafe {
+            let mut stat: libc::statvfs = std::mem::zeroed();
+            if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+                return 0;
+            }
+            (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64)
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = probe;
+        // Windows reports this through GetDiskFreeSpaceEx; until that is
+        // wired, refusing to guess is better than guessing generously.
+        u64::MAX
+    }
+}
+
+pub mod provision;
 pub mod registry;
 
 use std::io::SeekFrom;

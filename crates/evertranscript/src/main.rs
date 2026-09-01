@@ -337,6 +337,25 @@ fn run_daemon_owning_the_main_thread(runtime: tokio::runtime::Runtime) -> Result
     });
 
     let daemon = runtime.block_on(evertranscript_core::start_daemon(shutdown.clone()))?;
+
+    // **The binary asks; construction does not.** A fresh install fetches what
+    // it needs so the Operator finds the features there rather than finding a
+    // download — but a Core that is merely built provisions nothing, which is
+    // what lets the guarantee tests keep proving that a full record-and-
+    // summarize cycle opens no socket at all.
+    //
+    // Detached and never fatal: recording must work while this runs, and a
+    // fetch that fails is a retry rather than a startup error (ADR-0019).
+    {
+        let core = Arc::clone(daemon.core());
+        let cancel = shutdown.clone();
+        runtime.spawn(async move {
+            if let Err(error) = core.provision_if_fresh(cancel).await {
+                tracing::warn!(%error, "provisioning did not complete; models can be fetched later");
+            }
+        });
+    }
+
     let controller = tray::TrayController::new(
         Arc::clone(daemon.core()),
         runtime.handle().clone(),

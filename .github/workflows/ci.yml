@@ -54,7 +54,23 @@ jobs:
       #
       # 32 MB, pinned by sha256 in `models/registry.rs`. If a checksum ever
       # stops matching, that is a finding and this job should go red.
+      # **Cached, keyed on the checksum.** The Summary model went from 491 MB
+      # to 2.5 GB; uncached that is the dominant cost of a run on both
+      # platforms and a new way for a push to fail. Keying on the sha256 means
+      # a changed model is a different key rather than a stale hit — the cache
+      # cannot serve the wrong file, because the file's identity *is* the key.
+      - name: Cache the inference models
+        id: inference-models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ runner.temp }}/diarize-models
+            ${{ runner.temp }}/summary-model
+            ${{ runner.temp }}/whisper-model
+          key: models-f6e3fb6c-057ee564-3955447b-3055274469
+
       - name: Fetch the inference models
+        if: steps.inference-models.outputs.cache-hit != 'true'
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/diarize-models"
@@ -101,9 +117,9 @@ jobs:
           mkdir -p "$RUNNER_TEMP/summary-model"
           curl -sL --retry 3 --max-time 900 \
             -o "$RUNNER_TEMP/summary-model/summary.gguf" \
-            "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+            "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-UD-Q4_K_XL.gguf"
           verify "$RUNNER_TEMP/summary-model/summary.gguf" \
-            74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db
+            f6e3fb6c2cdc869d16e66c719e94f2c02095d195967230e759a2d77fe814c71f
 
           # The transcription model. 874 MB, the largest thing here, and it
           # buys the PRD's *top* named unverified risk: whisper.cpp quality
