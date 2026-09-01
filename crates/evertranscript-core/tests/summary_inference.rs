@@ -188,20 +188,10 @@ fn the_sidecar_loads_a_model_and_generates() {
     backend.shutdown();
 }
 
-#[test]
-fn a_loaded_sidecar_shuts_down_rather_than_hanging() {
-    let Some(mut backend) = spawn() else {
-        eprintln!("skipping: EVERTRANSCRIPT_SUMMARY_MODEL is not set");
-        return;
-    };
-
-    // With a model resident, not just after a bare spawn. The hang M4 found
-    // was a `shutdown` waiting for a reply from a child that was busy, and a
-    // child holding half a gigabyte is the one that matters — an orphan here
-    // costs the Operator their memory.
-    assert!(backend.ping());
-    backend.shutdown();
-}
+// `a_loaded_sidecar_shuts_down_rather_than_hanging` was folded into the test
+// above, which already shuts down a backend holding a resident model. Keeping
+// it separate cost a second 2.5 GB load for one `ping`, and loading the model
+// six times across this binary and `summary_quality` timed the CI job out.
 
 #[test]
 fn a_prompt_larger_than_one_batch_does_not_kill_the_sidecar() {

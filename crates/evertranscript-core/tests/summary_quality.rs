@@ -66,8 +66,23 @@ const INCUMBENT_VERBATIM_LINES: usize = 3;
 /// on what was *said* rather than on the bracket the Core printed.
 const TIMESTAMP_END: &str = "] ";
 
+/// Where the quality of a model is measured.
+///
+/// **Separate from having a model, because they are different questions.**
+/// `EVERTRANSCRIPT_SUMMARY_MODEL` says a model is available, and every
+/// platform that ships one should prove it loads and generates there — that
+/// is `summary_inference`, and it is per-platform on purpose (DECISIONS Q45).
+/// How *good* the model is does not vary by platform, so measuring it twice
+/// buys nothing and costs a second multi-gigabyte load, which timed a CI job
+/// out at forty-five minutes.
+const MEASURE_ENV: &str = "EVERTRANSCRIPT_MEASURE_SUMMARY_QUALITY";
+
 fn model() -> Option<PathBuf> {
-    let configured = std::env::var_os("EVERTRANSCRIPT_SUMMARY_MODEL")?;
+    if std::env::var_os(MEASURE_ENV).is_none() {
+        return None;
+    }
+    let configured = std::env::var_os("EVERTRANSCRIPT_SUMMARY_MODEL")
+        .expect("set EVERTRANSCRIPT_SUMMARY_MODEL to measure a model's quality");
     let path = PathBuf::from(configured);
     assert!(
         path.exists(),
@@ -92,8 +107,18 @@ fn sidecar() -> Option<PathBuf> {
     beside.exists().then_some(beside)
 }
 
-/// One Summary of [`TRANSCRIPT`], from the registered model driven the way
-/// the registry says it wants to be driven — which is what production does.
+/// One Summary of [`TRANSCRIPT`], generated once for the whole binary.
+///
+/// **Loaded once on purpose.** Each of the assertions below is about the same
+/// output, and spawning a sidecar per test meant loading 2.5 GB three times
+/// over — which timed the CI job out at forty-five minutes. Three questions
+/// about one Summary is also the more honest shape: they are not independent
+/// experiments, they are three properties of a single answer.
+fn summary() -> Option<&'static str> {
+    static SUMMARY: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    SUMMARY.get_or_init(summarize).as_deref()
+}
+
 fn summarize() -> Option<String> {
     let model = model()?;
     let binary = sidecar().expect("the sidecar must be built to measure the model it loads");
@@ -150,8 +175,8 @@ fn times_in(text: &str) -> Vec<String> {
 
 #[test]
 fn the_summary_model_never_invents_a_timestamp() {
-    let Some(summary) = summarize() else {
-        eprintln!("skipping: EVERTRANSCRIPT_SUMMARY_MODEL is not set");
+    let Some(summary) = summary() else {
+        eprintln!("skipping: set {MEASURE_ENV} to measure the registered model");
         return;
     };
     eprintln!("summary:\n{summary}");
@@ -160,7 +185,7 @@ fn the_summary_model_never_invents_a_timestamp() {
     // states. A `Said at` the meeting never contained is a false claim in a
     // record that cannot be edited — worse than an incomplete one, because it
     // is the column an Operator would use to check the others.
-    let invented: Vec<String> = times_in(&summary)
+    let invented: Vec<String> = times_in(summary)
         .into_iter()
         .filter(|time| !TRANSCRIPT.contains(time.as_str()))
         .collect();
@@ -173,8 +198,8 @@ fn the_summary_model_never_invents_a_timestamp() {
 
 #[test]
 fn the_summary_model_finds_the_commitments_that_were_made() {
-    let Some(summary) = summarize() else {
-        eprintln!("skipping: EVERTRANSCRIPT_SUMMARY_MODEL is not set");
+    let Some(summary) = summary() else {
+        eprintln!("skipping: set {MEASURE_ENV} to measure the registered model");
         return;
     };
 
@@ -195,8 +220,8 @@ fn the_summary_model_finds_the_commitments_that_were_made() {
 
 #[test]
 fn the_summary_model_summarizes_rather_than_reproducing() {
-    let Some(summary) = summarize() else {
-        eprintln!("skipping: EVERTRANSCRIPT_SUMMARY_MODEL is not set");
+    let Some(summary) = summary() else {
+        eprintln!("skipping: set {MEASURE_ENV} to measure the registered model");
         return;
     };
 
