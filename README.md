@@ -4,4 +4,8 @@
 </picture>
 
 # EverTranscript
+
 A live and archived transcript of every meeting.
+
+Transcribed locally with whisper.cpp, saved as plain markdown you own.
+
