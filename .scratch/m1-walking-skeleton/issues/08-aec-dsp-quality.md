@@ -22,6 +22,16 @@
       reproduces the far end on the mic channel faithfully (WER 0.08 against the far-end transcript) and a
       cancelled one does not (WER 0.86) — run both ways, so the guard has been watched failing.
       Cost measured too: **17x realtime** in release, ~6% of one core.
+
+      **Correction (Q50): those two WER figures were measured on `ggml-tiny`, and the entry did not say so.**
+      They read as properties of the canceller and are properties of a model. The registered
+      `WHISPER_DEFAULT` reads the same residual at **WER 0.649** and recovers fourteen intelligible words of
+      the far end, so the `> 0.7` guard built on 0.86 failed the first time CI ran it with the model that
+      ships. The canceller itself is unchanged and tiny still scores 0.865 against it. The end-to-end figure
+      is now reported rather than asserted, and the guard is ERLE in
+      `audio::aec::tests::real_speech_echo_is_cancelled_by_a_measurable_amount` — **32.8 dB**, no model, both
+      platforms. What that does not carry over is intelligibility, which is the harm; `ECHO_DOMINANCE` says
+      why a decibel figure cannot stand in for it. Whether 0.649 is acceptable is open.
 - [x] EBU R128 normalization toward −23 LUFS with a −1 dBFS true-peak ceiling and a max 8× gain, applied
       to what reaches the *model*. Deliberate deviation: the stored file stays as captured, so the Enhance
       family can re-derive from unmodified audio. Silence is never amplified (that is hallucination fuel).

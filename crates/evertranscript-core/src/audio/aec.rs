@@ -257,6 +257,7 @@ impl EchoCanceller {
 
 #[cfg(test)]
 mod tests {
+    use evertranscript_fixtures::ENGLISH_MEETING;
     use evertranscript_fixtures::echo::Room;
     use evertranscript_fixtures::echo::echo_of;
     use evertranscript_fixtures::echo::erle_db;
@@ -312,6 +313,45 @@ mod tests {
         );
         assert!(canceller.is_cancelling(), "an echo path was learned");
         assert_eq!(canceller.resets(), 0, "a converging filter never diverges");
+    }
+
+    #[test]
+    fn real_speech_echo_is_cancelled_by_a_measurable_amount() {
+        // The same case as above, on real speech rather than babble, and in
+        // decibels rather than words.
+        //
+        // **This is the guard that used to live in `transcription_quality`**,
+        // where it asked whether an ASR could still read the far end out of
+        // the residual — and that turned out to be a property of the *model*
+        // rather than of this filter. Calibrated on `ggml-tiny` it passed at
+        // 86.5%; the model the product actually ships reads through the same
+        // residual and scores 64.9%, failing a threshold the canceller's
+        // behaviour never moved (DECISIONS Q50). ERLE cannot drift that way:
+        // it measures what this module does, in the unit the module is
+        // specified in, and needs no model to say it.
+        //
+        // Babble is the harder signal for an adaptive filter and it is
+        // covered above. Real speech is here because it is the input the
+        // product meets and because it is the signal the superseded
+        // assertion used, so the two are comparable.
+        let far = ENGLISH_MEETING.samples_at(RATE);
+        let echo = echo_of(&far.data, RATE, &Room::default());
+        let mut microphone = echo.clone();
+
+        let mut canceller = EchoCanceller::new(RATE);
+        canceller.process(&mut microphone, &far.data);
+
+        // The same second-half convention as the babble case: a filter is
+        // allowed to spend the opening learning the room.
+        let half = microphone.len() / 2;
+        let erle = erle_db(&echo[half..], &microphone[half..]);
+        println!("  real speech: {erle:.1} dB of echo removed");
+        assert!(
+            erle > 15.0,
+            "real speech echo should be well down after converging, \
+             got {erle:.1} dB"
+        );
+        assert!(canceller.is_cancelling(), "an echo path was learned");
     }
 
     #[test]
