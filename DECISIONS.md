@@ -872,3 +872,19 @@ The fabrication gate therefore passes, and the incumbent's *content* failures st
 **What survives as a real limitation:** given a transcript with no timestamps, Qwen3 still invents one. Production cannot produce that input, so it is not a shipping defect — but it is the honest boundary of what was measured, and the standing test says so rather than implying the model is incapable of inventing.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q59 — qwen3-4b-summary-model/04 — finding
+
+**Question:** With the 4B registered, the macOS CI job began timing out. Three attempts to fix it failed. What is actually wrong?
+**Options considered:** raise the timeout / serialise the suite / share one model load / run the Summary tests where they can run
+**Chosen:** **A GitHub macOS runner cannot drive a 4B at a usable speed.** One generation on a ~3,000-token prompt ran past 1,800 s. The Summary model tests now run on Windows, which does it comfortably; macOS keeps whisper and diarization.
+**Decided-by:** agent
+**Justification:** Two wrong diagnoses came first and both were reasonable. The step timed out at 45 minutes, so I raised the bound and reduced work — each test binary now generates once, and the quality measurement, being a property of the model rather than the machine, runs on one platform. Still timed out. Then two tests inside one binary were seen loading 2.5 GB each, so I serialised the whole suite — which made it *worse*, because cargo already runs test binaries one after another: the change bought nothing and cost the parallelism inside every other binary, turning a 10-minute one into 28. The lock belongs where the contention is, and now lives in the test file.
+
+What survived all three attempts is the actual constraint. With the suite back to its normal 604 s and nothing competing, a single generation still exceeded half an hour. That is the runner, not the code — and Windows, on the same commit, passes.
+
+Running it where it runs is not a retreat. **Windows was the platform this coverage existed for**: Q45 added it because "it cross-compiles" had been standing in for "it runs", and macOS had been verified by hand in M4 and is verified continuously on the author's own machine. A test that reliably times out is worse than an absent one — it makes the build red for a reason that is not about the code, and teaches everyone to ignore it.
+
+**It is also product evidence, not just CI trivia.** A 4B is slow on modest hardware. ticket 01's layers-that-fit calculation answers the memory half; it says nothing about speed, and an Operator on a machine like that runner would wait half an hour for one chunk. The registry now ships a model that not every machine can use well, which is a real change in what "local Summary" promises and belongs in what-v1-is-not.
+**Outcome:** applied
+**Ref:** (pending)

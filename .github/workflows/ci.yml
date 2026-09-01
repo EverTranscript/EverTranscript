@@ -114,12 +114,17 @@ jobs:
           # loads a model and generates on *this* platform. It cross-compiles
           # for Windows, and M3 established what that is worth about runtime.
           # Size and sha256 are `SUMMARY_DEFAULT` in `models/registry.rs`.
-          mkdir -p "$RUNNER_TEMP/summary-model"
-          curl -sL --retry 3 --max-time 900 \
-            -o "$RUNNER_TEMP/summary-model/summary.gguf" \
-            "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-UD-Q4_K_XL.gguf"
-          verify "$RUNNER_TEMP/summary-model/summary.gguf" \
-            f6e3fb6c2cdc869d16e66c719e94f2c02095d195967230e759a2d77fe814c71f
+          # Only where it is used. macOS does not run the Summary model
+          # tests (see the Tests step), so fetching 2.5 GB there would be
+          # paying the whole cost of a measurement for none of its value.
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mkdir -p "$RUNNER_TEMP/summary-model"
+            curl -sL --retry 3 --max-time 900 \
+              -o "$RUNNER_TEMP/summary-model/summary.gguf" \
+              "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-UD-Q4_K_XL.gguf"
+            verify "$RUNNER_TEMP/summary-model/summary.gguf" \
+              f6e3fb6c2cdc869d16e66c719e94f2c02095d195967230e759a2d77fe814c71f
+          fi
 
           # The transcription model. 874 MB, the largest thing here, and it
           # buys the PRD's *top* named unverified risk: whisper.cpp quality
@@ -202,13 +207,27 @@ jobs:
         timeout-minutes: 55
         env:
           EVERTRANSCRIPT_DIARIZE_MODELS: ${{ runner.temp }}/diarize-models
-          EVERTRANSCRIPT_SUMMARY_MODEL: ${{ runner.temp }}/summary-model/summary.gguf
+          # **Windows only, and not for a Windows reason.** A single
+          # generation on the macOS runner ran past 1800 s — with the suite
+          # back to its normal 604 s, so nothing was contending for memory;
+          # the runner simply cannot drive a 4B at a usable speed. Windows
+          # does it comfortably, which is the platform this coverage was
+          # added for in the first place (DECISIONS Q45): "it cross-compiles"
+          # had been standing in for "it runs".
+          #
+          # macOS keeps the whisper and diarization tests, and the Summary
+          # model is exercised there on real hardware rather than a runner.
+          # A test that reliably times out is worse than one that is absent:
+          # it makes the build red for a reason that is not about the code.
+          EVERTRANSCRIPT_SUMMARY_MODEL:
+            ${{ runner.os == 'Windows' && format('{0}/summary-model/summary.gguf', runner.temp) || '' }}
           EVERTRANSCRIPT_TEST_MODEL: ${{ runner.temp }}/whisper-model/whisper.bin
-          # One platform: the model's quality is a property of the model.
-          # Whether it *runs* on each platform is a different question, and
-          # `summary_inference` answers that one everywhere.
+          # One platform: the model's quality is a property of the model,
+          # not of the machine measuring it.
+          # The quality measurement rides with the model, so it goes where
+          # the model can actually run.
           EVERTRANSCRIPT_MEASURE_SUMMARY_QUALITY:
-            ${{ runner.os == 'macOS' && '1' || '' }}
+            ${{ runner.os == 'Windows' && '1' || '' }}
         # `--nocapture` because the WER and CER are the deliverable and
         # cargo swallows a passing test's stdout. Without it this job would
         # download 874 MB, transcribe four fixtures, and print the numbers

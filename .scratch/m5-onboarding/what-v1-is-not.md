@@ -66,7 +66,15 @@ from somewhere else, and each is already labelled that way in its ticket.
 
 ## 2. Things measured and found wanting
 
-- **Summary quality is bad, and worse than M4 recorded.** On a real
+- **The Summary model is slow on modest hardware.** The registered Qwen3-4B
+  measures well (Q58) and is 5x the size of what it replaced. A GitHub macOS
+  runner cannot generate one chunk in half an hour (Q59), which is why that
+  platform's CI no longer runs it. Ticket 01's layers-that-fit calculation
+  answers the memory question and says nothing about speed — so "local
+  Summary" now promises less on a weak machine than it did, and nobody has
+  measured where the floor actually is.
+
+- **Summary quality was bad, and is now measured rather than asserted.** On a real
   recording containing two plain commitments the shipped local model produced
   `None noted.` — zero of two action items. Q45 then measured it on three
   lines containing one unmistakable commitment: it answered `None noted.`,
