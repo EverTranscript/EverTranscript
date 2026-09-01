@@ -175,7 +175,17 @@ pub fn list(connection: &Connection, limit: u32, offset: u32) -> Result<Vec<Meet
 
 /// Renames a Meeting. The Mirror is regenerated and renamed by the projection
 /// worker, which the update trigger wakes.
+///
+/// **An empty name is an absent one.** Storing `""` would make two states the
+/// Client renders identically — it shows the placeholder for both — behave
+/// differently underneath, and the difference is not academic: the Suggested
+/// Title fills only where the name is NULL, so an Operator who cleared a name
+/// would have silently disabled a feature with no way to know it. Normalising
+/// here means clearing a name re-opens that slot, which is what "clear" looks
+/// like it does.
 pub fn retitle(connection: &Connection, id: &str, title: &str) -> Result<Meeting> {
+    let trimmed = title.trim();
+    let title = (!trimmed.is_empty()).then_some(trimmed);
     let updated = connection.execute(
         "UPDATE meetings SET title = ?2, updated_at = ?3 WHERE id = ?1",
         params![id, title, now_rfc3339()],

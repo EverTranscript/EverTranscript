@@ -214,6 +214,110 @@ async fn retitling_renames_the_mirror_and_leaves_no_stale_copy() {
 }
 
 #[tokio::test]
+async fn clearing_a_name_leaves_a_meeting_genuinely_unnamed() {
+    // Two states the Client renders identically must not behave differently
+    // behind it. Clearing a name has to mean "unnamed", not "named the empty
+    // string" — otherwise the Suggested Title's `WHERE title IS NULL` fill
+    // would be blocked forever by a name the Operator believes they removed.
+    let core = TestCore::start().await;
+    let mut client = core.client().await;
+
+    let started: MeetingResponse = client
+        .request("meeting/start", Some(json!({ "detectedApp": "Zoom" })))
+        .await
+        .expect("start");
+    client
+        .request::<MeetingResponse>("meeting/stop", None)
+        .await
+        .expect("stop");
+
+    let named: MeetingResponse = client
+        .request(
+            "meeting/retitle",
+            Some(json!({ "id": started.meeting.id, "title": "Budget review" })),
+        )
+        .await
+        .expect("retitle");
+    assert_eq!(named.meeting.title.as_deref(), Some("Budget review"));
+
+    for cleared in ["", "   ", "\t\n  "] {
+        let response: MeetingResponse = client
+            .request(
+                "meeting/retitle",
+                Some(json!({ "id": started.meeting.id, "title": cleared })),
+            )
+            .await
+            .expect("retitle to empty");
+        assert_eq!(
+            response.meeting.title, None,
+            "clearing with {cleared:?} must leave the Meeting unnamed, not named {:?}",
+            response.meeting.title
+        );
+
+        // And the same over a fresh read, not just in the write's own answer.
+        let fetched: MeetingResponse = client
+            .request("meeting/get", Some(json!({ "id": started.meeting.id })))
+            .await
+            .expect("get");
+        assert_eq!(fetched.meeting.title, None);
+
+        client
+            .request::<MeetingResponse>(
+                "meeting/retitle",
+                Some(json!({ "id": started.meeting.id, "title": "Budget review" })),
+            )
+            .await
+            .expect("restore");
+    }
+}
+
+#[tokio::test]
+async fn a_cleared_name_is_indistinguishable_from_one_never_set() {
+    // The property the Suggested Title depends on: after clearing, a Meeting
+    // must look exactly like one nobody ever named.
+    let core = TestCore::start().await;
+    let mut client = core.client().await;
+
+    let never_named: MeetingResponse = client
+        .request("meeting/start", Some(json!({ "detectedApp": "Zoom" })))
+        .await
+        .expect("start");
+    client
+        .request::<MeetingResponse>("meeting/stop", None)
+        .await
+        .expect("stop");
+
+    let once_named: MeetingResponse = client
+        .request("meeting/start", Some(json!({ "detectedApp": "Zoom" })))
+        .await
+        .expect("start");
+    client
+        .request::<MeetingResponse>("meeting/stop", None)
+        .await
+        .expect("stop");
+    client
+        .request::<MeetingResponse>(
+            "meeting/retitle",
+            Some(json!({ "id": once_named.meeting.id, "title": "Named then cleared" })),
+        )
+        .await
+        .expect("name it");
+    let cleared: MeetingResponse = client
+        .request(
+            "meeting/retitle",
+            Some(json!({ "id": once_named.meeting.id, "title": "" })),
+        )
+        .await
+        .expect("clear it");
+
+    assert_eq!(never_named.meeting.title, None);
+    assert_eq!(
+        cleared.meeting.title, never_named.meeting.title,
+        "a cleared Meeting and a never-named one must be the same state"
+    );
+}
+
+#[tokio::test]
 async fn transcript_segments_reach_the_mirror_and_full_text_search() {
     let core = TestCore::start().await;
     let mut client = core.client().await;
