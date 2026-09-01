@@ -9,8 +9,6 @@
 //! What is deliberately *not* claimed here is that the icon appears. That
 //! needs eyes on a screen.
 
-#![cfg(unix)]
-
 use std::sync::Arc;
 
 use evertranscript_core::Core;

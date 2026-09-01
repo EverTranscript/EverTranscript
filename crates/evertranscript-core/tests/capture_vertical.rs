@@ -4,7 +4,7 @@
 //! row, capture, joiner, ffmpeg sink, audio path in the record, Mirror
 //! frontmatter — is exercised without a microphone or a TCC grant.
 
-#![cfg(unix)]
+mod common;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 struct TestCore {
-    socket_path: PathBuf,
+    socket_path: common::Endpoint,
     history_dir: PathBuf,
     #[allow(dead_code)]
     core: Arc<Core>,
@@ -35,7 +35,7 @@ impl TestCore {
     /// Starts a Core whose capture is the given script.
     async fn start(script: Vec<Step>) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let socket_path = dir.path().join("s");
+        let socket_path = common::endpoint(dir.path());
         let history_dir = dir.path().join("History");
 
         let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");

@@ -783,3 +783,23 @@ That asymmetry retroactively justifies a decision Q47 made on a guess. `classify
 The pattern is the one this milestone keeps repeating and is worth naming plainly: **every check of a release artifact so far has verified the file we built rather than the file someone receives.** Q44 was the packaged binary, Q47 the macOS attribute, this the Windows one. Each was found by making CI do the thing rather than describe it.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q54 — m2-auto-record/09-m2-closeout — finding
+
+**Question:** Eleven test files carried `#![cfg(unix)]` and 56 integration tests had never compiled on Windows, against ADR-0025's "a milestone is not done until both pass". What was the gate actually protecting?
+**Options considered:** port them one at a time as each is needed / remove all eleven and find out
+**Chosen:** Removed all eleven. **Nothing in the gate was about the Core.** Seven files needed no change whatsoever; four hard-coded a filesystem path for an endpoint the Core has addressed two ways since M2. 55 of the 56 tests now run on Windows, and the one that stays gated is gated for a reason.
+**Decided-by:** agent
+**Justification:** The split was the whole finding. **Seven files — 30 tests across `auto_record`, `caption_resilience`, `consent_gate`, `fixture_audio_pipeline`, `machine_isolation`, `script_preference` and `tray_control` — touch no socket at all.** They compiled on Windows with the gate deleted and nothing else done. That gate was pure inheritance: copied from the siblings that do drive a transport, and never questioned because the platform it excluded was never run.
+
+The other four bind one. `transport::bind` and `CoreClient::connect_to` have taken `&Path` on unix and `&str` on Windows since the named-pipe implementation landed, and `lib.rs` cfg's its call site accordingly — the *tests* never did. `tests/common/mod.rs` is the two lines that were missing: `Endpoint` aliases to `PathBuf` or `String`, and `&PathBuf` and `&String` deref to exactly what each platform's `bind` wants, so one harness satisfies both. On Windows the endpoint carries a uuid, because the pipe namespace is machine-wide and has no temporary directory to be scoped by.
+
+**One test stays `#[cfg(unix)]` and is now gated on its own merits rather than its file's.** `a_stale_socket_file_is_cleaned_up` is about a socket *file* outliving the process that bound it, which is a Unix domain socket property; a named pipe stops existing when its last handle closes, so there is no leftover and nothing to port.
+
+**Running them found one defect, and it was in a test rather than the product.** `a_watchlist_app_taking_the_microphone_records_a_meeting` failed deterministically on Windows — a Meeting started and never showed as stopped. Auto-Record is fine: the same test passes at a 4 s wait. What failed was `settle()`, a fixed 600 ms sleep, tuned on the only platform the file had ever been allowed to run on. A sleep is an assertion about a clock, and this one had been true for one machine and untested everywhere else.
+
+Replaced with polling on the state the test is actually waiting for, up to a deadline far past either platform. The three tests that assert an *absence* keep the fixed wait, because there is nothing to poll for when the claim is that nothing happens; so do the two that assert "exactly one, not two", where polling for one could observe it before a second arrived. The suite is now **faster as well as correct** — 1.83 s against 3.2 s — because a poll returns when the state is real instead of when the clock says so.
+
+**Not established:** a real Windows audio stack. Every one of these drives `FixtureSource` and `FixtureDetectionSource`, so what is now covered on Windows is the Core, the store, the driver and the transport — not a microphone. Auto-Record, dual-channel capture and the device-churn path on physical Windows hardware remain exactly as unobserved as before, and remain the thing only an Operator's own machine can supply.
+**Outcome:** applied
+**Ref:** (pending)

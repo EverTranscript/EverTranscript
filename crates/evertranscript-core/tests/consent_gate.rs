@@ -6,8 +6,6 @@
 //! enforced in the Core where no Client can route around it, and tested
 //! here.
 
-#![cfg(unix)]
-
 use std::sync::Arc;
 
 use evertranscript_core::Core;

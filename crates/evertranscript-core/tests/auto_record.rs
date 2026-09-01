@@ -6,8 +6,6 @@
 //! the whole thing off — through the Core, the store, and the driver, with
 //! nothing mocked but the two seams that exist to be mocked.
 
-#![cfg(unix)]
-
 use std::sync::Arc;
 
 use evertranscript_core::Core;
@@ -46,8 +44,37 @@ async fn core_watching(
     (core, dir, shutdown)
 }
 
+/// Long enough for the driver to have done nothing.
+///
+/// Only for the tests that assert an absence. There is nothing to poll for
+/// when the claim is that no Meeting appears, so this stays a fixed wait.
 async fn settle() {
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+}
+
+/// Waits until the record says what the test is waiting for.
+///
+/// **This replaced a fixed 600 ms sleep, and the sleep was a platform
+/// assumption.** 600 ms was enough on macOS, which is the only platform this
+/// file had ever run on — `#![cfg(unix)]` kept it off Windows, where the
+/// same path takes longer and
+/// `a_watchlist_app_taking_the_microphone_records_a_meeting` failed
+/// deterministically. Nothing was wrong with Auto-Record: at 4 s the same
+/// test passes. What was wrong was asserting on a clock (DECISIONS Q54).
+///
+/// Polling keeps the fast machine fast and the slow one correct, and the
+/// deadline is deliberately far past either — a wait that expires still
+/// hands the assertion the real state, so the test fails on what it is
+/// about rather than on a timeout.
+async fn settle_until(core: &Core, ready: impl Fn(&[evertranscript_protocol::Meeting]) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let meetings = core.list_meetings(10, 0).await.expect("list");
+        if ready(&meetings) || std::time::Instant::now() >= deadline {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
 }
 
 #[tokio::test]
@@ -62,7 +89,10 @@ async fn a_watchlist_app_taking_the_microphone_records_a_meeting() {
             .fragmented(5_000),
     )
     .await;
-    settle().await;
+    settle_until(&core, |m| {
+        m.first().is_some_and(|meeting| meeting.ended_at.is_some())
+    })
+    .await;
     shutdown.cancel();
 
     let meetings = core.list_meetings(10, 0).await.expect("list");
@@ -231,7 +261,7 @@ async fn a_meeting_auto_record_started_recovers_from_a_crash_like_any_other() {
             Box::new(SilentNotifier),
             shutdown.clone(),
         ));
-        settle().await;
+        settle_until(&core, |m| !m.is_empty()).await;
 
         let meetings = core.list_meetings(10, 0).await.expect("list");
         assert_eq!(meetings.len(), 1, "Auto-Record should have started one");
@@ -274,7 +304,10 @@ async fn every_shipped_watchlist_row_triggers_a_meeting() {
             .wait(30_000)
             .fragmented(5_000);
         let (core, _dir, shutdown) = core_watching(timeline).await;
-        settle().await;
+        settle_until(&core, |m| {
+            m.first().is_some_and(|meeting| meeting.ended_at.is_some())
+        })
+        .await;
         shutdown.cancel();
 
         let meetings = core.list_meetings(10, 0).await.expect("list");

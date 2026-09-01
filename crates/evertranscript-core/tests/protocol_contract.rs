@@ -5,9 +5,8 @@
 //! philosophy, the protocol *is* the tested seam for the Core's control
 //! plane, which is why the Electron Client can stay thin.
 
-#![cfg(unix)]
+mod common;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use evertranscript_core::Core;
@@ -21,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 
 /// A Core listening on a private socket, torn down when dropped.
 struct TestCore {
-    socket_path: PathBuf,
+    socket_path: common::Endpoint,
     shutdown: CancellationToken,
     _dir: tempfile::TempDir,
 }
@@ -30,7 +29,7 @@ impl TestCore {
     async fn start() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         // Short path: unix socket paths are length-limited.
-        let socket_path = dir.path().join("s");
+        let socket_path = common::endpoint(dir.path());
         let history_dir = dir.path().join("History");
 
         let core = Core::with_history_dir_acknowledged(history_dir).expect("core");
@@ -205,10 +204,18 @@ async fn a_second_core_refuses_to_bind_a_live_socket() {
     );
 }
 
+/// Unix only, and genuinely so rather than by inheritance.
+///
+/// A stale socket *file* is a Unix domain socket property: the path outlives
+/// the process that bound it, and something has to unlink it. A Windows
+/// named pipe is a kernel object that stops existing when its last handle
+/// closes, so there is no leftover to clean and nothing here to port. This
+/// is the only test in the file that stays gated (DECISIONS Q54).
+#[cfg(unix)]
 #[tokio::test]
 async fn a_stale_socket_file_is_cleaned_up() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let socket_path = dir.path().join("s");
+    let socket_path = common::endpoint(dir.path());
 
     // A socket file left behind by a Core that died without unlinking: bind
     // it with raw tokio (which does not unlink on drop) and let it go, so the
@@ -230,7 +237,7 @@ async fn a_stale_socket_file_is_cleaned_up() {
 #[tokio::test]
 async fn an_incomplete_copy_is_reported_in_status() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let socket_path = dir.path().join("s");
+    let socket_path = common::endpoint(dir.path());
     let history_dir = dir.path().join("History");
 
     // Mirrors copied without the hidden machine store (ADR-0035).

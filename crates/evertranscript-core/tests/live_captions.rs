@@ -1,9 +1,8 @@
 //! Live captions as a Client experiences them: subscribe, receive, and
 //! attach mid-meeting without losing anything (ADR-0028).
 
-#![cfg(unix)]
+mod common;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use evertranscript_core::Core;
@@ -20,7 +19,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 struct TestCore {
-    socket_path: PathBuf,
+    socket_path: common::Endpoint,
     core: Arc<Core>,
     shutdown: CancellationToken,
     _dir: tempfile::TempDir,
@@ -29,7 +28,7 @@ struct TestCore {
 impl TestCore {
     async fn start(lines: &'static [&'static str]) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let socket_path = dir.path().join("s");
+        let socket_path = common::endpoint(dir.path());
         let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
 
         // Enough speech, with pauses, to close several chunks.

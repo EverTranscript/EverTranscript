@@ -8,8 +8,6 @@
 //! a default quietly substituted, produces a Meeting that records perfectly
 //! and writes it in the wrong script.
 
-#![cfg(unix)]
-
 use std::sync::Arc;
 
 use anyhow::Result;

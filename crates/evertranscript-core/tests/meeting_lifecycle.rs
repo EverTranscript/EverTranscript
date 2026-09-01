@@ -5,7 +5,7 @@
 //! and a real History folder. The observable outputs are exactly the ones the
 //! PRD names: SQLite content, Mirror files, and protocol responses.
 
-#![cfg(unix)]
+mod common;
 
 use std::path::Path;
 use std::path::PathBuf;
@@ -26,7 +26,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 struct TestCore {
-    socket_path: PathBuf,
+    socket_path: common::Endpoint,
     history_dir: PathBuf,
     core: Arc<Core>,
     shutdown: CancellationToken,
@@ -36,7 +36,7 @@ struct TestCore {
 impl TestCore {
     async fn start() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
-        let socket_path = dir.path().join("s");
+        let socket_path = common::endpoint(dir.path());
         let history_dir = dir.path().join("History");
 
         let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");

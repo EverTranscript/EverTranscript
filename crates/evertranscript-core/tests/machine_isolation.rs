@@ -8,8 +8,6 @@
 //! large-v3-turbo, and tests documented as using "a script, so no hardware
 //! is involved" began doing real inference inside `stop`.
 
-#![cfg(unix)]
-
 use evertranscript_core::Core;
 use evertranscript_protocol::ModelAvailability;
 

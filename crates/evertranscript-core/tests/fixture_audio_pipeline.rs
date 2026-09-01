@@ -7,8 +7,6 @@
 //! to what went in. Later milestones extend the same path through ASR
 //! (ticket 06) and diarization.
 
-#![cfg(unix)]
-
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;

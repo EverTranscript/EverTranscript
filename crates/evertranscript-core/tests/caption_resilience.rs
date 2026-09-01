@@ -4,8 +4,6 @@
 //! said survives pressing stop, and a broken transcriber never takes the
 //! recording down with it.
 
-#![cfg(unix)]
-
 use std::sync::Arc;
 
 use anyhow::Result;
