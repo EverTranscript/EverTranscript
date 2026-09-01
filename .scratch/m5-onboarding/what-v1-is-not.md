@@ -6,7 +6,8 @@ list, assembled from the open criteria across M1–M5 and grouped by what
 would actually be needed to close each.
 
 Counts at the time of writing: **M1 65/65, M2 85/85, M3 69/71, M4 66/74,
-M5 58/60.**
+M5 58/60** — M4 gained two when the Summary sidecar was finally made to
+infer on Windows in CI (Q45).
 
 ---
 
@@ -28,9 +29,11 @@ from somewhere else, and each is already labelled that way in its ticket.
   self-serve.
 - **Installing on Windows, on an Operator's machine.** CI now installs the
   NSIS package on its own runner and runs what it installed, which is how
-  Q44 found that the package had never contained the Core. What a runner
-  cannot supply is a real audio stack: Auto-Record, dual-channel capture and
-  the device-churn path are still unobserved on physical Windows hardware.
+  Q44 found that the package had never contained the Core, and the Summary
+  sidecar now loads a model and generates there on every run (Q45). What a
+  runner cannot supply is a real audio stack: Auto-Record, dual-channel
+  capture and the device-churn path are still unobserved on physical Windows
+  hardware.
 - **The Briefing read by someone other than its author.** It has one job: to
   make a stranger able to say what the product does before they let it
   record. Nobody has tried.
@@ -55,11 +58,21 @@ from somewhere else, and each is already labelled that way in its ticket.
 
 ## 2. Things measured and found wanting
 
-- **Summary quality is bad.** On a real recording containing two plain
-  commitments, the shipped local model produced `None noted.` — zero of two
-  action items. The registered 0.5B is "the model that was verified, not the
-  model that should ship", and choosing the real default is the work M4's
-  close-out is still owed.
+- **Summary quality is bad, and worse than M4 recorded.** On a real
+  recording containing two plain commitments the shipped local model produced
+  `None noted.` — zero of two action items. Q45 then measured it on three
+  lines containing one unmistakable commitment: it answered `None noted.`,
+  contradicted itself with four `Who | What | When | Said at` rows, and
+  reproduced all three transcript lines verbatim. **The `Said at` times it
+  gave (`14:00`, `12:30`) and the `When` values (`Monday`, `Thursday
+  morning`) appear nowhere in the input.** Rule 7 of the system prompt
+  forbids guessing at dates; rule 5 gives `Said at` the job of letting an
+  item be checked against what was said. So the column that exists to make
+  the Summary auditable is the one being invented, inside a record ADR-0009
+  makes immutable. It is not merely missing action items — it is
+  manufacturing evidence for ones it did not find. The registered 0.5B is
+  "the model that was verified, not the model that should ship", and
+  choosing the real default is the most overdue thing on this list.
 - **No Summary measured on a long meeting.** The recording used is 89
   seconds, so map-reduce never engaged. Chunk-boundary behaviour on ninety
   minutes — where the M4 failure mode actually lives — is exercised only
