@@ -821,3 +821,17 @@ Nothing in the file is about capture — it says so itself, standing in for the 
 Settling it needs one of two things: a Windows machine with no input device, or a test that deliberately opens live capture on the runner and asserts it degrades rather than dies. The second is cheap and belongs with the M2 criteria that already say Auto-Record and dual-channel capture are unobserved on physical Windows hardware — this is the same gap, reached from the other side.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q56 — summary-chunking-and-suggested-title/03 — decision
+
+**Question:** `summary::generate::generate` — chunked map-reduce with a title, written in M4, tested, documented — had no production caller. The server built one `Request` out of an entire meeting. Adopt the module, or delete it and re-derive?
+**Options considered:** wire the existing module into the summarize path / delete it and re-derive chunking inside that path / leave it dead and correct the comment claiming it was reserved
+**Chosen:** Deleted and re-derived, with the Knob **choosing once**: the first chunk's outcome selects the Backend for the whole run.
+**Decided-by:** Operator, in a grilled design session
+**Justification:** The module predates the Knob and has no seam for it — `knob::run` wraps a single `Request`, so adopting the module would have meant retrofitting Fallback onto a function whose shape assumes one Backend and one call. Re-deriving inside the summarize path let the fork be designed rather than patched, and the fork is real: a per-chunk Knob would let one hiccup stitch a single record out of two models under a `summary_backend` label naming one of them, and a whole-run retry would double the cost of exactly the meetings long enough to chunk. Choosing once keeps the old design's chunk tolerance — five parts of six is a usable record and none is not — while making the label true.
+
+**What the dead code was hiding is worth naming.** M4's close-out says "no Summary measured on a long meeting", which reads as a measurement nobody took. It was not: map-reduce **could not engage**, so a ninety-minute meeting went to the Backend whole and the chunk-boundary behaviour the close-out wanted measured did not exist to measure. Six tests asserted it against a function nobody called — the same vacuous shape as Q43's guarantee tests, one level up: not a test that passes without doing the work, but a test whose subject was unreachable from the product. They now live at the summarize path, where an Operator's record can feel them.
+
+Backends became injectable on the Core, following the `set_transcriber_factory` / `set_source_factory` idiom that already existed for exactly this reason. That is a new factory, not a new *kind* of seam, and it is what lets every behaviour here be tested without half a gigabyte of model.
+**Outcome:** applied
+**Ref:** (pending)

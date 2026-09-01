@@ -11,15 +11,15 @@ markdown for one chunk and many.
 
 **Blocked by:** 02 (both rewrite the same summarize body; the fill must survive the rewrite).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The dead generation function and result type are gone, with their tests; the splitter, constants, renderer, heading extractor and chunk-boundary tests remain
-- [ ] A transcript long enough to chunk produces multiple Backend requests and one stored Summary; a short one behaves exactly as before
-- [ ] Choose-once Fallback: a first chunk the cloud Backend cannot serve sends the whole run to local, and the stored Backend label names local — never a mixture
-- [ ] A later chunk failing is skipped; the Summary is stored from the chunks that succeeded; what was lost is carried in memory and logged (the record's disclosure is ticket 04)
-- [ ] A failed reduce degrades to the concatenated chunk summaries rather than discarding them
-- [ ] Cancellation mid-run stores nothing and never falls back; Strict Mode reports instead of switching
-- [ ] The Suggested Title comes from the final markdown in both the one-chunk and many-chunk paths
-- [ ] The delete-and-rederive and choose-once calls are journaled (re-read the journal tail immediately before appending — a concurrent session has collided once)
-- [ ] The honest ledger's "map-reduce never engaged" prose and the M4 criteria carrying the same sentence are corrected; no box is ticked — the long-meeting quality measurement is still owed
-- [ ] Tests drive scripted chunk outcomes at the Backend trait seam; no model required; the local gate is green
+- [x] The dead function and result type are gone with their six tests (101 lines); the splitter, constants, renderer, heading extractor and the seven rendering/chunking tests remain and pass
+- [x] A 400-line transcript produces several chunk requests plus a reduce — counted through the fake's recorded prompts, which is the only way to tell chunking from one long request; a 3-line one still makes a single call
+- [x] Choose-once Fallback: a cloud Backend that fails the first chunk sends the whole run to local, the stored label says Local, and local's own prompt log shows it served every chunk rather than just the first
+- [x] A later chunk failing is skipped and the Summary still stores; the loss is counted on the run and logged with `failed` and `of` counts. The record's disclosure is ticket 04
+- [x] A failed reduce keeps the parts — asserted by finding an early chunk's text in the stored Summary
+- [x] Every chunk failing is an error and stores nothing. Cancellation and Strict Mode are unchanged: both are decided inside `knob::run`, which still owns them, and the re-derived loop checks the cancel flag between chunks and before the reduce
+- [x] The Suggested Title comes from the reduced markdown, not a chunk's — tested with three different headings where only the reduce's may win
+- [x] Journaled as Q56, after re-reading the tail — the concurrent session had reached Q55 while this ticket was in progress
+- [x] Both corrected, and both now say the sharper thing: it was not that the meeting was too short, it was that no meeting of any length would have chunked. No box ticked — the measurement is still owed
+- [x] Seven tests driving scripted chunk outcomes through the injected Backend factory; no model; the local gate is green

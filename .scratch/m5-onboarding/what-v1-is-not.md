@@ -82,9 +82,12 @@ from somewhere else, and each is already labelled that way in its ticket.
   "the model that was verified, not the model that should ship", and
   choosing the real default is the most overdue thing on this list.
 - **No Summary measured on a long meeting.** The recording used is 89
-  seconds, so map-reduce never engaged. Chunk-boundary behaviour on ninety
-  minutes — where the M4 failure mode actually lives — is exercised only
-  against the fake.
+  seconds. Until Q56 this was worse than it read: map-reduce could not engage
+  at all, because the chunking path had no production caller and the server
+  sent whole meetings in one request. Chunking now engages and its behaviour
+  is tested at the summarize path; what is still owed is the *measurement* —
+  a real ninety-minute meeting through a real Backend, which is where the M4
+  failure mode actually lives.
 - **DER 3.9% is on a construction, not a conversation.** The second speaker
   is the first one resampled. It shows the pipeline separates two
   acoustically distinct voices; it is not a DER on a real multi-person

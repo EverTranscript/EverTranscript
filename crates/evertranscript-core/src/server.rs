@@ -179,6 +179,19 @@ fn speaker_to_wire(
 /// A named pair rather than an inline tuple, and the naming carries the
 /// guarantee: the second element is **always** local. Nothing in the type
 /// permits a cloud Backend to arrive as a fallback.
+/// What one Summary run produced.
+///
+/// Richer than the Knob's own outcome because a chunked run has facts the
+/// single-request path never had: how many chunks there were, and how many of
+/// them the Backend could not serve.
+struct SummaryRun {
+    text: String,
+    used: summary::BackendIdentity,
+    fell_back_from: Option<String>,
+    chunks: usize,
+    failed_chunks: usize,
+}
+
 type ChosenBackends = (
     Box<dyn summary::Backend + 'static>,
     Option<Box<dyn summary::Backend + 'static>>,
@@ -697,33 +710,117 @@ impl Core {
         // Generation is minutes of CPU. Off the async runtime, like
         // Diarization, so a Summary cannot stall the Core's answers to
         // Clients — or, worse, a recording.
-        let outcome = tokio::task::spawn_blocking(move || -> Result<summary::knob::Outcome> {
+        let outcome = tokio::task::spawn_blocking(move || -> Result<SummaryRun> {
             let lookup = |id: &str| names.get(id).cloned();
             let material = summary::generate::Material {
                 segments: &segments,
                 speaker_names: &lookup,
                 notes: notes.as_deref(),
             };
-            // Chunking and armor first, then the Knob decides who runs it.
             let transcript = summary::generate::render_transcript(&material);
-            let request = summary::Request {
-                system,
-                user: summary::prompt::build_user_message(notes.as_deref(), &transcript),
+            let chunks = summary::generate::chunk(&transcript);
+            let request_for = |piece: &str| summary::Request {
+                system: system.clone(),
+                user: summary::prompt::build_user_message(notes.as_deref(), piece),
             };
-            // A `match` rather than `Option::map`: the closure's inferred
-            // return lifetime outlives the borrow and the compiler is right
-            // to object.
+
+            // **The first chunk chooses the Backend for the whole run.** The
+            // Knob decides once, here; everything after it runs on whoever
+            // answered. A per-chunk Knob would let a mid-meeting hiccup stitch
+            // one record out of two models under a label naming one of them,
+            // which is a worse outcome than the Summary being local throughout.
             let fallback_ref: Option<&mut dyn summary::Backend> = match fallback.as_mut() {
                 Some(backend) => Some(backend.as_mut()),
                 None => None,
             };
-            summary::knob::run(&knob, chosen.as_mut(), fallback_ref, &request, &cancel)
-                .map_err(|error| anyhow::anyhow!("{error}"))
+            let first = summary::knob::run(
+                &knob,
+                chosen.as_mut(),
+                fallback_ref,
+                &request_for(&chunks[0]),
+                &cancel,
+            )
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            let used = first.used.clone();
+            let fell_back_from = first.fell_back_from.clone();
+
+            // Whoever served chunk one serves the rest. `fell_back_from` is
+            // the only thing that can tell us which that was, and it is set by
+            // the Knob rather than inferred here.
+            let winner: &mut dyn summary::Backend = if fell_back_from.is_some() {
+                fallback
+                    .as_mut()
+                    .expect("a Fallback happened, so there was a fallback Backend")
+                    .as_mut()
+            } else {
+                chosen.as_mut()
+            };
+
+            // Map. A chunk that fails is skipped rather than fatal: five parts
+            // of six is a usable record of the meeting and none is not.
+            // Cancellation is the Operator, not a bad chunk — it stops.
+            let mut parts = vec![summary::prompt::scrub(&first.text)];
+            let mut failed = 0usize;
+            for piece in &chunks[1..] {
+                if cancel.is_cancelled() {
+                    anyhow::bail!("{}", summary::BackendError::Cancelled);
+                }
+                match winner.generate(&request_for(piece), &cancel) {
+                    Ok(text) => parts.push(summary::prompt::scrub(&text)),
+                    Err(summary::BackendError::Cancelled) => {
+                        anyhow::bail!("{}", summary::BackendError::Cancelled)
+                    }
+                    Err(_) => failed += 1,
+                }
+            }
+
+            let text = if chunks.len() == 1 {
+                parts.remove(0)
+            } else {
+                // Reduce: one more pass over the partial summaries. A failed
+                // reduce is not a failed run — the parts are still a record of
+                // the meeting, and discarding them because the last call timed
+                // out would waste every call before it.
+                if cancel.is_cancelled() {
+                    anyhow::bail!("{}", summary::BackendError::Cancelled);
+                }
+                let combined = parts.join("\n\n---\n\n");
+                let reduce = request_for(&format!(
+                    "These are summaries of consecutive parts of one meeting. \
+                     Combine them into a single summary in the same format.\n\n{combined}"
+                ));
+                match winner.generate(&reduce, &cancel) {
+                    Ok(text) => summary::prompt::scrub(&text),
+                    Err(summary::BackendError::Cancelled) => {
+                        anyhow::bail!("{}", summary::BackendError::Cancelled)
+                    }
+                    Err(_) => combined,
+                }
+            };
+
+            Ok(SummaryRun {
+                text,
+                used,
+                fell_back_from,
+                chunks: chunks.len(),
+                failed_chunks: failed,
+            })
         })
         .await??;
 
-        let markdown = summary::prompt::scrub(&outcome.text);
+        // Already scrubbed per part inside the run.
+        let markdown = outcome.text.clone();
         let used = outcome.used.label();
+        if outcome.failed_chunks > 0 {
+            // Logged here, recorded beside the Summary in the next ticket. An
+            // Operator cannot read the Core's log, so this line is for whoever
+            // is debugging, not for the person whose record is incomplete.
+            tracing::warn!(
+                failed = outcome.failed_chunks,
+                of = outcome.chunks,
+                "some chunks of this Meeting could not be summarized"
+            );
+        }
         if let Some(from) = &outcome.fell_back_from {
             // Never silent: an Operator who chose Cloud and received local
             // quality is owed the reason.
