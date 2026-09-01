@@ -74,7 +74,18 @@ const REPEAT_PENALTY: f32 = 1.15;
 /// model that has started repeating itself.
 const MAX_OUTPUT_TOKENS: i32 = 2_048;
 
+mod fit;
+
 fn main() -> anyhow::Result<()> {
+    // Before anything expensive. A Summary must never be the reason a
+    // recording stutters, and asking the scheduler is cheaper than any
+    // arrangement where the two processes have to know about each other.
+    let lowered = fit::lower_priority();
+    eprintln!(
+        "priority: {}",
+        if lowered { "lowered" } else { "unchanged" }
+    );
+
     let backend = LlamaBackend::init()?;
     let mut loaded: Option<(String, LlamaModel)> = None;
 
@@ -125,7 +136,67 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn load(backend: &LlamaBackend, path: &str) -> anyhow::Result<(String, LlamaModel)> {
-    let model = LlamaModel::load_from_file(backend, path, &LlamaModelParams::default())?;
+    // **Two loads, and the first one is cheap.** How many layers to offload
+    // depends on how many the model has, and that is only knowable from the
+    // model — but it has to be decided *before* the load it configures. A
+    // vocab-only load reads the metadata without the weights, which answers
+    // the question for the price of parsing a header.
+    //
+    // **Read from the metadata, not from `n_layer()`.** A vocab-only model
+    // reports zero layers — measured, after the first version of this
+    // silently offloaded nothing and turned a Metal load into a CPU one
+    // while every test stayed green. The block count lives under the
+    // architecture's own key, which is the general GGUF convention and so
+    // works for whatever model is registered next.
+    let layers = LlamaModel::load_from_file(
+        backend,
+        path,
+        &LlamaModelParams::default().with_vocab_only(true),
+    )
+    .ok()
+    .and_then(|metadata| {
+        let architecture = metadata.meta_val_str("general.architecture").ok()?;
+        metadata
+            .meta_val_str(&format!("{architecture}.block_count"))
+            .ok()?
+            .parse::<u32>()
+            .ok()
+    })
+    .unwrap_or(0);
+
+    let model_bytes = std::fs::metadata(path).map(|file| file.len()).unwrap_or(0);
+    let memory = fit::total_memory_bytes();
+    let offload = fit::layers_that_fit(model_bytes, layers, memory);
+
+    // Said out loud, because "it fits" is otherwise a claim nobody can check
+    // — which is exactly how the criterion this replaces stayed false for a
+    // milestone. stderr is inherited by the Core, so this lands in its log.
+    eprintln!(
+        "fit: {offload} of {layers} layers offloaded ({} MB of weights, {} MB of memory)",
+        model_bytes / 1_048_576,
+        memory / 1_048_576
+    );
+
+    let model = LlamaModel::load_from_file(
+        backend,
+        path,
+        &LlamaModelParams::default().with_n_gpu_layers(offload),
+    )
+    .map_err(|error| {
+        // A load that fails when nothing was offloaded is a model this
+        // machine cannot hold at all, which is a different problem from a
+        // missing file and deserves to say so.
+        if offload == 0 {
+            anyhow::anyhow!(
+                "this model does not fit on this machine: {} MB of weights against \
+                 {} MB of memory ({error})",
+                model_bytes / 1_048_576,
+                memory / 1_048_576
+            )
+        } else {
+            anyhow::anyhow!("{error}")
+        }
+    })?;
     let name = std::path::Path::new(path)
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())

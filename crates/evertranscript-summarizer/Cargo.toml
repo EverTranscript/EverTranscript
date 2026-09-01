@@ -9,3 +9,13 @@ evertranscript-core.workspace = true
 anyhow.workspace = true
 llama-cpp-2 = "0.1.154"
 serde_json.workspace = true
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+
+# Scheduling priority, which has no portable spelling. Unix drops niceness
+# directly; Windows has its own call and the feature is already enabled
+# workspace-wide for Meeting Detection.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true

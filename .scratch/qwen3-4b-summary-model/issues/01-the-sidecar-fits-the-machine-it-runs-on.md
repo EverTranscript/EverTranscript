@@ -8,11 +8,11 @@ layer offloaded by default is what makes the omission bite.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The sidecar computes how many layers to offload from the model's own metadata and the machine's memory, rather than accepting the default that offloads everything
-- [ ] Generation runs at reduced priority, so a Summary cannot contend with a live recording for CPU
-- [ ] The chosen layer count and priority appear in the sidecar's diagnostics, so "it fits" is observable rather than assumed
-- [ ] A machine that cannot fit the model at all fails with a reason naming that, not a generic unavailability
-- [ ] M4's criterion is un-ticked until this is true, and its text says what was actually missing
-- [ ] The local gate is green
+- [x] Computed from the model's block count and the machine's memory. **The layer count must come from GGUF metadata, not `n_layer()`** — a vocab-only load reports zero layers, which the first version believed, silently turning a Metal load into a CPU one while every test stayed green. Caught by running it: 19.1s versus 2.8s for the same generation
+- [x] The process lowers its own scheduling priority at startup, before anything expensive — nice 10 on unix, below-normal on Windows. Best-effort: a platform that refuses runs at normal priority rather than failing
+- [x] Both reported on stderr, which the Core inherits. This is what made the metadata bug visible at all, and it is the answer to how the original criterion stayed false for a milestone
+- [x] A load that fails with nothing offloaded reports the weights and the memory rather than a bare error
+- [x] M4's criterion now records that it was ticked falsely for a milestone, what was missing, and that it is true
+- [x] Seven pure tests for the decision plus a real load; the local gate is green
