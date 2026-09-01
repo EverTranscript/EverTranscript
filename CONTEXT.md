@@ -43,6 +43,13 @@ Post-meeting notes generated from a single Meeting's Transcript and Notes.
 Operator-authored writing attached to a Meeting — jotted live or added after. Freely editable forever; feeds Summary generation as steering context.
 _Avoid_: annotations, comments
 
+**Title Chain**:
+Which name a Meeting wears, in strict precedence (ADR-0030 as amended by ADR-0036): manual > calendar > Suggested Title > detected-app placeholder. A Meeting's stored name is always a committed one — a person's or the calendar's word, or a Suggested Title that has been written; the placeholder is derived at display time and never stored.
+
+**Suggested Title**:
+The name a Meeting's first Summary proposes when no person or calendar has named it; third in the Title Chain. Written once into the Meeting's name at that moment and thereafter indistinguishable from any other committed name: it does not track later Summaries, and clearing the name re-opens the slot for the next Summary to fill.
+_Avoid_: auto title, generated title (it is a suggestion precisely because every human and calendar name outranks it)
+
 **History**:
 The corpus of all past Meetings — audio, transcripts, diarization, Summaries, Notes — and the Voiceprints that recognize its Speakers. It exists only on the Operator's machine.
 _Avoid_: archive, library
