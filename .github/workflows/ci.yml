@@ -173,18 +173,18 @@ jobs:
         run: cargo build -p evertranscript-summarizer
 
       - name: Tests
-        # **One test at a time, on both platforms.** Windows has always
-        # serialised for two reasons, both real: these tests open capture
+        # **Windows runs one test at a time.** Two reasons, both real: these tests open capture
         # devices, and a runner with no audio hardware is the worst case for
         # doing that concurrently — and when a crash does happen, sixteen
         # threads dying together makes it unattributable, which is exactly the
         # position this repo was in.
         #
-        # macOS now serialises for a third: the registered Summary model is
-        # 2.5 GB, and running the model-gated tests in parallel loaded two of
-        # them at once. That did not fail fast — it ran for thirty-one minutes
-        # and then hit the sidecar's own timeout, on the platform that had
-        # been comfortably green while Windows, already serialised, passed.
+        # macOS does not, and serialising it made things worse rather than
+        # better: cargo already runs test *binaries* one after another, so the
+        # contention was never across the suite — it was two tests inside one
+        # binary each loading a 2.5 GB model. Serialising everything traded a
+        # 10-minute binary for a 28-minute one and still ran out. The fix
+        # belongs where the contention is, and lives in the test itself.
         #
         # Tighter than the job's hour because this is the step with the
         # unbounded work in it: the only one that runs a real model, with
@@ -215,7 +215,7 @@ jobs:
         # into a buffer nobody reads — paying the whole cost of the
         # measurement for none of its value. The same flag is what makes the
         # Summary sidecar name the model it loaded.
-        run: cargo test --workspace -- --nocapture --test-threads=1
+        run: cargo test --workspace -- --nocapture ${{ runner.os == 'Windows' && '--test-threads=1' || '' }}
 
       # `cargo test` regenerates the TypeScript bindings and JSON schemas.
       # If they differ from what is committed, the protocol changed without

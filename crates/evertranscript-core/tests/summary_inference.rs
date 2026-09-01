@@ -84,10 +84,6 @@ fn sidecar() -> Option<PathBuf> {
 /// for work that did not happen — which is the exact shape of the vacuous
 /// guarantee tests DECISIONS Q43 had to correct.
 fn spawn() -> Option<SidecarBackend> {
-    // One model load per test in this binary was affordable at 491 MB and is
-    // not at 2.5 GB — see the CI note about two loading at once. The tests
-    // below each want their own backend because one of them deliberately
-    // shuts it down, so the saving here is serialisation rather than sharing.
     let model = model()?;
     let binary = sidecar().expect(
         "EVERTRANSCRIPT_SUMMARY_MODEL is set, so the sidecar was meant to run, \
@@ -95,101 +91,118 @@ fn spawn() -> Option<SidecarBackend> {
          `cargo build -p evertranscript-summarizer` or set \
          EVERTRANSCRIPT_SUMMARIZER_BIN",
     );
-    let model = model.to_str().expect("the model path should be UTF-8");
-    // **Driven the way production drives it.** Using the undriven `spawn`
-    // here silently ran Qwen3 under plain framing and greedy decoding — the
-    // two things its publisher forbids — and produced a looping, self-talking
-    // output that looked like a model problem and was a harness problem.
     let driving = evertranscript_core::models::registry::SUMMARY_DEFAULT
         .driving
         .as_ref()
         .map(evertranscript_core::summary::sidecar::Driving::from_entry);
+    let model = model.to_str().expect("the model path should be UTF-8");
     Some(
         SidecarBackend::spawn_driven(Path::new(&binary), model, driving)
             .expect("the model should load"),
     )
 }
 
-#[test]
-fn the_sidecar_loads_a_model_and_generates() {
-    let Some(mut backend) = spawn() else {
+/// The one sidecar this binary uses, and the lock that keeps it that way.
+///
+/// **Never two models at once.** Tests inside a binary run in parallel, and
+/// two of these each spawning their own sidecar meant 5 GB of weights resident
+/// together. On a CI runner that did not fail fast — it ran for thirty-one
+/// minutes and then hit the sidecar's own timeout, which looked like a slow
+/// model and was a memory problem.
+///
+/// Held across each test rather than shared as a value, because one of them
+/// deliberately shuts the sidecar down: a `Mutex` gives serialisation and a
+/// fresh backend where a shared handle would give neither.
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn with_sidecar(test: impl FnOnce(SidecarBackend)) {
+    let _guard = ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(backend) = spawn() else {
         eprintln!("skipping: EVERTRANSCRIPT_SUMMARY_MODEL is not set");
         return;
     };
+    test(backend);
+}
 
-    // The model that answered, named. On the platform this test exists for,
-    // the interesting line in the log is this one.
-    let BackendIdentity::LocalSidecar { model } = backend.identity() else {
-        panic!("a sidecar Backend must identify as local");
-    };
-    assert!(
-        !model.is_empty(),
-        "the sidecar should report which model it loaded"
-    );
-    eprintln!("loaded: {model}");
-
-    let request = Request {
-        system: DEFAULT_SYSTEM_PROMPT.to_string(),
-        user: evertranscript_core::summary::prompt::build_user_message(None, TRANSCRIPT),
-    };
-    let summary = backend
-        .generate(&request, &Cancel::new())
-        .expect("generation should succeed");
-
-    eprintln!("generated {} chars:\n{summary}", summary.len());
-
-    let trimmed = summary.trim();
-    assert!(!trimmed.is_empty(), "the model generated nothing");
-    // Long enough to be a decode rather than a single stop token. Not a
-    // quality bar — a liveness one.
-    assert!(
-        trimmed.chars().count() > 20,
-        "the model produced {} characters, which is not a generation: {trimmed:?}",
-        trimmed.chars().count()
-    );
-
-    // **Prompt scaffolding must not survive.** The stop sequences are the only
-    // thing standing between a model that replays its prompt and a Meeting's
-    // permanent record, and this is the assertion that keeps them honest —
-    // `</transcript>` was missing from that list until this test was first run
-    // against a real model (DECISIONS Q45). Nothing legitimate can produce
-    // these: `escape_control_markers` breaks both tags in every untrusted
-    // string, so a literal one here was written by the model.
-    for scaffolding in ["</transcript>", "<transcript>", "The operator's own notes"] {
+#[test]
+fn the_sidecar_loads_a_model_and_generates() {
+    with_sidecar(|mut backend| {
+        // The model that answered, named. On the platform this test exists for,
+        // the interesting line in the log is this one.
+        let BackendIdentity::LocalSidecar { model } = backend.identity() else {
+            panic!("a sidecar Backend must identify as local");
+        };
         assert!(
-            !summary.contains(scaffolding),
-            "prompt scaffolding {scaffolding:?} reached the output:\n{summary}"
+            !model.is_empty(),
+            "the sidecar should report which model it loaded"
         );
-    }
-    assert!(
-        !summary.contains(DEFAULT_SYSTEM_PROMPT),
-        "the model echoed its own system prompt:\n{summary}"
-    );
+        eprintln!("loaded: {model}");
 
-    // **Reported, not asserted.** How much of the transcript came back
-    // verbatim is a quality measurement, and on the registered 0.5B it is
-    // high — the model reproduces the input and invents timestamps for it
-    // (Q45). Failing here would make a platform test fail for a model's
-    // sake on every platform at once, and would quietly turn M4's open
-    // "choose a real default model" criterion into this test's problem. So
-    // the number is printed on every run and the criterion stays where it
-    // belongs.
-    let echoed = TRANSCRIPT
-        .lines()
-        .filter(|line| !line.trim().is_empty() && summary.contains(line.trim()))
-        .count();
-    eprintln!(
-        "transcript lines reproduced verbatim: {echoed}/{}",
-        TRANSCRIPT.lines().count()
-    );
+        let request = Request {
+            system: DEFAULT_SYSTEM_PROMPT.to_string(),
+            user: evertranscript_core::summary::prompt::build_user_message(None, TRANSCRIPT),
+        };
+        let summary = backend
+            .generate(&request, &Cancel::new())
+            .expect("generation should succeed");
 
-    // Still answering afterwards. A sidecar that generates once and then
-    // wedges is a sidecar that works exactly one time per Meeting.
-    assert!(
-        backend.ping(),
-        "the sidecar stopped answering after generating"
-    );
-    backend.shutdown();
+        eprintln!("generated {} chars:\n{summary}", summary.len());
+
+        let trimmed = summary.trim();
+        assert!(!trimmed.is_empty(), "the model generated nothing");
+        // Long enough to be a decode rather than a single stop token. Not a
+        // quality bar — a liveness one.
+        assert!(
+            trimmed.chars().count() > 20,
+            "the model produced {} characters, which is not a generation: {trimmed:?}",
+            trimmed.chars().count()
+        );
+
+        // **Prompt scaffolding must not survive.** The stop sequences are the only
+        // thing standing between a model that replays its prompt and a Meeting's
+        // permanent record, and this is the assertion that keeps them honest —
+        // `</transcript>` was missing from that list until this test was first run
+        // against a real model (DECISIONS Q45). Nothing legitimate can produce
+        // these: `escape_control_markers` breaks both tags in every untrusted
+        // string, so a literal one here was written by the model.
+        for scaffolding in ["</transcript>", "<transcript>", "The operator's own notes"] {
+            assert!(
+                !summary.contains(scaffolding),
+                "prompt scaffolding {scaffolding:?} reached the output:\n{summary}"
+            );
+        }
+        assert!(
+            !summary.contains(DEFAULT_SYSTEM_PROMPT),
+            "the model echoed its own system prompt:\n{summary}"
+        );
+
+        // **Reported, not asserted.** How much of the transcript came back
+        // verbatim is a quality measurement, and on the registered 0.5B it is
+        // high — the model reproduces the input and invents timestamps for it
+        // (Q45). Failing here would make a platform test fail for a model's
+        // sake on every platform at once, and would quietly turn M4's open
+        // "choose a real default model" criterion into this test's problem. So
+        // the number is printed on every run and the criterion stays where it
+        // belongs.
+        let echoed = TRANSCRIPT
+            .lines()
+            .filter(|line| !line.trim().is_empty() && summary.contains(line.trim()))
+            .count();
+        eprintln!(
+            "transcript lines reproduced verbatim: {echoed}/{}",
+            TRANSCRIPT.lines().count()
+        );
+
+        // Still answering afterwards. A sidecar that generates once and then
+        // wedges is a sidecar that works exactly one time per Meeting.
+        assert!(
+            backend.ping(),
+            "the sidecar stopped answering after generating"
+        );
+        backend.shutdown();
+    });
 }
 
 // `a_loaded_sidecar_shuts_down_rather_than_hanging` was folded into the test
@@ -199,44 +212,41 @@ fn the_sidecar_loads_a_model_and_generates() {
 
 #[test]
 fn a_prompt_larger_than_one_batch_does_not_kill_the_sidecar() {
-    // **The regression this exists for.** `n_batch` defaults to 512 and the
-    // sidecar decodes the whole prompt in one call, so any transcript over
-    // roughly two minutes of speech killed the process — "backend
-    // unreachable: the sidecar exited", with no other explanation.
-    //
-    // It went unseen for a milestone because everything that ever reached it
-    // was small: the meeting M4 measured was 89 seconds, and chunking had no
-    // production caller (DECISIONS Q56), so nothing ever handed it a large
-    // prompt. Which means the Summary feature did not work on a meeting of
-    // any real length, and no test could see it.
-    let Some(mut backend) = spawn() else {
-        eprintln!("skipping: EVERTRANSCRIPT_SUMMARY_MODEL is not set");
-        return;
-    };
+    with_sidecar(|mut backend| {
+        // **The regression this exists for.** `n_batch` defaults to 512 and
+        // the sidecar decodes the whole prompt in one call, so any transcript
+        // over roughly two minutes of speech killed the process — "backend
+        // unreachable: the sidecar exited", with no other explanation.
+        //
+        // It went unseen for a milestone because everything that reached it
+        // was small: the meeting M4 measured was 89 seconds, and chunking had
+        // no production caller (DECISIONS Q56), so nothing ever handed it a
+        // large prompt. Which means the Summary feature did not work on a
+        // meeting of any real length, and no test could see it.
+        let mut transcript = String::new();
+        for index in 0..120 {
+            transcript.push_str(&format!(
+                "[00:{:02}:{:02}] Frank: We went through the quarterly plan and what it \
+                 means for the team over the next few weeks.\n",
+                index / 60,
+                index % 60
+            ));
+        }
+        let tokens = evertranscript_core::summary::generate::estimate_tokens(&transcript);
+        assert!(
+            tokens > 512,
+            "this test is pointless unless the prompt exceeds one default batch, got {tokens}"
+        );
 
-    let mut transcript = String::new();
-    for index in 0..120 {
-        transcript.push_str(&format!(
-            "[00:{:02}:{:02}] Frank: We went through the quarterly plan and what it \
-             means for the team over the next few weeks.\n",
-            index / 60,
-            index % 60
-        ));
-    }
-    let tokens = evertranscript_core::summary::generate::estimate_tokens(&transcript);
-    assert!(
-        tokens > 512,
-        "this test is pointless unless the prompt exceeds one default batch, got {tokens}"
-    );
-
-    let request = Request {
-        system: DEFAULT_SYSTEM_PROMPT.to_string(),
-        user: evertranscript_core::summary::prompt::build_user_message(None, &transcript),
-    };
-    let summary = backend
-        .generate(&request, &Cancel::new())
-        .expect("a prompt larger than one batch must generate, not kill the sidecar");
-    assert!(!summary.trim().is_empty());
-    assert!(backend.ping(), "the sidecar should still be answering");
-    backend.shutdown();
+        let request = Request {
+            system: DEFAULT_SYSTEM_PROMPT.to_string(),
+            user: evertranscript_core::summary::prompt::build_user_message(None, &transcript),
+        };
+        let summary = backend
+            .generate(&request, &Cancel::new())
+            .expect("a prompt larger than one batch must generate, not kill the sidecar");
+        assert!(!summary.trim().is_empty());
+        assert!(backend.ping(), "the sidecar should still be answering");
+        backend.shutdown();
+    });
 }
