@@ -105,6 +105,50 @@ jobs:
           verify "$RUNNER_TEMP/summary-model/summary.gguf" \
             74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db
 
+          # The transcription model. 874 MB, the largest thing here, and it
+          # buys the PRD's *top* named unverified risk: whisper.cpp quality
+          # on the Operator's actual languages. That risk has been measured
+          # exactly once, by hand, in M1 — `transcription_quality.rs` has
+          # skipped on every CI run since, on both platforms, because
+          # nothing set EVERTRANSCRIPT_TEST_MODEL. Six tests reporting `ok`
+          # in 0.00s is what that looks like from outside.
+          #
+          # **Verified by crc32, not sha256**, because `WHISPER_DEFAULT` in
+          # `models/registry.rs` carries `sha256: None` and `crc32:
+          # Some(3_055_274_469)`. Checking a number the registry does not
+          # hold would mean inventing a second source of truth for the same
+          # artifact; this checks the one it does hold, and the size beside
+          # it. Python is the only crc32 both runners agree on — macOS
+          # `cksum` uses a different polynomial and GNU `cksum -a crc32` is
+          # not on the macOS runner at all.
+          # One line on purpose: this is inside a YAML block scalar, and a
+          # Python script indented to satisfy the block is a Python syntax
+          # error while an unindented one ends the block. `reduce` over a
+          # chunked `iter` keeps it to a single statement and still streams
+          # the file rather than reading 874 MB into memory.
+          PY=$(command -v python3 || command -v python || true)
+          if [ -z "$PY" ] || ! "$PY" -c "import zlib" >/dev/null 2>&1; then
+            echo "::error::no usable python for the crc32 check (found: ${PY:-none})"
+            exit 1
+          fi
+          crc32() {
+            "$PY" -c "import zlib,sys,functools;f=open(sys.argv[1],'rb');print(functools.reduce(lambda h,c: zlib.crc32(c,h), iter(lambda: f.read(1<<20), b''), 0) & 0xffffffff)" "$1"
+          }
+          mkdir -p "$RUNNER_TEMP/whisper-model"
+          curl -sL --retry 3 --max-time 1800 \
+            -o "$RUNNER_TEMP/whisper-model/whisper.bin" \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin"
+          actual_size=$(wc -c < "$RUNNER_TEMP/whisper-model/whisper.bin" | tr -d ' ')
+          if [ "$actual_size" != "874188075" ]; then
+            echo "::error::whisper model is $actual_size bytes, expected 874188075"
+            exit 1
+          fi
+          actual_crc=$(crc32 "$RUNNER_TEMP/whisper-model/whisper.bin")
+          if [ "$actual_crc" != "3055274469" ]; then
+            echo "::error::whisper model crc32 $actual_crc, expected 3055274469"
+            exit 1
+          fi
+
       # `cargo test --workspace` does **not** produce this. It builds the
       # summarizer's unit-test harness into `deps/` and stops, so the
       # inference test would find no binary beside it. Verified by deleting
@@ -132,7 +176,14 @@ jobs:
         env:
           EVERTRANSCRIPT_DIARIZE_MODELS: ${{ runner.temp }}/diarize-models
           EVERTRANSCRIPT_SUMMARY_MODEL: ${{ runner.temp }}/summary-model/summary.gguf
-        run: cargo test --workspace ${{ runner.os == 'Windows' && '-- --test-threads=1' || '' }}
+          EVERTRANSCRIPT_TEST_MODEL: ${{ runner.temp }}/whisper-model/whisper.bin
+        # `--nocapture` because the WER and CER are the deliverable and
+        # cargo swallows a passing test's stdout. Without it this job would
+        # download 874 MB, transcribe four fixtures, and print the numbers
+        # into a buffer nobody reads — paying the whole cost of the
+        # measurement for none of its value. The same flag is what makes the
+        # Summary sidecar name the model it loaded.
+        run: cargo test --workspace -- --nocapture ${{ runner.os == 'Windows' && '--test-threads=1' || '' }}
 
       # `cargo test` regenerates the TypeScript bindings and JSON schemas.
       # If they differ from what is committed, the protocol changed without

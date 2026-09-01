@@ -6,10 +6,17 @@
 //! WER/CER come out as numbers the test prints on every run.
 //!
 //! Needs a model. Set `EVERTRANSCRIPT_TEST_MODEL` to a ggml whisper model;
-//! without it these skip rather than fail, so CI stays green on machines
-//! that have not downloaded one.
-
-#![cfg(unix)]
+//! without it these skip rather than fail, so a machine that has not
+//! downloaded 874 MB still runs a green suite. **CI sets it**, on both
+//! platforms, so in the place that matters these do not skip.
+//!
+//! This file carried `#![cfg(unix)]` from the commit that introduced it
+//! (`9a7f4a7`, M1), and nothing in it was ever unix-specific — the gate was
+//! inherited from the sibling files that drive the Core over a socket, back
+//! when the only transport was a Unix one. The Core has spoken named pipes
+//! on Windows since, so the gate outlived its reason and cost this file's
+//! six tests on the platform ADR-0025 says must pass before a milestone is
+//! done. Eleven sibling files still carry it (DECISIONS Q48).
 
 use std::path::PathBuf;
 
@@ -25,9 +32,27 @@ use evertranscript_fixtures::SILENCE;
 use evertranscript_fixtures::wer::character_error_rate;
 use evertranscript_fixtures::wer::word_error_rate;
 
+/// The model, or `None` only when nobody asked for one.
+///
+/// **A set variable pointing at nothing is a failure, not a skip.** This was
+/// the `.ok()?` then `.exists().then_some()` spelling, which is fine while
+/// nothing sets the variable and actively harmful the moment something does:
+/// a failed download or a renamed artifact becomes a green tick for six
+/// tests that loaded nothing, and the WER this file exists to report goes
+/// unreported without anything going red. `d89445c` made exactly this
+/// correction for the Summary model; CI now sets this one too, so it needs
+/// the same treatment on the same day rather than after it costs something.
 fn test_model() -> Option<PathBuf> {
-    let path = PathBuf::from(std::env::var("EVERTRANSCRIPT_TEST_MODEL").ok()?);
-    path.exists().then_some(path)
+    let configured = std::env::var_os("EVERTRANSCRIPT_TEST_MODEL")?;
+    let path = PathBuf::from(configured);
+    assert!(
+        path.exists(),
+        "EVERTRANSCRIPT_TEST_MODEL points at {}, which does not exist — \
+         a set-but-missing model must fail rather than skip, or these tests \
+         report green without transcribing anything",
+        path.display()
+    );
+    Some(path)
 }
 
 fn engine(language: Language) -> Option<WhisperEngine> {

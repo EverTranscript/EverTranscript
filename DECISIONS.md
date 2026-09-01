@@ -666,3 +666,25 @@ CI gets `timeout-minutes` too — 60 on the job, 45 on the `Tests` step — and 
 Two details worth keeping. `node --test <dir>` executes every compiled module in it, and `index.js` calls into Electron at import time, so the runner is pointed at `*.test.js`. And tests compile to `dist-test/` rather than `dist/`, because electron-builder ships `dist/**/*` and would otherwise have packaged test code into the product — verified by building and finding zero `*.test.js` in the bundle rather than by assuming the glob.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q48 — m1-walking-skeleton/06-live-asr-captions-channel — finding
+
+**Question:** `transcription_quality.rs` carries `#![cfg(unix)]`, so Windows never compiles it. What does removing the gate actually buy?
+**Options considered:** remove the gate / remove the gate and make CI fetch the model so the tests run
+**Chosen:** Both, because the first alone buys nothing. **The gate is one of twelve, and the tests it hides were skipping on macOS too.**
+**Decided-by:** agent
+**Justification:** Removing the gate on its own would have added six tests to Windows that immediately skip, because nothing has ever set `EVERTRANSCRIPT_TEST_MODEL` in CI. On macOS they already report `6 passed ... finished in 0.00s` — six early returns wearing a pass. So the PRD's **top named unverified risk**, whisper.cpp quality on the Operator's actual languages, has been measured exactly once: by hand, in M1, on one machine. Every CI run since has reported `ok` for it.
+
+The gate itself was stale rather than load-bearing. Nothing in the file is unix-specific — `#![cfg(unix)]` was its only reference to the platform, inherited from the sibling files that drive the Core over a socket, back when the only transport was a Unix one. `transport.rs:261` has spoken Windows named pipes since, and `lib.rs` picks per platform. Checked by compiling and running it here on Windows rather than by reading: six tests discovered, six skipped, green.
+
+**Eleven files still carry it.** `auto_record` (8 tests), `protocol_contract` (9), `meeting_lifecycle` (7), `consent_gate` (6), `capture_vertical` (5), `live_captions` (5), `tray_control` (5), `fixture_audio_pipeline` (4), `caption_resilience` (3), `machine_isolation` (2), `script_preference` (2) — 56 more integration tests that have never compiled on Windows, against ADR-0025's "a milestone is not done until both pass". They are not fixed here because each drives the Core over a socket and needs its setup adapted, which is a different piece of work; naming the number is the point.
+
+Three things fixed on the way. `test_model` had the exact `.ok()?` then `.exists().then_some()` spelling that `d89445c` had to correct for the Summary model — harmless while nothing set the variable and a green tick for six tests that loaded nothing the moment CI did. Corrected on the same day it became reachable rather than after it cost something, and **both halves were driven on Windows**: unset still skips green, set-but-missing fails all six at `transcription_quality.rs:48`.
+
+Second, `--nocapture`. Cargo swallows a passing test's stdout, so without it this job would download 874 MB, transcribe four fixtures and print the WER into a buffer nobody reads. Worth noting what that already cost: `summary_inference.rs` prints `loaded: <model>` and the verbatim-reproduction count on every run, and **neither has ever appeared in a CI log** — grep the macOS job and they are simply not there.
+
+Third, the model is verified by **crc32 and size, not sha256**, because `WHISPER_DEFAULT` carries `sha256: None` and `crc32: Some(3_055_274_469)`. Checking a number the registry does not hold would mean inventing a second source of truth for the same artifact.
+
+**Not established: the numbers.** This makes the measurement run; it does not yet say what it reports. The M1 close-out recorded WER 2.5% on English and a bilingual CER measured on the tiny model, both by hand — whether the registered large-v3-turbo reproduces that on a runner, on either platform, is what the next green run will say. The crc32 helper is also the one piece not executed locally: no Python on this machine. It fails closed — an unusable interpreter is diagnosed and a missing one reddens the job rather than passing it.
+**Outcome:** applied
+**Ref:** (pending)
