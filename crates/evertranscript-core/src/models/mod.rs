@@ -48,6 +48,98 @@ pub fn free_space_bytes(path: &std::path::Path) -> u64 {
     }
 }
 
+/// Model files this build no longer knows how to load.
+///
+/// **By exact filename, never a glob.** Application Support holds the
+/// Operator's models, and a pattern that swept up "anything that looks like an
+/// old summary model" would eventually sweep up something of theirs. A list
+/// that must be edited by hand is the point: removing a file from someone's
+/// disk should be a deliberate act recorded in a diff.
+const SUPERSEDED: &[&str] = &[
+    // Replaced by Qwen3-4B. Half a gigabyte no build can load.
+    "summary-qwen2.5-0.5b-instruct-q4_k_m.gguf",
+];
+
+/// Deletes models this build superseded, returning what it removed.
+///
+/// Application Support is the re-creatable half of the product — models were
+/// never part of the portable unit, and the Homebrew cask already deletes this
+/// directory on uninstall for the same reason. **History is never touched**:
+/// that is the Operator's record and the thing this product exists to keep.
+pub fn remove_superseded(models_dir: &std::path::Path) -> Vec<String> {
+    let mut removed = Vec::new();
+    for filename in SUPERSEDED {
+        // Guard against the list ever naming something still registered — a
+        // future edit that supersedes a model and forgets to unregister it
+        // would otherwise delete the file the product is about to load.
+        if registry::ALL
+            .iter()
+            .any(|entry| entry.filename == *filename)
+        {
+            continue;
+        }
+        let path = models_dir.join(filename);
+        if path.is_file() && std::fs::remove_file(&path).is_ok() {
+            removed.push((*filename).to_string());
+        }
+    }
+    removed
+}
+
+#[cfg(test)]
+mod superseded_tests {
+    use super::*;
+
+    #[test]
+    fn a_superseded_model_is_removed_and_nothing_else_is() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let models = dir.path();
+        for name in [
+            "summary-qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            "ggml-large-v3-turbo-q8_0.bin",
+            "something-the-operator-put-here.gguf",
+        ] {
+            std::fs::write(models.join(name), b"x").expect("write");
+        }
+
+        let removed = remove_superseded(models);
+        assert_eq!(removed, vec!["summary-qwen2.5-0.5b-instruct-q4_k_m.gguf"]);
+        assert!(
+            !models
+                .join("summary-qwen2.5-0.5b-instruct-q4_k_m.gguf")
+                .exists()
+        );
+        assert!(
+            models.join("ggml-large-v3-turbo-q8_0.bin").exists(),
+            "a registered model must survive"
+        );
+        assert!(
+            models.join("something-the-operator-put-here.gguf").exists(),
+            "a file this product did not put here is not ours to delete"
+        );
+    }
+
+    #[test]
+    fn an_install_that_never_had_it_is_unaffected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(remove_superseded(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn nothing_still_registered_is_ever_in_the_superseded_list() {
+        // The guard that matters most: superseding a model without
+        // unregistering it would delete the file the product is about to load.
+        for filename in SUPERSEDED {
+            assert!(
+                !registry::ALL
+                    .iter()
+                    .any(|entry| entry.filename == *filename),
+                "{filename} is both registered and superseded"
+            );
+        }
+    }
+}
+
 pub mod provision;
 pub mod registry;
 

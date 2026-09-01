@@ -353,6 +353,9 @@ fn run_daemon_owning_the_main_thread(runtime: tokio::runtime::Runtime) -> Result
             // Preselect before provisioning: the two describe the same fresh
             // install, and an Operator who opens Settings while the download
             // runs should already see a Backend chosen.
+            // Before provisioning, so an upgrade reclaims the old model's
+            // space rather than holding both at once.
+            core.remove_superseded_models();
             if let Err(error) = core.preselect_local_backend().await {
                 tracing::warn!(%error, "could not record the preselected Backend");
             }

@@ -1760,6 +1760,13 @@ impl Core {
     /// configuration still traces to something rather than to a `None` that
     /// means two different things. Choosing Cloud is untouched: still
     /// deliberate, still behind its one-time warning.
+    /// Removes models this build superseded. Safe to call on every start.
+    pub fn remove_superseded_models(&self) {
+        for filename in models::remove_superseded(&self.models_dir) {
+            info!(filename, "removed a model this build no longer loads");
+        }
+    }
+
     pub async fn preselect_local_backend(&self) -> Result<()> {
         let mut settings = self.settings.lock().await;
         // Never clobber a choice. An Operator who chose Cloud must not be

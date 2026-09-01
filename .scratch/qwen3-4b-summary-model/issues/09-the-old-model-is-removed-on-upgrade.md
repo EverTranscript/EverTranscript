@@ -10,10 +10,10 @@ same reason. History is never touched.
 
 **Blocked by:** 03, 05.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The superseded model file is removed once, on upgrade, matched by exact filename
-- [ ] Nothing else in the models directory is touched, and History is untouched
-- [ ] An Operator who never had the old model is unaffected
-- [ ] The session's Briefing evidence is recorded against M5's criterion with its limits stated — a reader who twice inferred that local models mean no network traffic, who is neither a stranger nor was reading the text at the time. It does not make the criterion met
-- [ ] The local gate is green
+- [x] Removed by exact filename from a hand-maintained list. A list that must be edited by hand is the point: taking a file off someone's disk should be a deliberate act visible in a diff
+- [x] Tested against a registered model and against a file the Operator put there themselves; both survive. There is also a guard that nothing still registered can appear in the superseded list — superseding a model without unregistering it would delete the file the product is about to load
+- [x] Removing from an empty directory removes nothing and reports nothing
+- [x] Recorded against M5's criterion, three times rather than twice, with its limits stated plainly and an explicit note that it does not make the criterion met. It did shape the rewording
+- [x] The local gate is green
