@@ -2,6 +2,7 @@
 import type { CoreStateChangedParams } from "./CoreStateChangedParams";
 import type { DiarizeProgressParams } from "./DiarizeProgressParams";
 import type { MeetingChangedParams } from "./MeetingChangedParams";
+import type { ModelProgressParams } from "./ModelProgressParams";
 import type { SpeakerChangedParams } from "./SpeakerChangedParams";
 import type { TranscriptCaptionsDroppedParams } from "./TranscriptCaptionsDroppedParams";
 import type { TranscriptSegmentAddedParams } from "./TranscriptSegmentAddedParams";
@@ -9,4 +10,4 @@ import type { TranscriptSegmentAddedParams } from "./TranscriptSegmentAddedParam
 /**
  * Everything the Core may push to an attached Client unprompted.
  */
-export type ServerNotification = { "method": "core/stateChanged", "params": CoreStateChangedParams } | { "method": "meeting/changed", "params": MeetingChangedParams } | { "method": "transcript/segmentAdded", "params": TranscriptSegmentAddedParams } | { "method": "transcript/captionsDropped", "params": TranscriptCaptionsDroppedParams } | { "method": "speaker/changed", "params": SpeakerChangedParams } | { "method": "diarize/progress", "params": DiarizeProgressParams };
+export type ServerNotification = { "method": "core/stateChanged", "params": CoreStateChangedParams } | { "method": "meeting/changed", "params": MeetingChangedParams } | { "method": "transcript/segmentAdded", "params": TranscriptSegmentAddedParams } | { "method": "transcript/captionsDropped", "params": TranscriptCaptionsDroppedParams } | { "method": "speaker/changed", "params": SpeakerChangedParams } | { "method": "diarize/progress", "params": DiarizeProgressParams } | { "method": "models/progress", "params": ModelProgressParams };

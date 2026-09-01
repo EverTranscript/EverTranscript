@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { JsonRpcNotification } from "@protocol/JsonRpcNotification";
 import type { Meeting } from "@protocol/Meeting";
+import type { ModelProgressParams } from "@protocol/ModelProgressParams";
 import type { SettingsResponse } from "@protocol/SettingsResponse";
 import type { SettingsSetParams } from "@protocol/SettingsSetParams";
 import type { BriefingResponse } from "@protocol/BriefingResponse";
@@ -481,4 +482,51 @@ export function usePosture() {
   }, []);
 
   return { posture, error };
+}
+
+/**
+ * Live progress of a model download, and a way to stop it.
+ *
+ * A fresh install fetches gigabytes without being asked, so an unobservable
+ * transfer is indistinguishable — from outside — from the product doing
+ * something it should not. This is the surface that makes the difference
+ * visible, and the stop that makes it answerable.
+ */
+export function useModelDownload(): {
+  active: ModelProgressParams | null;
+  cancel: () => void;
+} {
+  const [active, setActive] = useState<ModelProgressParams | null>(null);
+
+  useEffect(() => {
+    const unsubscribe = window.evertranscript.onNotification(
+      (notification: JsonRpcNotification) => {
+        if (notification.method !== "models/progress") return;
+        const params = notification.params as ModelProgressParams;
+        // A stopped fetch clears rather than freezing: a bar that stops
+        // moving reads as a stall, which is the one thing it is not.
+        if (params.stopped) {
+          setActive(null);
+          return;
+        }
+        setActive(
+          params.doneBytes >= params.totalBytes && params.totalBytes > 0
+            ? null
+            : params,
+        );
+      },
+    );
+    // Wrapped: the unsubscribe returns the IpcRenderer, and an effect cleanup
+    // must return nothing.
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  const cancel = useCallback(() => {
+    void window.evertranscript.request("models/cancel", {});
+    setActive(null);
+  }, []);
+
+  return { active, cancel };
 }

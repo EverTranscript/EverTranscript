@@ -11,6 +11,7 @@ import {
   useRegistry,
   useSettings,
   useBriefing,
+  useModelDownload,
   usePosture,
   useSummaryBackends,
   useTranscript,
@@ -1253,6 +1254,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
             <p className="mt-2 text-sm text-[--color-ink-muted]">
               {t("onboarding.models.body")}
             </p>
+            <ModelDownload />
           </section>
         ) : null}
 
@@ -1307,6 +1309,40 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
           </button>
         ) : null}
       </footer>
+    </div>
+  );
+}
+
+/**
+ * What a fetch is doing, and the way to stop it.
+ *
+ * Silent while nothing is downloading: this is the surface for work the
+ * product started on its own, and a permanent empty progress bar would be
+ * its own kind of noise.
+ */
+function ModelDownload(): React.ReactElement | null {
+  const { active, cancel } = useModelDownload();
+  if (!active) return null;
+  const percent =
+    active.totalBytes > 0
+      ? Math.floor((active.doneBytes / active.totalBytes) * 100)
+      : 0;
+  const megabytes = (bytes: number) => Math.round(bytes / 1_048_576);
+  return (
+    <div className="mt-3 rounded border border-[--color-line] px-3 py-2 text-xs">
+      <div className="flex items-center justify-between gap-3">
+        <span>
+          {t("models.downloading")} {active.displayName} — {percent}% (
+          {megabytes(active.doneBytes)} / {megabytes(active.totalBytes)} MB)
+        </span>
+        <button
+          type="button"
+          onClick={cancel}
+          className="underline underline-offset-2"
+        >
+          {t("models.stop")}
+        </button>
+      </div>
     </div>
   );
 }

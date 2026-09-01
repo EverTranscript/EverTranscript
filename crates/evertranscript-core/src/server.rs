@@ -121,6 +121,12 @@ pub struct Core {
     /// async to read a test override would push `.await` through a call path
     /// that has no other reason for it.
     summary_backend_factory: std::sync::Mutex<Option<SummaryBackendFactory>>,
+    /// Cancels the model fetch in flight, if there is one.
+    ///
+    /// Held by the Core rather than made per-call, because the Client that
+    /// wants to stop a download is not the one that started it — on a fresh
+    /// install nobody started it, the binary did.
+    fetching: std::sync::Mutex<Option<CancellationToken>>,
     /// This installation's settings, including the Briefing acknowledgment
     /// that gates all capture.
     settings: Mutex<Settings>,
@@ -364,6 +370,7 @@ impl Core {
             notifications: broadcast::channel(NOTIFICATION_CAPACITY).0,
             transcriber_factory: Mutex::new(None),
             summary_backend_factory: std::sync::Mutex::new(None),
+            fetching: std::sync::Mutex::new(None),
             settings: Mutex::new(Settings::load_from(&settings_path)),
             settings_path,
             models_dir,
@@ -1753,6 +1760,31 @@ impl Core {
     /// Downloads what is missing. A corrupted file is removed first so the
     /// fetch starts from a clean slate rather than trying to resume garbage.
     pub async fn fetch_models(&self, key: Option<&str>, cancel: CancellationToken) -> Result<()> {
+        *self
+            .fetching
+            .lock()
+            .expect("the fetch token mutex is never held across a panic") = Some(cancel.clone());
+        let result = self.fetch_models_inner(key, cancel).await;
+        *self
+            .fetching
+            .lock()
+            .expect("the fetch token mutex is never held across a panic") = None;
+        result
+    }
+
+    /// Stops a fetch in flight. Partial files stay, so asking again resumes.
+    pub fn cancel_fetch(&self) {
+        if let Some(token) = self
+            .fetching
+            .lock()
+            .expect("the fetch token mutex is never held across a panic")
+            .as_ref()
+        {
+            token.cancel();
+        }
+    }
+
+    async fn fetch_models_inner(&self, key: Option<&str>, cancel: CancellationToken) -> Result<()> {
         let downloader = models::Downloader::new(self.models_dir.clone())?;
         let entries: Vec<&'static models::registry::ModelEntry> = match key {
             Some(key) => vec![
@@ -1767,15 +1799,41 @@ impl Core {
                 warn!(model = entry.key, reason, "discarding a corrupted model");
                 downloader.remove(entry)?;
             }
-            downloader
+            // Broadcast, not merely logged. An Operator cannot read the
+            // Core's log, and this download starts without being asked.
+            let outcome = downloader
                 .fetch(entry, cancel.clone(), |progress| {
                     debug!(
                         model = entry.key,
                         percent = (progress.fraction() * 100.0) as u32,
                         "downloading"
                     );
+                    let _ = self.notifications.send(ServerNotification::ModelProgress(
+                        evertranscript_protocol::ModelProgressParams {
+                            key: entry.key.to_string(),
+                            display_name: entry.display_name.to_string(),
+                            done_bytes: progress.downloaded_bytes as i64,
+                            total_bytes: progress.total_bytes as i64,
+                            stopped: None,
+                        },
+                    ));
                 })
-                .await?;
+                .await;
+            if let Err(error) = outcome {
+                // A stopped download is a different thing from one still
+                // running at the same byte count, and a Client showing a
+                // frozen bar cannot tell them apart.
+                let _ = self.notifications.send(ServerNotification::ModelProgress(
+                    evertranscript_protocol::ModelProgressParams {
+                        key: entry.key.to_string(),
+                        display_name: entry.display_name.to_string(),
+                        done_bytes: 0,
+                        total_bytes: entry.integrity.size_bytes as i64,
+                        stopped: Some(error.to_string()),
+                    },
+                ));
+                return Err(error);
+            }
         }
         Ok(())
     }
@@ -2124,6 +2182,11 @@ impl Server {
                 self.core
                     .fetch_models(params.key.as_deref(), CancellationToken::new())
                     .await?;
+                Ok(serde_json::to_value(self.core.models_status()?)?)
+            }
+
+            ClientRequest::ModelsCancel(_) => {
+                self.core.cancel_fetch();
                 Ok(serde_json::to_value(self.core.models_status()?)?)
             }
 

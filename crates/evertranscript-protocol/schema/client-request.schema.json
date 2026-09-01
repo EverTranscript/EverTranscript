@@ -208,6 +208,23 @@
       ]
     },
     {
+      "description": "Stops a fetch in progress. What is on disk stays, so asking again\nresumes rather than restarting.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "models/cancel"
+        },
+        "params": {
+          "$ref": "#/$defs/ModelsCancelParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Subscribes to live captions and returns the transcript so far, in one\ncall.\n\nSnapshot and subscription together on purpose: fetching the\ntranscript and then subscribing leaves a window where a segment\ncompletes between the two and is lost from the Client's view forever\n(ADR-0028, snapshot-then-tail).",
       "type": "object",
       "properties": {
@@ -762,6 +779,9 @@
       }
     },
     "MeetingStopParams": {
+      "type": "object"
+    },
+    "ModelsCancelParams": {
       "type": "object"
     },
     "ModelsFetchParams": {

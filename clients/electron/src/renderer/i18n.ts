@@ -50,6 +50,8 @@ const en = {
   "onboarding.models.body":
     "Transcription needs a model on disk. Summary needs its own, and is optional — it is the one feature you can turn off entirely. Each download is checked against a pinned checksum.",
   "onboarding.models.fetch": "Download what is missing",
+  "models.downloading": "Downloading",
+  "models.stop": "Stop",
   "onboarding.folder.title": "Where your recordings live",
   "onboarding.folder.body":
     "Everything is in this folder: transcripts, audio, and voice profiles. You can open, copy and back it up — and a copy carries the voice profiles with it.",
@@ -221,6 +223,8 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "onboarding.models.body":
       "转写需要本地模型。摘要有自己的模型，且是可选的——它是唯一可以完全关闭的功能。每次下载都会校验固定的校验和。",
     "onboarding.models.fetch": "下载缺失的模型",
+    "models.downloading": "正在下载",
+    "models.stop": "停止",
     "onboarding.folder.title": "录音存放的位置",
     "onboarding.folder.body":
       "所有内容都在这个文件夹里：转写、音频和声音特征。你可以打开、复制和备份它——副本也会一并带走声音特征。",

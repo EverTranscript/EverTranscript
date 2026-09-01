@@ -104,6 +104,23 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "A model download progressed, finished, or stopped.\n\nMirrors `diarize/progress`, and for the same reason: work the Core\ndoes on its own behalf has to be visible, or an Operator cannot tell\nit from the product misbehaving. That matters more here than for\nDiarization — a fresh install fetches gigabytes without being asked.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "models/progress"
+        },
+        "params": {
+          "$ref": "#/$defs/ModelProgressParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -347,6 +364,39 @@
       "required": [
         "kind",
         "meetingId"
+      ]
+    },
+    "ModelProgressParams": {
+      "type": "object",
+      "properties": {
+        "displayName": {
+          "type": "string"
+        },
+        "doneBytes": {
+          "type": "integer",
+          "format": "int64"
+        },
+        "key": {
+          "description": "Registry key of the model being fetched.",
+          "type": "string"
+        },
+        "stopped": {
+          "description": "Set when the fetch ended without finishing — cancelled, or failed.\nA download that stops is not the same as one still running at the\nsame byte count, and a Client showing a frozen bar cannot tell them\napart.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "totalBytes": {
+          "type": "integer",
+          "format": "int64"
+        }
+      },
+      "required": [
+        "key",
+        "displayName",
+        "doneBytes",
+        "totalBytes"
       ]
     },
     "Speaker": {

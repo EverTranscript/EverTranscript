@@ -8,10 +8,10 @@ transfer is indistinguishable from the product misbehaving.
 
 **Blocked by:** 05.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Download progress reaches Clients as it happens, the way Diarization's already does
-- [ ] An Operator can cancel a download in progress, and a cancelled one resumes rather than restarting
-- [ ] Both additions are additive to the protocol; a Client that predates them is unaffected, and regenerated bindings and schemas are committed
-- [ ] The Client shows progress and offers the stop
-- [ ] The local gate is green
+- [x] `models/progress`, mirroring `diarize/progress` — sent on the Core's notification channel rather than only logged, because an Operator cannot read the Core's log
+- [x] `models/cancel`. The token is held by the Core rather than made per-call, because the Client that wants to stop a fetch is not the one that started it — on a fresh install nobody did, the binary did. Partial files stay, so asking again resumes
+- [x] Additive: 112 lines added across schema and bindings, none removed. Regenerated and committed
+- [x] Shown in onboarding's Models step, silent when nothing is downloading. A stopped fetch clears rather than freezing — a bar that stops moving reads as a stall, which is the one thing it is not
+- [x] The local gate is green

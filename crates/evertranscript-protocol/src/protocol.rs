@@ -219,6 +219,12 @@ client_request_definitions! {
         params: ModelsFetchParams,
         response: ModelsStatusResponse,
     },
+    /// Stops a fetch in progress. What is on disk stays, so asking again
+    /// resumes rather than restarting.
+    ModelsCancel => "models/cancel" {
+        params: ModelsCancelParams,
+        response: ModelsStatusResponse,
+    },
     /// Subscribes to live captions and returns the transcript so far, in one
     /// call.
     ///
@@ -386,6 +392,15 @@ server_notification_definitions! {
     /// runs.
     DiarizeProgress => "diarize/progress" {
         params: DiarizeProgressParams,
+    },
+    /// A model download progressed, finished, or stopped.
+    ///
+    /// Mirrors `diarize/progress`, and for the same reason: work the Core
+    /// does on its own behalf has to be visible, or an Operator cannot tell
+    /// it from the product misbehaving. That matters more here than for
+    /// Diarization — a fresh install fetches gigabytes without being asked.
+    ModelProgress => "models/progress" {
+        params: ModelProgressParams,
     },
 }
 
@@ -1020,6 +1035,10 @@ pub struct ModelsStatusParams {}
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+pub struct ModelsCancelParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelsFetchParams {
     /// Fetch one model by key; omit to fetch everything required.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1248,6 +1267,25 @@ pub struct DiarizeCancelParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
+pub struct ModelProgressParams {
+    /// Registry key of the model being fetched.
+    pub key: String,
+    pub display_name: String,
+    #[ts(type = "number")]
+    pub done_bytes: i64,
+    #[ts(type = "number")]
+    pub total_bytes: i64,
+    /// Set when the fetch ended without finishing — cancelled, or failed.
+    /// A download that stops is not the same as one still running at the
+    /// same byte count, and a Client showing a frozen bar cannot tell them
+    /// apart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub stopped: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct DiarizeProgressParams {
     pub meeting_id: String,
     pub state: DiarizeState,
