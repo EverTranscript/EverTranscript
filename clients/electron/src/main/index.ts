@@ -14,6 +14,7 @@ import { join } from "node:path";
 
 import { CoreClient } from "./core-client.js";
 import { locateCore } from "./core-location.js";
+import { classifyCoreExit } from "./core-start.js";
 import { downloadUpdate, installUpdate, startUpdateChecks } from "./updates.js";
 
 /**
@@ -83,9 +84,26 @@ function startCore(): void {
     return;
   }
   try {
+    const spawnedAt = Date.now();
     const child = spawn(binary, ["daemon"], {
       detached: true,
       stdio: "ignore",
+    });
+    // **A spawn that succeeds and is killed a moment later is not an
+    // `error`.** A macOS bundle still carrying `com.apple.quarantine` has its
+    // unsigned Core SIGKILLed by Gatekeeper the instant it executes —
+    // measured on the real CI artifact, exit 137 with no output — and without
+    // this the Client said only "no Core is listening", which names the
+    // symptom and hides a cause the Operator can fix in thirty seconds.
+    child.on("exit", (code, signal) => {
+      const verdict = classifyCoreExit({
+        code,
+        signal,
+        msSinceSpawn: Date.now() - spawnedAt,
+        platform: process.platform,
+      });
+      if (verdict.retry) startAttempted = false;
+      if (verdict.key !== null) startFailure = verdict.key;
     });
     // A binary that cannot be executed reports ENOENT asynchronously rather
     // than throwing, so the `catch` below never sees it. Unhandled, that
@@ -119,7 +137,12 @@ async function connectWithRetry(): Promise<CoreClient> {
     }
     // Say why the Core is not there, when the reason is known. "No Core is
     // listening" is true and useless if the reason is that the binary was
-    // never found.
+    // never found — or that macOS killed it for being quarantined.
+    //
+    // Reached only after every connection attempt failed, which is what makes
+    // it safe for `classifyCoreExit` to produce a key for any non-zero exit:
+    // opening the Client twice exits 1, and the connection to the Core that
+    // already holds the socket succeeds long before this line.
     if (startFailure !== null) throw new Error(startFailure);
     throw first;
   }

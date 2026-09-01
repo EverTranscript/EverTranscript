@@ -667,6 +667,20 @@ Two details worth keeping. `node --test <dir>` executes every compiled module in
 **Outcome:** applied
 **Ref:** (pending)
 
+## Q47 — m5-onboarding/09-m5-closeout — finding
+
+**Question:** The clean-machine criterion needs a person. But a clean machine differs from this one in a way nothing had tested: a downloaded artifact carries `com.apple.quarantine`, and these builds are unsigned. What does an Operator's copy actually do?
+**Options considered:** leave it for the clean-machine install / apply quarantine to the real CI artifact and run it
+**Chosen:** Applied it and ran it. **The bundled Core is SIGKILLed by Gatekeeper — exit 137, no output, no diagnostic.** The standard right-click-Open flow clears it and everything then works, so the product is not broken; what was broken is what the Client says while it is.
+**Decided-by:** agent
+**Justification:** Every earlier check of this artifact extracted it with `unzip`, which does **not** set quarantine — so what had been verified was not what an Operator receives. That is the same shape as Q44 one layer out: a real artifact, checked in a way that skipped the property that matters.
+
+The product-visible defect is in the Client. `child.on("error")` fires when a spawn *fails*; it does not fire when a spawn succeeds and the process is killed a moment later, so a quarantined install reported only "no Core is listening" — true, and useless, when the cause has a thirty-second fix. `classifyCoreExit` now distinguishes a signal death from a refusal, and macOS gets a message naming quarantine and the Finder gesture that clears it.
+
+**And the fix's own premise was wrong until it was measured.** The first version claimed the Core exits 0 when another Core already holds the socket, and treated that as the case worth staying quiet about. It exits **1**, with `another EverTranscript Core is already listening` — so the code was silent about a case that does not occur and would have spoken about the ordinary one. It is harmless only because the caller reaches the message solely after every connection attempt has failed, which means the socket, not the exit code, is the authority. The comment now says that, because the next person to read it would otherwise inherit the same false belief. Three checked assumptions this session have gone the same way: `cargo test --workspace` not building the sidecar (Q45), `node --test <dir>` running non-test modules (Q46), and this.
+**Outcome:** applied
+**Ref:** (pending)
+
 ## Q48 — m1-walking-skeleton/06-live-asr-captions-channel — finding
 
 **Question:** `transcription_quality.rs` carries `#![cfg(unix)]`, so Windows never compiles it. What does removing the gate actually buy?

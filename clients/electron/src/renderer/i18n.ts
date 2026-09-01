@@ -14,6 +14,12 @@ const en = {
   "core.unreachable.hint": "Start it with: evertranscript daemon",
   "core.start.binaryMissing":
     "EverTranscript could not find the Core to start it. Put `evertranscript` on your PATH, or set EVERTRANSCRIPT_BIN to it.",
+  "core.start.killedQuarantine":
+    "macOS stopped the Core the moment it started. This usually means the app is still quarantined from being downloaded. Quit EverTranscript, find it in Finder, right-click it and choose Open, then confirm — after that it starts normally.",
+  "core.start.killed":
+    "Something stopped the Core the moment it started. Antivirus or another security tool is the usual cause.",
+  "core.start.exited":
+    "The Core started and then stopped by itself. Its log will say why.",
   "core.retry": "Try again",
   "settings.title": "Settings",
   "settings.open": "Settings",
@@ -182,6 +188,10 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "core.unreachable.hint": "请运行：evertranscript daemon",
     "core.start.binaryMissing":
       "EverTranscript 找不到 Core，无法启动它。请将 `evertranscript` 加入 PATH，或将 EVERTRANSCRIPT_BIN 指向它。",
+    "core.start.killedQuarantine":
+      "Core 刚启动就被 macOS 终止了。这通常是因为应用仍处于下载隔离状态。请退出 EverTranscript，在访达中找到它，右键选择“打开”并确认；之后即可正常启动。",
+    "core.start.killed": "Core 刚启动就被某个程序终止了。通常是杀毒软件或其他安全工具所致。",
+    "core.start.exited": "Core 启动后自行退出了。具体原因请查看它的日志。",
     "core.retry": "重试",
     "settings.title": "设置",
     "settings.open": "设置",
