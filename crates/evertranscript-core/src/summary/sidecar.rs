@@ -36,9 +36,18 @@ use super::BackendIdentity;
 use super::Cancel;
 use super::Request;
 
-/// Longest a single generation may take (catalog M4: 900 s).
+/// Longest a single generation may take.
 ///
-/// Ninety minutes of meeting through a small model on a laptop is genuinely
+/// **Re-derived by measurement, not chosen.** The catalog's 900 s was sized
+/// for a 0.5B with a 4,000-token budget, and both halves of that changed: the
+/// registered model is eight times the parameters and a chunk is three times
+/// the tokens. Measured on an accelerated machine, a full 11,600-token chunk
+/// takes ~44 s. A CPU-only machine is roughly an order of magnitude slower,
+/// which lands near the old bound — so it is doubled, because a timeout that
+/// fires mid-run costs that chunk under the tolerance rule, and enough of
+/// them cost the Summary.
+///
+/// Ninety minutes of meeting through a local model on a laptop is genuinely
 /// slow, and a timeout tuned for a demo would fire on every real meeting.
 ///
 /// **This was declared and never enforced.** `exchange` blocked in
@@ -48,7 +57,7 @@ use super::Request;
 /// model and then stopped answering wedged its caller for as long as the
 /// child lived. Clippy cannot say so, because a `pub` constant nobody reads
 /// is not dead code (DECISIONS Q46).
-pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(900);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(1_800);
 
 /// How long a cancelled child gets to exit before it is killed outright.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -793,16 +802,11 @@ while true; do sleep 1; done
         );
     }
     #[test]
-    fn the_registered_model_is_driven_exactly_as_the_sidecar_used_to_drive_it() {
-        // **The guard on introducing this seam**: describing the model must
-        // change no output, and the way to know that is that its description
-        // equals the behaviour the sidecar had before descriptions existed.
-        //
-        // This test is expected to fail when the registered model changes,
-        // and that failure is the point — it is the moment someone must
-        // decide the new behaviour deliberately. Whoever swaps the model
-        // should replace this with an assertion about what the new model
-        // wants, not delete it.
+    fn the_registered_model_is_driven_the_way_its_publisher_documents() {
+        // Ticket 02 asserted this equalled the sidecar's old behaviour, and
+        // said whoever swapped the model should replace it with an assertion
+        // about what the new model wants rather than delete it. This is that
+        // replacement.
         let described = Driving::from_entry(
             crate::models::registry::SUMMARY_DEFAULT
                 .driving
@@ -810,11 +814,22 @@ while true; do sleep 1; done
                 .expect("the Summary model is prompted"),
         );
         assert_eq!(
-            described,
-            Driving::default(),
-            "the registered model is described differently from how the sidecar \
-             behaved before it could be described — which means this change is \
-             not the no-op it claims to be"
+            described.framing, "chatTemplate",
+            "Qwen3 is trained on ChatML and ships the template in the GGUF"
+        );
+        assert_ne!(
+            described.sampling,
+            Sampling::Greedy,
+            "the model card forbids greedy decoding outright"
+        );
+        assert_eq!(
+            described.suppress_reasoning.as_deref(),
+            Some("/no_think"),
+            "thinking is on by default and we would pay to generate what scrub discards"
+        );
+        assert!(
+            described.context_tokens > Driving::default().context_tokens,
+            "a 4B should be given more context than the 0.5B budget"
         );
     }
 }

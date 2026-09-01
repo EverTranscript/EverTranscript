@@ -16,14 +16,14 @@ no Operator's disk loses the old model before we know the new one is better.
 
 **Blocked by:** 02 (the seam it configures).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The registry names the new model with its verified size, sha256, licence and source
-- [ ] The sidecar applies the model's embedded chat template, and its prescribed sampling replaces greedy decoding
-- [ ] Reasoning is suppressed by the sidecar, not by the Operator-editable system prompt — an Operator who rewrites their prompt must not silently re-enable it
-- [ ] The Operator's system prompt is escaped the way Notes already are, because a chat template turns stray markers into turn boundaries
-- [ ] Stop sequences are reviewed against the new framing; those guarding text the prompt no longer emits are removed, and the comments describe what is actually there
-- [ ] The single-pass threshold and context budget use the model's own trained context rather than the numbers sized for a 0.5B
-- [ ] The token estimate is re-checked against this model's tokenizer, since the budget it feeds is now three times larger
-- [ ] A Summary is generated end to end by the new model
-- [ ] The local gate is green
+- [x] Verified by downloading it: 2,546,341,152 bytes and sha256 `f6e3fb6c…c71f`, both matching the publisher's LFS metadata exactly
+- [x] Both. Driving it with the old plain framing and greedy first — by accident, via a test harness still calling the undriven spawn — produced looping, self-correcting prose, which is a vivid demonstration of why the card forbids greedy
+- [x] Appended from the entry. Confirmed working: the output opens with an empty `<think></think>`, which is the model acknowledging the switch, and `scrub` removes it
+- [x] Escaped at the point it is read, using the armor Notes already had
+- [x] Reviewed and annotated. `\nSummary:` is kept rather than deleted — plain framing is still a choice a registered model can make — but its comment now says why it cannot fire under a chat template, instead of implying it guards the current prompt
+- [x] Both. **The threshold was nearly a dead property**: the entry said 12,000 while the chunker still split at its own 4,000 constant, so a bigger context would have been a fact nobody acted on. Found by measuring, not reading
+- [x] Checked against real prompts: the 0.35-per-character estimate put an 11,627-token chunk inside a 16,384 context with room for the answer, which is the property that matters
+- [x] Generated, with a heading, a correct action-items table and timestamps cited from the transcript
+- [x] The local gate is green

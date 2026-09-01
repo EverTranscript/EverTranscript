@@ -53,6 +53,11 @@ const STOP_SEQUENCES: &[&str] = &[
     // quotes one cannot produce a literal here: if this appears, the model
     // wrote it, and it has left the answer.
     "</transcript>",
+    // `\nSummary:` used to guard the cue the plain framing ended with. A
+    // chat-templated prompt ends at the assistant's opening tag instead, and
+    // the model's own end-of-turn token terminates generation — which this
+    // loop already honours. Kept, because the plain framing is still a
+    // choice a registered model can make, and it costs nothing when unused.
     "\nSummary:",
     "\n\n\n\n",
     // Prompt scaffolding. A small model handed a long prompt will restate
@@ -235,9 +240,16 @@ fn generate(
     user: &str,
     how: &Driving,
 ) -> anyhow::Result<String> {
+    // **`n_batch` must cover the prompt, and its default is 512.** A single
+    // `decode` of a longer prompt kills the process — which is what a
+    // transcript over roughly two minutes produces. It went unseen because
+    // the meeting M4 measured was 89 seconds and chunking never engaged
+    // (DECISIONS Q56), so nothing ever handed this a large prompt.
     let mut context = model.new_context(
         backend,
-        LlamaContextParams::default().with_n_ctx(NonZeroU32::new(how.context_tokens)),
+        LlamaContextParams::default()
+            .with_n_ctx(NonZeroU32::new(how.context_tokens))
+            .with_n_batch(how.context_tokens),
     )?;
 
     // Reasoning suppression rides on the system turn, and comes from the

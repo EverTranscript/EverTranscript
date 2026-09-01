@@ -835,3 +835,40 @@ Settling it needs one of two things: a Windows machine with no input device, or 
 Backends became injectable on the Core, following the `set_transcriber_factory` / `set_source_factory` idiom that already existed for exactly this reason. That is a new factory, not a new *kind* of seam, and it is what lets every behaviour here be tested without half a gigabyte of model.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q57 — qwen3-4b-summary-model/03 — finding
+
+**Question:** With the model swapped, a full-size chunk was pushed through the sidecar for the first time. What happened?
+**Options considered:** n/a — this records a defect found by running the thing
+**Chosen:** **The sidecar died.** `backend unreachable: the sidecar exited`, on a prompt of 3,171 tokens. Not the new model, and not the new context budget: `n_batch` defaults to **512**, the sidecar decodes an entire prompt in one `decode` call, and llama.cpp will not accept a batch larger than that. Raised to match the context.
+**Decided-by:** agent
+**Justification:** **The Summary feature has not worked on a meeting of any real length since M4**, and nothing could see it. Roughly two minutes of speech exceeds 512 tokens, so every longer meeting killed the process — while the evidence pointed elsewhere, because the Core reports a dead sidecar as unreachable rather than as a crash with a cause.
+
+Three separate reasons it stayed invisible, and they compound. The meeting M4 measured end-to-end was **89 seconds**. Chunking had no production caller (Q56), so nothing ever split a long transcript into pieces that would have fitted. And every test fixture was three lines. The one path that would have produced a large prompt — a real long meeting — is exactly the measurement M4's close-out has owed since it closed. **The missing measurement was hiding a crash, not just a quality number.**
+
+It is also the fourth time this project has found a defect the moment something real was run through a path that had only ever been reasoned about: M2's identifiers, M3's DER, Q44's packaged binary, and now this. The regression test asserts the prompt exceeds one default batch before asserting anything else, so it cannot quietly stop testing the thing it exists for.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q58 — qwen3-4b-summary-model/04 — finding
+
+**Question:** M4 owes "choose the real default by measurement rather than reputation". Measured against Q45's numbers, is Qwen3-4B better than the 0.5B it replaces?
+**Options considered:** compare on Q45's original fixture / compare on production-shaped input
+**Chosen:** Better on every axis — **and Q45's own fabrication finding was partly the harness's fault**, which had to be corrected before the comparison meant anything.
+**Decided-by:** agent
+**Justification:** Q45 recorded the incumbent inventing `Said at: 14:00` for a meeting containing no times, and I built this gate on that. Re-running it exposed the flaw: **the fixture had no timestamps at all**, while `render_transcript` gives every production prompt `[HH:MM:SS]` on every line. Asked for a column it had been given no data for, *either* model invents. That is a fixture measuring itself, not a model failing — the same shape as Q43's tests that pointed at a directory nothing read.
+
+On production-shaped input, each model driven as it ships:
+
+| | incumbent 0.5B | Qwen3-4B |
+| --- | --- | --- |
+| action items found | 0 of 2 (`None noted.`) | 2 of 2 |
+| transcript lines echoed verbatim | 3 of 3 | 0 of 3 |
+| `Said at` | invented | `00:00:11`, `00:00:19` — cited correctly |
+| structure | none | heading and table as the prompt asks |
+
+The fabrication gate therefore passes, and the incumbent's *content* failures stand unchanged — `None noted.` for two plain commitments, and reproducing the transcript rather than summarising it, are not artefacts of anything.
+
+**What survives as a real limitation:** given a transcript with no timestamps, Qwen3 still invents one. Production cannot produce that input, so it is not a shipping defect — but it is the honest boundary of what was measured, and the standing test says so rather than implying the model is incapable of inventing.
+**Outcome:** applied
+**Ref:** (pending)

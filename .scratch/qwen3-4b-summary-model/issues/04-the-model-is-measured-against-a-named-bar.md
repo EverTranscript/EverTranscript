@@ -14,12 +14,12 @@ ADR-0009 makes permanent — so that one is a gate, not a score.
 
 **Blocked by:** 03.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A model-gated quality test whose subject is the registered Summary model, separate from the platform test, which keeps reporting rather than asserting
-- [ ] Zero fabricated timestamps is asserted as a gate
-- [ ] Action items found and verbatim echo are required to improve on the incumbent's recorded numbers
-- [ ] The generation timeout is re-derived from an observed per-chunk time on this model, replacing a bound whose comment says it was sized for a small model
-- [ ] The measured numbers are journaled, including if they disappoint — a bigger model that still fabricates is a finding, not a failed ticket
-- [ ] 03 does not merge unless this passes
-- [ ] The local gate is green
+- [x] `summary_quality.rs`, separate from `summary_inference.rs`, which still reports without asserting
+- [x] Asserted: every time-shaped string in the Summary must appear in the transcript. **The fixture had to be corrected first** — Q45's input, which this inherited, had no timestamps at all, so it was measuring the harness rather than the model (Q58)
+- [x] Both, against numbers measured on the same production-shaped input rather than remembered: 0 of 2 action items and 3 of 3 lines echoed becomes 2 of 2 and 0 of 3
+- [x] Re-derived: a full 11,627-token chunk takes ~44 s accelerated, so the bound is doubled to 1,800 s to survive a CPU-only machine an order of magnitude slower
+- [x] Journaled as Q58, including the correction to Q45's own finding and the surviving limitation: given no timestamps, this model invents one too. Production cannot produce that input, so it is a boundary rather than a defect
+- [x] It passes, so 03 merges
+- [x] The local gate is green

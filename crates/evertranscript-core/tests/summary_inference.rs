@@ -92,7 +92,18 @@ fn spawn() -> Option<SidecarBackend> {
          EVERTRANSCRIPT_SUMMARIZER_BIN",
     );
     let model = model.to_str().expect("the model path should be UTF-8");
-    Some(SidecarBackend::spawn(Path::new(&binary), model).expect("the model should load"))
+    // **Driven the way production drives it.** Using the undriven `spawn`
+    // here silently ran Qwen3 under plain framing and greedy decoding — the
+    // two things its publisher forbids — and produced a looping, self-talking
+    // output that looked like a model problem and was a harness problem.
+    let driving = evertranscript_core::models::registry::SUMMARY_DEFAULT
+        .driving
+        .as_ref()
+        .map(evertranscript_core::summary::sidecar::Driving::from_entry);
+    Some(
+        SidecarBackend::spawn_driven(Path::new(&binary), model, driving)
+            .expect("the model should load"),
+    )
 }
 
 #[test]
@@ -189,5 +200,49 @@ fn a_loaded_sidecar_shuts_down_rather_than_hanging() {
     // child holding half a gigabyte is the one that matters — an orphan here
     // costs the Operator their memory.
     assert!(backend.ping());
+    backend.shutdown();
+}
+
+#[test]
+fn a_prompt_larger_than_one_batch_does_not_kill_the_sidecar() {
+    // **The regression this exists for.** `n_batch` defaults to 512 and the
+    // sidecar decodes the whole prompt in one call, so any transcript over
+    // roughly two minutes of speech killed the process — "backend
+    // unreachable: the sidecar exited", with no other explanation.
+    //
+    // It went unseen for a milestone because everything that ever reached it
+    // was small: the meeting M4 measured was 89 seconds, and chunking had no
+    // production caller (DECISIONS Q56), so nothing ever handed it a large
+    // prompt. Which means the Summary feature did not work on a meeting of
+    // any real length, and no test could see it.
+    let Some(mut backend) = spawn() else {
+        eprintln!("skipping: EVERTRANSCRIPT_SUMMARY_MODEL is not set");
+        return;
+    };
+
+    let mut transcript = String::new();
+    for index in 0..120 {
+        transcript.push_str(&format!(
+            "[00:{:02}:{:02}] Frank: We went through the quarterly plan and what it \
+             means for the team over the next few weeks.\n",
+            index / 60,
+            index % 60
+        ));
+    }
+    let tokens = evertranscript_core::summary::generate::estimate_tokens(&transcript);
+    assert!(
+        tokens > 512,
+        "this test is pointless unless the prompt exceeds one default batch, got {tokens}"
+    );
+
+    let request = Request {
+        system: DEFAULT_SYSTEM_PROMPT.to_string(),
+        user: evertranscript_core::summary::prompt::build_user_message(None, &transcript),
+    };
+    let summary = backend
+        .generate(&request, &Cancel::new())
+        .expect("a prompt larger than one batch must generate, not kill the sidecar");
+    assert!(!summary.trim().is_empty());
+    assert!(backend.ping(), "the sidecar should still be answering");
     backend.shutdown();
 }

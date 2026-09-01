@@ -93,7 +93,19 @@ fn timestamp(ms: i64) -> String {
 /// words it labels. Splitting mid-line could hand a chunk a quotation with
 /// no idea who said it.
 pub fn chunk(transcript: &str) -> Vec<String> {
-    if estimate_tokens(transcript) <= SINGLE_PASS_TOKENS {
+    chunk_to(transcript, SINGLE_PASS_TOKENS)
+}
+
+/// Splits to a budget the registered model actually has.
+///
+/// The constants above were sized for a 0.5B with an 8k context. A model
+/// carries its own budget on its registry entry, and passing the number in is
+/// what keeps a bigger context from being a fact nobody acts on — the entry
+/// said 12,000 while the chunker still split at 4,000, which is not wrong so
+/// much as pointless.
+pub fn chunk_to(transcript: &str, single_pass: usize) -> Vec<String> {
+    let chunk_budget = single_pass.saturating_sub(300).max(1);
+    if estimate_tokens(transcript) <= single_pass {
         return vec![transcript.to_string()];
     }
 
@@ -108,7 +120,7 @@ pub fn chunk(transcript: &str) -> Vec<String> {
             let next = estimate_tokens(lines[end]) + 1;
             // Always take at least one line, or a single line longer than a
             // whole chunk would loop forever.
-            if tokens + next > CHUNK_TOKENS && end > start {
+            if tokens + next > chunk_budget && end > start {
                 break;
             }
             tokens += next;

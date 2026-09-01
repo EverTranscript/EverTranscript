@@ -694,10 +694,18 @@ impl Core {
             );
         }
 
-        let system = settings
-            .summary_prompt
-            .clone()
-            .unwrap_or_else(|| summary::prompt::DEFAULT_SYSTEM_PROMPT.to_string());
+        // **Escaped, like Notes.** Under the plain framing a stray
+        // `<|im_end|>` in the Operator's prompt was characters; under a chat
+        // template it ends the system turn. The reasoning the Notes armor
+        // already carries applies here word for word — the Operator is
+        // trusted, and text they pasted from somewhere else is not
+        // necessarily.
+        let system = summary::prompt::escape_control_markers(
+            &settings
+                .summary_prompt
+                .clone()
+                .unwrap_or_else(|| summary::prompt::DEFAULT_SYSTEM_PROMPT.to_string()),
+        );
         let names = self
             .store
             .read(crate::store::speakers::list)
@@ -728,7 +736,14 @@ impl Core {
                 notes: notes.as_deref(),
             };
             let transcript = summary::generate::render_transcript(&material);
-            let chunks = summary::generate::chunk(&transcript);
+            // To the registered model's own budget rather than a constant
+            // sized for the model before it.
+            let single_pass = crate::models::registry::SUMMARY_DEFAULT
+                .driving
+                .as_ref()
+                .map(|driving| driving.single_pass_tokens)
+                .unwrap_or(summary::generate::SINGLE_PASS_TOKENS);
+            let chunks = summary::generate::chunk_to(&transcript, single_pass);
             let request_for = |piece: &str| summary::Request {
                 system: system.clone(),
                 user: summary::prompt::build_user_message(notes.as_deref(), piece),

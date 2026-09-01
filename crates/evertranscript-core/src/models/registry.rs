@@ -225,34 +225,55 @@ pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
 /// than to anyone's reputation — which is the whole reason M4 owes a number.
 /// Size and checksum read off the downloaded artifact.
 pub const SUMMARY_DEFAULT: ModelEntry = ModelEntry {
-    key: "qwen2.5-0.5b-instruct-q4_k_m",
-    display_name: "Qwen2.5 0.5B Instruct (q4_K_M)",
-    filename: "summary-qwen2.5-0.5b-instruct-q4_k_m.gguf",
-    remote_path: "Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+    key: "qwen3-4b-ud-q4_k_xl",
+    display_name: "Qwen3 4B (UD-Q4_K_XL)",
+    filename: "summary-qwen3-4b-ud-q4_k_xl.gguf",
+    remote_path: "unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-UD-Q4_K_XL.gguf",
     integrity: Integrity {
-        size_bytes: 491_400_032,
-        sha256: Some("74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db"),
+        // Verified against the publisher's LFS metadata, which is also what
+        // the `x-linked-etag` header carries. **Not the CDN's `etag`** —
+        // that is a Xet content hash and will never match. The plain
+        // `Q4_K_M` build of the same model also starts `f6`, so a prefix
+        // comparison picks the wrong file.
+        size_bytes: 2_546_341_152,
+        sha256: Some("f6e3fb6c2cdc869d16e66c719e94f2c02095d195967230e759a2d77fe814c71f"),
         crc32: None,
     },
     purpose: ModelPurpose::Summary,
-    // Not required: Summary is not an Anchor (ADR-0002), and a machine that
-    // never generates one is a working installation. Marking it required
-    // would make a fresh install refuse to record until half a gigabyte had
-    // downloaded, for a feature the Operator may not have chosen.
-    required: false,
+    // **Provisioned**: fetched by default, because a Summary feature that is
+    // there when reached is the point of choosing a model this size. Summary
+    // is still not an Anchor — it keeps its Knob — and the glossary
+    // distinguishes the two.
+    required: true,
     provenance: Provenance {
         license: "Apache-2.0",
-        source: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF",
+        source: "https://huggingface.co/unsloth/Qwen3-4B-GGUF",
     },
-    // **Exactly how the sidecar drove this model before it was described**,
-    // so introducing the seam changes no output. Greedy and plain framing are
-    // recorded as the choices they always were rather than adopted here.
     driving: Some(Driving {
-        framing: Framing::Plain,
-        sampling: Sampling::Greedy,
-        suppress_reasoning: None,
-        context_tokens: 8_192,
-        single_pass_tokens: 4_000,
+        // Qwen3 is trained on ChatML and ships the template in the GGUF.
+        // Reading it from the model rather than naming a format is what keeps
+        // this right for whatever is registered next.
+        framing: Framing::EmbeddedChatTemplate,
+        // The publisher's non-thinking settings, and greedy is not among
+        // them: the card says "DO NOT use greedy decoding", whose failure
+        // mode is the degenerate repetition this sidecar already needed a
+        // penalty to survive.
+        sampling: Sampling::Nucleus {
+            temperature: 0.7,
+            top_p: 0.8,
+            top_k: 20,
+            min_p: 0.0,
+        },
+        // The hard switch is a template variable this API cannot reach, so
+        // the soft switch it is — documented by the publisher for exactly
+        // this runtime. A Summary is a document, not a reasoning trace, and
+        // `scrub` would discard the thinking after we had paid to generate it.
+        suppress_reasoning: Some("/no_think"),
+        // The model declares far more, but the KV cache costs most exactly
+        // when a Summary competes with a recording. Three times the previous
+        // budget, well inside what the model can take.
+        context_tokens: 16_384,
+        single_pass_tokens: 12_000,
     }),
 };
 
@@ -384,19 +405,23 @@ mod tests {
     }
 
     #[test]
-    fn the_registered_summary_model_is_described_as_it_has_always_been_driven() {
-        // The guard on this ticket: introducing the seam must change no
-        // output. When the model changes, this test changes with it — and
-        // that is the point, because then the change is visible in a diff
-        // rather than absorbed silently.
+    fn the_registered_summary_model_is_described_as_its_publisher_documents() {
         let driving = SUMMARY_DEFAULT
             .driving
             .expect("the Summary model is prompted");
-        assert_eq!(driving.framing, Framing::Plain);
-        assert_eq!(driving.sampling, Sampling::Greedy);
-        assert_eq!(driving.suppress_reasoning, None);
-        assert_eq!(driving.context_tokens, 8_192);
-        assert_eq!(driving.single_pass_tokens, 4_000);
+        assert_eq!(driving.framing, Framing::EmbeddedChatTemplate);
+        assert_eq!(
+            driving.sampling,
+            Sampling::Nucleus {
+                temperature: 0.7,
+                top_p: 0.8,
+                top_k: 20,
+                min_p: 0.0,
+            }
+        );
+        assert_eq!(driving.suppress_reasoning, Some("/no_think"));
+        assert_eq!(driving.context_tokens, 16_384);
+        assert_eq!(driving.single_pass_tokens, 12_000);
     }
 
     #[test]
