@@ -101,6 +101,10 @@ The model provider a feature runs against — local (on-machine) or cloud (remot
 **Anchor**:
 A feature permanently fixed to the local Backend, with no selector. The Anchors are live transcription and Diarization.
 
+**Provisioned Model**:
+A model the product fetches by default, because the feature it serves is expected to work out of the box. **Distinct from an Anchor**: anchoring is about where a feature may run, provisioning is about whether its model arrives on its own. Every Anchor's model is provisioned, but Summary's is provisioned too — and Summary still has a Knob. A model that is neither is one the Operator must ask for.
+_Avoid_: required model (says nothing about who fetches it, and the two were the same set only until Summary's model became provisioned)
+
 **Knob**:
 The Backend selector. Exists on exactly one feature: Summary.
 _Avoid_: switch, toggle
@@ -122,7 +126,7 @@ The input-side twin of the Closed Boundary, twice narrowed: the product processe
 _Avoid_: passive capture, background monitoring
 
 **Sanctioned Traffic**:
-The enumerable network calls the product may ever make: the disableable update check, checksummed model downloads, and the cloud Backend the Operator chose. Beyond this list, the wire is silent. **Two of the three are content-free; the third is not, and calling the whole list content-free would be false.** The cloud Summary Backend sends the text of a meeting — that is its purpose, it happens only under an explicit choice (ADR-0013), and it is the single path by which anything said in a meeting can leave the machine.
+The enumerable network calls the product may ever make: the disableable update check, checksummed model downloads, and the cloud Backend the Operator chose. Beyond this list, the wire is silent. **Model downloads are not all Operator-initiated**: a fresh install fetches what it needs by itself, and saying otherwise would describe a product this is not. **Two of the three are content-free; the third is not, and calling the whole list content-free would be false.** The cloud Summary Backend sends the text of a meeting — that is its purpose, it happens only under an explicit choice (ADR-0013), and it is the single path by which anything said in a meeting can leave the machine.
 _Avoid_: allowlist, phoning home, "content-free" as a description of the whole list
 
 ### Onboarding
