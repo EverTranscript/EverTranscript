@@ -725,3 +725,27 @@ The replacement is `audio::aec::tests::real_speech_echo_is_cancelled_by_a_measur
 **Not established:** whether 64.9% is acceptable. That is a product judgment about a known attribution leak, not a test question, and moving the guard does not answer it. Also unreproduced: M1's uncancelled 0.08, which is 0.0% today on both tiny and turbo. It is the control, it passes either way, and I cannot account for the difference.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q51 — m1-walking-skeleton/08-aec-dsp-quality — finding
+
+**Question:** Q50 left a lead: babble drove the residual to zero while real speech stopped at 32.8 dB. Does the residual suppressor under-engage on speech, and if so does fixing it close the attribution leak?
+**Options considered:** accept 64.9% as the canceller's limit / find the mechanism and fix it
+**Chosen:** Found it and fixed it. **The suppressor released in every pause between words, and re-engaged too late to catch the next one.** With that corrected the far end no longer reaches the microphone channel at all: the shipping model now transcribes the cancelled channel as `""`.
+**Decided-by:** agent
+**Justification:** Measured before changing anything. On real speech: filter alone 20.3 dB, filter plus suppressor 32.8 dB, and **`inf` dB if the gain is held rather than allowed to release** — so the whole gap was the release, not the filter. The gain sat above 0.5 for 14.12% of samples and **those samples carried 74.4% of everything that escaped**, with a mean gain of 0.61 in the 50 ms after each far-end onset against 0.02 when settled.
+
+That puts the leak on utterance onsets, which is where the phonetic information is, and answers the question Q50 could not: a residual 32.8 dB down *on average* is intelligible because the average is not where the information sits. Babble reaches `inf` because it never pauses — every ERLE test in this module used it, so the release-and-re-engage cycle had never been exercised by anything.
+
+**The first fix was wrong and the measurement said so.** Keying the release on `near_end_talking` looked right — it is the module's existing double-talk test — but on echo-only audio, where there is no near end whatsoever, it accounted for **15784 of 19784 releases**. `far_energy` collapses the moment the far end stops while the delayed echo keeps `near_energy` up, so it fires on the echo's own tail. Harmless where it was designed, since a false positive there only freezes adaptation; wrong in a decision about releasing suppression. ERLE moved 32.8 → 32.9 dB, which is what a fix that does nothing looks like.
+
+What works is duration. An onset and a person are indistinguishable for an instant — the filter's estimate lags in both cases — so the gain now **holds** across a loss of dominance shorter than 50 ms and **releases** on a longer one, with a 200 ms hangover keeping a gap between words from counting as the far end stopping. Real speech went to **41.4 dB**, and double talk still keeps **115% of the near-end power** — the identical figure M1 recorded, so the do-no-harm property is untouched. All 54 audio tests pass.
+
+**The leak is closed.** Against `WHISPER_DEFAULT`, the cancelled microphone channel now transcribes as `""` — WER 100.0%, 0 sub, **37 del**, 0 ins. It was 64.9% and fourteen intelligible words of the far end. The control still holds, so the experiment is not vacuous.
+
+The guard is `real_speech_echo_is_cancelled_by_a_measurable_amount`, its bar raised from 15 dB to 35 — above the broken 32.8 so the regression cannot return green, under the working 41.4 so a platform that rounds differently does not. **Verified by neutralising the fix and watching it fail**, rather than by it being green.
+
+**Two further tests were written and deleted, both because they passed on the defect.** The first drove a pause with babble: the filter predicts stationary noise perfectly on its own, so the suppressor contributes nothing there and a pause costs nothing. The second spliced a silence into real speech, and the window after the splice landed in a natural pause with no echo to leak. Recording this because each would have read as coverage — the only reason either was caught is that the fix was neutralised and they stayed green while their sibling went red.
+
+**Not established:** any of this on a real speakerphone. The room is synthetic, which is the case Q1 already reserved DTLN for — "revisit if real speakerphone recordings show the linear filter failing on nonlinear speaker distortion, which synthetic fixtures cannot exhibit". That is still true and still untested.
+**Outcome:** applied
+**Ref:** (pending)

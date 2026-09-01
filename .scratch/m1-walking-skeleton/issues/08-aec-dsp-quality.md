@@ -29,9 +29,17 @@
       the far end, so the `> 0.7` guard built on 0.86 failed the first time CI ran it with the model that
       ships. The canceller itself is unchanged and tiny still scores 0.865 against it. The end-to-end figure
       is now reported rather than asserted, and the guard is ERLE in
-      `audio::aec::tests::real_speech_echo_is_cancelled_by_a_measurable_amount` — **32.8 dB**, no model, both
-      platforms. What that does not carry over is intelligibility, which is the harm; `ECHO_DOMINANCE` says
-      why a decibel figure cannot stand in for it. Whether 0.649 is acceptable is open.
+      `audio::aec::tests::real_speech_echo_is_cancelled_by_a_measurable_amount` — no model, both platforms.
+
+      **Resolved (Q51): 0.649 is not something to accept, because it was a defect rather than a limit.**
+      The residual suppressor released in every pause between words and re-engaged too late to catch the
+      next one, so 74% of everything that escaped did so in 14% of the samples — at utterance onsets, where
+      the phonetic information is, which is why the average of 32.8 dB was intelligible. Holding the gain
+      across a brief loss of dominance takes real speech to **41.4 dB** and the cancelled channel now
+      transcribes as `""` against the shipping model: **WER 1.000, 37 of 37 words deleted**, from 0.649 and
+      fourteen intelligible ones. Double talk still keeps **115%** of near-end power, the same number
+      measured above. The ERLE guard's bar is now 35 dB, set above the broken value and verified by
+      neutralising the fix. Still untested on a real speakerphone, which is Q1's reserved case.
 - [x] EBU R128 normalization toward −23 LUFS with a −1 dBFS true-peak ceiling and a max 8× gain, applied
       to what reaches the *model*. Deliberate deviation: the stored file stays as captured, so the Enhance
       family can re-derive from unmodified audio. Silence is never amplified (that is hallucination fuel).

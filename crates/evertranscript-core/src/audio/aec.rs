@@ -91,6 +91,41 @@ const SUPPRESSION: f32 = 0.02;
 const ENGAGE: f32 = 0.02;
 const RELEASE: f32 = 0.002;
 
+/// How long the far end still counts as playing after its energy drops.
+///
+/// **Speech pauses, and without this the suppressor released in every gap.**
+/// Measured before it existed: on real speech the gain sat above 0.5 for 14%
+/// of samples and those samples carried **74% of everything that escaped**,
+/// with a mean gain of 0.61 in the 50 ms after each far-end onset — against
+/// 0.02 when settled. The gap re-opened at every pause and took the whole
+/// onset transient to close, because re-engaging needs the filter to be
+/// predicting well again and after a silence it briefly is not.
+///
+/// That put the leak exactly on speech onsets, which is where the phonetic
+/// information is, which is why a transcription model could still read the
+/// far end out of a residual that averaged 32.8 dB down (DECISIONS Q51).
+///
+/// 200 ms spans the gaps between words and most gaps between sentences. It
+/// is safe to hold that long because the hold is only ever a hold: dominance
+/// returning engages, and dominance staying gone releases. See
+/// `DOMINANCE_HOLD_MS` and `suppress_residual_echo`.
+/// Babble never pauses, so none of this was reachable by the tests that
+/// existed.
+const FAR_END_HANGOVER_MS: usize = 200;
+
+/// How long a loss of echo dominance counts as an utterance starting rather
+/// than as a person starting.
+///
+/// The two are indistinguishable for an instant: the filter's estimate lags
+/// at the beginning of an utterance exactly as it does when someone
+/// unpredictable speaks. What separates them is duration. An onset settles
+/// in tens of milliseconds; a person does not stop being a person.
+///
+/// 50 ms covers the transient, and double talk still releases within about
+/// a syllable — `the_near_end_speaker_is_not_cancelled_along_with_the_echo`
+/// is the test that decides whether that is short enough.
+const DOMINANCE_HOLD_MS: usize = 50;
+
 /// Removes far-end audio from the near-end channel.
 pub struct EchoCanceller {
     weights: Vec<f32>,
@@ -108,6 +143,13 @@ pub struct EchoCanceller {
     /// Current residual-suppression gain, moved gradually rather than
     /// switched, because a switched gain is audible as a click.
     gain: f32,
+    /// Samples since the far end was last above the floor, and how many of
+    /// them still count as "playing" — the hangover that keeps a pause
+    /// between words from releasing the suppressor.
+    far_idle: usize,
+    since_dominated: usize,
+    dominance_hold: usize,
+    hangover: usize,
     /// Whether any weight is non-zero. While it is false the filter has
     /// nothing to subtract, and saying so is what keeps the cost off
     /// meetings that have no echo path to model.
@@ -129,6 +171,10 @@ impl EchoCanceller {
             far_energy: 0.0,
             residual_energy: 0.0,
             gain: 1.0,
+            far_idle: usize::MAX,
+            since_dominated: usize::MAX,
+            dominance_hold: rate as usize * DOMINANCE_HOLD_MS / 1000,
+            hangover: rate as usize * FAR_END_HANGOVER_MS / 1000,
             active: false,
             resets: 0,
         }
@@ -177,7 +223,17 @@ impl EchoCanceller {
 
         let far_end_playing = self.far_energy > REFERENCE_FLOOR;
         let near_end_talking = self.near_energy > self.far_energy * DOUBLE_TALK_RATIO;
+        // **Adaptation is deliberately not given the hangover.** Learning
+        // from a silent reference is how a filter unlearns a room, and the
+        // three guarantees in this module's header are all about when *not*
+        // to adapt. The hangover exists for the suppressor and stops there.
         let adapting = far_end_playing && !near_end_talking && self.window_power > REFERENCE_FLOOR;
+        if far_end_playing {
+            self.far_idle = 0;
+        } else {
+            self.far_idle = self.far_idle.saturating_add(1);
+        }
+        let far_recently_playing = far_end_playing || self.far_idle < self.hangover;
 
         // Nothing learned and nothing to learn from: the estimate would be
         // zero and the subtraction a no-op. Taking the shortcut rather than
@@ -186,7 +242,7 @@ impl EchoCanceller {
         if !adapting && !self.active {
             self.residual_energy += (near * near - self.residual_energy) * ENERGY_SMOOTHING;
             self.advance();
-            return self.suppress_residual_echo(near, far_end_playing);
+            return self.suppress_residual_echo(near, far_recently_playing);
         }
 
         let window = &self.history[self.write + 1 - self.taps..=self.write];
@@ -210,7 +266,7 @@ impl EchoCanceller {
         }
 
         self.advance();
-        self.suppress_residual_echo(error, far_end_playing)
+        self.suppress_residual_echo(error, far_recently_playing)
     }
 
     /// Scales down what the filter could not remove, when what is left is
@@ -221,13 +277,41 @@ impl EchoCanceller {
     /// and the remainder is residue. If it is not — because the Operator is
     /// talking, and nothing in the reference predicts that — the residual
     /// stays large and this does nothing.
-    fn suppress_residual_echo(&mut self, error: f32, far_end_playing: bool) -> f32 {
-        let dominated = far_end_playing
+    /// Three states rather than two, and the third is the fix.
+    ///
+    /// **Engage** when the filter is accounting for most of the microphone.
+    /// **Hold** through a brief loss of dominance — the beginning of an
+    /// utterance, where the estimate lags for a few tens of milliseconds and
+    /// where releasing costs the whole onset.
+    /// **Release** when the far end has genuinely stopped, or when dominance
+    /// has been gone long enough to be a person rather than a transient.
+    fn suppress_residual_echo(&mut self, error: f32, far_recently_playing: bool) -> f32 {
+        let dominated = far_recently_playing
             && self.near_energy > REFERENCE_FLOOR
             && self.residual_energy < self.near_energy * ECHO_DOMINANCE;
-        let target = if dominated { SUPPRESSION } else { 1.0 };
-        let rate = if target < self.gain { ENGAGE } else { RELEASE };
-        self.gain += (target - self.gain) * rate;
+        if dominated {
+            self.since_dominated = 0;
+            self.gain += (SUPPRESSION - self.gain) * ENGAGE;
+            return error * self.gain;
+        }
+        self.since_dominated = self.since_dominated.saturating_add(1);
+        // **Hold across a brief loss of dominance, release on a sustained
+        // one.** Both look identical for an instant — the filter's estimate
+        // lags at the start of an utterance exactly as it does when someone
+        // unpredictable starts speaking — so the only thing separating them
+        // is how long it lasts. An onset settles in milliseconds; a person
+        // talking does not.
+        //
+        // `near_end_talking` cannot make this call, though it is the obvious
+        // candidate and was tried: `far_energy` collapses the moment the far
+        // end stops while the delayed echo keeps `near_energy` up, so it
+        // fires on the echo's own tail. Measured on echo-only audio, where
+        // there is no near end whatsoever, it accounted for 15784 of 19784
+        // releases (DECISIONS Q51).
+        if far_recently_playing && self.since_dominated < self.dominance_hold {
+            return error * self.gain;
+        }
+        self.gain += (1.0 - self.gain) * RELEASE;
         error * self.gain
     }
 
@@ -290,7 +374,6 @@ mod tests {
     fn power(samples: &[f32]) -> f32 {
         samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32
     }
-
     #[test]
     fn echo_is_removed_when_only_the_far_end_is_talking() {
         // The case the whole module exists for: the Operator is silent and
@@ -346,14 +429,20 @@ mod tests {
         let half = microphone.len() / 2;
         let erle = erle_db(&echo[half..], &microphone[half..]);
         println!("  real speech: {erle:.1} dB of echo removed");
+        // **35, not 15.** 41.4 dB is what this measures once the suppressor
+        // stops releasing in every pause; 32.8 dB is what it measured while
+        // it did. A bar of 15 passed comfortably through the whole defect,
+        // which is the argument against setting one from the wrong side of a
+        // fix. This sits above the broken value so the regression cannot come
+        // back green, and well under the working one so a platform that
+        // rounds differently does not go red (DECISIONS Q51).
         assert!(
-            erle > 15.0,
+            erle > 35.0,
             "real speech echo should be well down after converging, \
              got {erle:.1} dB"
         );
         assert!(canceller.is_cancelling(), "an echo path was learned");
     }
-
     #[test]
     fn a_harder_room_is_still_reduced() {
         let far = babble(8.0, 7);
