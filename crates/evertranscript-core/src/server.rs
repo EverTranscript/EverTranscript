@@ -1971,6 +1971,36 @@ impl Core {
         Ok(decision)
     }
 
+    /// Makes the login item match the setting that claims it exists.
+    ///
+    /// `launch_at_login` defaults to true, and registration only ever
+    /// happened when a Client explicitly *set* it — which onboarding never
+    /// does, since its steps are the Briefing, permissions, models, folder,
+    /// Backend and calendar. So a fresh install carried a setting that said
+    /// "on" and no login item at all, and the Core that `CONTEXT.md` defines
+    /// as "the always-on process — the login item" did not start at login.
+    /// The CLI noticed and told the Operator to run a command; nothing acted.
+    ///
+    /// Reconciled in both directions, because drift the other way is just as
+    /// wrong: a registration left behind by a setting since turned off would
+    /// start a Core the Operator asked not to have.
+    pub async fn reconcile_login_item(&self) {
+        if autostart::disabled() {
+            return;
+        }
+        let wanted = self.settings.lock().await.launch_at_login;
+        if autostart::is_enabled() == wanted {
+            return;
+        }
+        match autostart::set_enabled(wanted) {
+            Ok(()) => info!(
+                registered = wanted,
+                "the login item did not match the setting; reconciled"
+            ),
+            Err(error) => warn!(%error, "could not reconcile the login item"),
+        }
+    }
+
     /// Keeps trying until every required model is present, or shutdown.
     ///
     /// One attempt is not enough for a promise that the product will work:

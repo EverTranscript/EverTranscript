@@ -13,6 +13,22 @@
 use anyhow::Result;
 
 /// Whether the Core is registered to start at login.
+/// Set this to stop the Core touching the login item.
+///
+/// Since the Core reconciles its registration at startup, every daemon start
+/// writes to the real `~/Library/LaunchAgents` — including the guarantee
+/// suite's, which starts one repeatedly. It did exactly that: a LaunchAgent
+/// appeared in a real home directory pointing at `target/debug/evertranscript`,
+/// a build artifact that would have been run at the next login. A test
+/// harness must not register the machine's login items, and CI must not
+/// either.
+pub const DISABLE_ENV: &str = "EVERTRANSCRIPT_NO_LOGIN_ITEM";
+
+/// Whether touching the login item has been switched off for this process.
+pub fn disabled() -> bool {
+    std::env::var_os(DISABLE_ENV).is_some_and(|value| !value.is_empty())
+}
+
 pub fn is_enabled() -> bool {
     platform::is_enabled().unwrap_or(false)
 }

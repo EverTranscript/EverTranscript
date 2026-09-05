@@ -227,6 +227,9 @@ fn a_full_recording_cycle_opens_no_network_connections() {
         // Core that provisions would pull gigabytes from the real mirror
         // while asserting it opens no connections.
         .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
+        // And no login item: these start a real daemon, which would register
+        // the test binary to run at the next login.
+        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -316,6 +319,9 @@ fn diarization_opens_no_network_connections_either() {
         // Core that provisions would pull gigabytes from the real mirror
         // while asserting it opens no connections.
         .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
+        // And no login item: these start a real daemon, which would register
+        // the test binary to run at the next login.
+        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -412,6 +418,9 @@ fn a_full_cycle_with_summary_and_updates_off_opens_no_sockets() {
         // Core that provisions would pull gigabytes from the real mirror
         // while asserting it opens no connections.
         .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
+        // And no login item: these start a real daemon, which would register
+        // the test binary to run at the next login.
+        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -485,6 +494,9 @@ fn nothing_key_shaped_reaches_the_record_or_the_logs() {
         // Core that provisions would pull gigabytes from the real mirror
         // while asserting it opens no connections.
         .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
+        // And no login item: these start a real daemon, which would register
+        // the test binary to run at the next login.
+        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
         .env("EVERTRANSCRIPT_LOG", "evertranscript_core=debug")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -545,6 +557,9 @@ fn a_recording_survives_the_core_being_killed() {
         // Core that provisions would pull gigabytes from the real mirror
         // while asserting it opens no connections.
         .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
+        // And no login item: these start a real daemon, which would register
+        // the test binary to run at the next login.
+        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -571,6 +586,9 @@ fn a_recording_survives_the_core_being_killed() {
         // Core that provisions would pull gigabytes from the real mirror
         // while asserting it opens no connections.
         .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
+        // And no login item: these start a real daemon, which would register
+        // the test binary to run at the next login.
+        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -605,6 +623,9 @@ fn the_history_folder_holds_only_notes_and_a_hidden_store() {
         // Core that provisions would pull gigabytes from the real mirror
         // while asserting it opens no connections.
         .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
+        // And no login item: these start a real daemon, which would register
+        // the test binary to run at the next login.
+        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()

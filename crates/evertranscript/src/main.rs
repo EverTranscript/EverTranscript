@@ -355,6 +355,9 @@ fn run_daemon_owning_the_main_thread(runtime: tokio::runtime::Runtime) -> Result
             // runs should already see a Backend chosen.
             // Before provisioning, so an upgrade reclaims the old model's
             // space rather than holding both at once.
+            // Before anything slow: a Core that is not the login item it says
+            // it is will not be running the next time a meeting starts.
+            core.reconcile_login_item().await;
             core.remove_superseded_models();
             if let Err(error) = core.preselect_local_backend().await {
                 tracing::warn!(%error, "could not record the preselected Backend");
