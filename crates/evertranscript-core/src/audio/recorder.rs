@@ -154,6 +154,12 @@ async fn run(
     // speak again.
     let mut delivered = [false; 2];
     let mut abandoned = [false; 2];
+    // How many ticks have passed with the far end audibly playing. The system
+    // leg is a process tap: it delivers *nothing at all* when no process is
+    // playing — not silence, nothing — so its silence is only evidence of
+    // failure once something has been playing through it. The microphone has
+    // no such excuse; a quiet room still produces frames of zeros.
+    let mut ticks_with_playback = 0u32;
     let mut watchdog = tokio::time::interval(SILENT_LEG_GRACE);
     watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first tick is immediate; the grace period starts after it.
@@ -195,11 +201,17 @@ async fn run(
                     continue;
                 }
                 _ = watchdog.tick() => {
+                    if super::system::output_is_active() == Some(true) {
+                        ticks_with_playback += 1;
+                    }
                     for (index, channel) in [AudioChannel::Mic, AudioChannel::System]
                         .into_iter()
                         .enumerate()
                     {
                         if delivered[index] || abandoned[index] {
+                            continue;
+                        }
+                        if !judge_silent_leg(channel, ticks_with_playback) {
                             continue;
                         }
                         abandoned[index] = true;
@@ -401,6 +413,28 @@ impl Transcription {
 /// magnitude of headroom.
 const SILENT_LEG_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Whether a leg that has delivered nothing has been given a fair chance.
+///
+/// The two legs deserve different answers, which is the whole of this
+/// function. A microphone always delivers — a silent room produces frames of
+/// zeros — so one grace period with nothing at all is already a dead leg. A
+/// CoreAudio process tap delivers no callbacks whatsoever until some process
+/// plays, so its silence means nothing until the far end has been heard, and
+/// abandoning it early would end the system leg of every Meeting that opens
+/// with a few quiet seconds. It waits for two grace periods of confirmed
+/// playback, so a single tick that catches the start of a sound does not
+/// convict it.
+///
+/// This is the same distinction DECISIONS Q9 drew for the refusal check, and
+/// for the same reason: silence with nothing playing is an ordinary quiet
+/// meeting.
+fn judge_silent_leg(channel: AudioChannel, ticks_with_playback: u32) -> bool {
+    match channel {
+        AudioChannel::Mic => true,
+        AudioChannel::System => ticks_with_playback >= 2,
+    }
+}
+
 /// Index into the per-leg tracking arrays. Two legs, so an array beats a map.
 fn leg_index(channel: AudioChannel) -> usize {
     match channel {
@@ -543,6 +577,12 @@ mod tests {
         // audio and no note is indistinguishable from a quiet room, and that
         // is the whole failure.
         //
+        // The microphone is the leg under test because it is the one that can
+        // be judged on its own: it always delivers, so nothing at all is
+        // already proof. The system leg's rule depends on whether anything
+        // was playing, which is a property of the machine running the test —
+        // `judge_silent_leg` carries that logic and is tested directly.
+        //
         // The working leg keeps recording throughout, which is asserted below
         // — though not because of the watchdog. The joiner already emits once
         // a leg leads by `MAX_LEAD_MS`, so a dead leg costs 400ms rather than
@@ -558,8 +598,8 @@ mod tests {
         let still_capturing = events_tx.clone();
 
         let (mut source, delivered) = FixtureSource::with_completion(vec![
-            Step::audio(AudioChannel::Mic, 400, 0.4),
-            Step::audio(AudioChannel::Mic, 400, -0.4),
+            Step::audio(AudioChannel::System, 400, 0.4),
+            Step::audio(AudioChannel::System, 400, -0.4),
         ]);
         source.start(clock, events_tx).expect("start");
 
@@ -592,7 +632,7 @@ mod tests {
             outcome
                 .degraded
                 .iter()
-                .any(|note| note.contains("system audio")
+                .any(|note| note.contains("microphone")
                     && note.contains("delivered no audio")),
             "the Meeting must say the leg produced nothing, got {:?}",
             outcome.degraded
@@ -606,6 +646,25 @@ mod tests {
             outcome.audio_path.is_some_and(|path| path.exists()),
             "which means a file, not just a duration"
         );
+    }
+
+    #[test]
+    fn a_silent_system_leg_is_not_convicted_until_something_has_played() {
+        // The tap delivers nothing at all while nothing plays, so an early
+        // verdict would end the system leg of every Meeting that opens with a
+        // few quiet seconds — which my own fix for the capture deadlock made
+        // the common case, since the microphone now starts first and the tap
+        // sits idle behind it.
+        assert!(!judge_silent_leg(AudioChannel::System, 0));
+        assert!(
+            !judge_silent_leg(AudioChannel::System, 1),
+            "one tick may only have caught the start of a sound"
+        );
+        assert!(judge_silent_leg(AudioChannel::System, 2));
+
+        // The microphone has no such excuse: a silent room still produces
+        // frames of zeros, so nothing at all is already a dead leg.
+        assert!(judge_silent_leg(AudioChannel::Mic, 0));
     }
 
     #[tokio::test]

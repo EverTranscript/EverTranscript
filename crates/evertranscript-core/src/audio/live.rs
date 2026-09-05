@@ -168,6 +168,7 @@ impl LiveSource {
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let thread_stop = std::sync::Arc::clone(&stop);
         let (done_tx, done) = std::sync::mpsc::channel::<()>();
+        let (ready_tx, ready) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
 
         // cpal's Stream is !Send, so it is created and dropped on one
         // dedicated thread rather than moved into the async runtime.
@@ -177,18 +178,40 @@ impl LiveSource {
                 // Held for the thread's lifetime; dropping it on the way
                 // out is what tells `stop` the teardown finished.
                 let _done = done_tx;
-                if let Err(error) = run_microphone(device, config, clock, events, thread_stop) {
+                if let Err(error) =
+                    run_microphone(device, config, clock, events, thread_stop, ready_tx)
+                {
                     warn!(%error, "microphone capture ended");
                 }
             })
             .context("spawning the microphone thread")?;
 
+        // Registered before the wait below, so a microphone that never starts
+        // is still torn down by `stop()` rather than left running unseen.
         self.stream = Some(Box::new(ThreadStream {
             stop,
             handle: Some(handle),
             done,
         }));
-        Ok(name)
+
+        // **Wait for the HAL to actually start it.** This function used to
+        // return the moment the thread was spawned, which made the order the
+        // caller chose meaningless: the real `play()` happened later, racing
+        // whatever else touched CoreAudio. And an idle system-audio process
+        // tap makes that race a deadlock — the tap delivers no callbacks when
+        // nothing is playing, and starting an input AudioUnit in that state
+        // never returns (`.scratch/capture-deadlock`). A microphone that is
+        // already delivering survives the tap being created; one that is
+        // still starting does not, so the wait is the fix.
+        match ready.recv_timeout(MICROPHONE_START_TIMEOUT) {
+            Ok(Ok(())) => Ok(name),
+            Ok(Err(error)) => anyhow::bail!("{error}"),
+            Err(_) => anyhow::bail!(
+                "the microphone did not start within {}s — the device accepted the \
+                 request and never returned",
+                MICROPHONE_START_TIMEOUT.as_secs()
+            ),
+        }
     }
 
     /// Whether system audio can be captured on this machine, and why not if
@@ -225,10 +248,25 @@ impl LiveSource {
 
 impl AudioSource for LiveSource {
     fn start(&mut self, clock: CaptureClock, events: mpsc::Sender<CaptureEvent>) -> Result<()> {
-        // Both legs are attempted, and neither can veto the other. Starting
-        // system audio first only fixes the order of the log lines; what
-        // matters is that a failure below records the leg as unavailable and
-        // keeps going.
+        // Both legs are attempted, and neither can veto the other: a failure
+        // below records that leg as unavailable and keeps going.
+        //
+        // **The order is load-bearing, and used to be documented as not
+        // being.** An idle system-audio tap deadlocks an input AudioUnit that
+        // is still starting, so the microphone goes first and
+        // `start_microphone` does not return until CoreAudio has actually
+        // started it. A microphone already delivering survives the tap.
+        let microphone = match self.start_microphone(clock.clone(), events.clone()) {
+            Ok(name) => {
+                self.description = format!("live ({name})");
+                None
+            }
+            Err(error) => {
+                warn!(%error, "recording without a microphone");
+                Some(format!("{error:#}"))
+            }
+        };
+
         let system = match system::start(clock.clone(), events.clone()) {
             Ok(capture) => {
                 info!(via = %capture.describe(), "system audio joined the recording");
@@ -241,22 +279,13 @@ impl AudioSource for LiveSource {
             }
         };
 
-        let microphone = match self.start_microphone(clock, events.clone()) {
-            Ok(name) => {
-                self.description = match &self.system {
-                    Some(capture) => format!("live ({name} + {})", capture.describe()),
-                    None => format!("live ({name}, microphone only)"),
-                };
-                None
-            }
-            Err(error) => {
-                warn!(%error, "recording without a microphone");
-                self.description = match &self.system {
-                    Some(capture) => format!("live ({}, system audio only)", capture.describe()),
-                    None => "live (nothing available)".to_string(),
-                };
-                Some(format!("{error:#}"))
-            }
+        // Named once both answers are in, so it describes what is actually
+        // running rather than what had started so far.
+        self.description = match (&microphone, &self.system) {
+            (None, Some(capture)) => format!("{} + {}", self.description, capture.describe()),
+            (None, None) => format!("{}, microphone only", self.description),
+            (Some(_), Some(capture)) => format!("live ({}, system audio only)", capture.describe()),
+            (Some(_), None) => "live (nothing available)".to_string(),
         };
 
         // Nothing to record is the one case that is genuinely an error: a
@@ -302,12 +331,21 @@ impl AudioSource for LiveSource {
     }
 }
 
+/// How long CoreAudio may take to start the microphone before the leg is
+/// called dead.
+///
+/// Starting an AudioUnit is milliseconds when it works and forever when it
+/// does not, so this is short. Losing three seconds off the front of a
+/// Meeting would be bad; waiting forever loses the Meeting.
+const MICROPHONE_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 fn run_microphone(
     device: cpal::Device,
     config: cpal::SupportedStreamConfig,
     clock: CaptureClock,
     events: mpsc::Sender<CaptureEvent>,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ready: std::sync::mpsc::Sender<std::result::Result<(), String>>,
 ) -> Result<()> {
     let mut encoder = LegEncoder::new(
         AudioChannel::Mic,
@@ -346,7 +384,12 @@ fn run_microphone(
             "unsupported microphone sample format {other:?} — only f32 is handled so far"
         ),
     };
-    stream.play().context("starting the microphone stream")?;
+    // `play()` is where this deadlocks when a system-audio tap is already
+    // open and idle, so the signal goes *after* it returns rather than after
+    // the stream is built. See `start_microphone` for why anyone waits.
+    let started = stream.play().context("starting the microphone stream");
+    let _ = ready.send(started.as_ref().map(|_| ()).map_err(|error| format!("{error:#}")));
+    started?;
 
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {
         std::thread::sleep(std::time::Duration::from_millis(20));
