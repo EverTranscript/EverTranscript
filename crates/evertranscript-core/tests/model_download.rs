@@ -348,6 +348,17 @@ async fn a_core_provisions_only_when_it_is_asked_to() {
         "constructing a Core must not fetch anything"
     );
 
+    // **In the production order.** `main.rs` calls `preselect_local_backend()`
+    // two lines before `provision_if_fresh()`, and the freshness test used to
+    // read `summary_backend.is_some()` — which the preselect had just written.
+    // So every fresh install decided `AskFirst` and downloaded nothing, while
+    // the Briefing promised "the first ones start on their own". Asserting on
+    // the provisioner alone missed it: the unit was right and the composition
+    // was wrong.
+    core.preselect_local_backend()
+        .await
+        .expect("preselect, as the daemon does at startup");
+
     // And asked, on a fresh install, it decides to fetch. The registry's real
     // entries point at the real mirror, so this asserts the decision and the
     // call rather than downloading gigabytes: the fetch fails against a stub
@@ -378,3 +389,4 @@ async fn a_core_provisions_only_when_it_is_asked_to() {
     }
     drop(server);
 }
+

@@ -1938,9 +1938,21 @@ impl Core {
 
         let settings = self.settings.lock().await.clone();
         let machine = models::provision::Machine {
-            // Anything the Operator has settled counts as configured. A fresh
-            // install has acknowledged nothing and chosen nothing.
-            configured: settings.briefing_acknowledged || settings.summary_backend.is_some(),
+            // What the *Operator* has settled counts as configured, and only
+            // that. This used to also read `summary_backend.is_some()`, which
+            // looks like the same question and is not: `preselect_local_backend`
+            // writes that field on a fresh install, and it runs immediately
+            // before this — so every fresh install arrived here already looking
+            // configured, decided `AskFirst`, and downloaded nothing. The
+            // Briefing promises "the first ones start on their own"; they never
+            // did, for anyone. Two functions written to describe the same fresh
+            // install, ordered so the first destroys the evidence the second
+            // reads.
+            //
+            // The Briefing is the one thing only a person can do, so it is the
+            // whole test. `provisioning_survives_the_backend_preselect` in
+            // tests/model_download.rs runs them in the production order.
+            configured: settings.briefing_acknowledged,
             models_present: missing.is_empty(),
             free_bytes: models::free_space_bytes(&self.models_dir),
             needed_bytes: missing.iter().map(|entry| entry.integrity.size_bytes).sum(),
