@@ -1,6 +1,6 @@
 # An idle system-audio tap deadlocks the microphone, and the Meeting records nothing
 
-Status: needs-triage
+Status: resolved
 
 > **Corrected 2026-09-05, after the first write-up said the tap deadlocks the
 > microphone outright. It does not.** A CoreAudio process tap delivers no
@@ -15,6 +15,24 @@ Status: needs-triage
 >
 > So the trigger is **a Meeting that begins while nothing is playing**, which
 > is an ordinary way for one to begin.
+
+## Answer — fixed 2026-09-05 (`1222d04`)
+
+The microphone starts before the tap, and `start_microphone` no longer returns
+until CoreAudio has actually started it. Both halves were needed: reordering
+alone changed nothing, because the function used to return the moment its
+thread was spawned, so the real `play()` happened later and raced anyway. It
+now signals after `play()` returns, with a three-second timeout after which the
+leg is reported unavailable with a reason rather than hanging the Meeting.
+
+A microphone already delivering survives the tap being created — measured at
++145,408 samples across its creation, against a hang when the two race.
+
+Verified on the machine that produced this: silent, capture went from nothing
+to 3950–5860 ms on the microphone; with a tone playing, both legs report in
+full. The watchdog was adjusted in the same commit, because the fix made "the
+system leg delivered nothing" the ordinary state of a Meeting that opens
+quietly — the legs are now judged on their own terms.
 
 Found 2026-09-05 on the author's M-series Mac, macOS 26.6.2, after a working
 install on 2026-09-01. It is why every Meeting since has come out empty.

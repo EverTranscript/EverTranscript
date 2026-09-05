@@ -468,7 +468,14 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
                 println!("{name}  {ms} ms captured, peak level {:.3}", leg.peak)
             }
             AudioLegState::NotTested => {
-                println!("{name}  {ms} ms captured, but nothing was playing");
+                // "0 ms captured" is a confusing way to say a tap that
+                // correctly produced nothing, so the two cases read
+                // differently.
+                if ms == 0 {
+                    println!("{name}  nothing was playing, so this leg was not tested");
+                } else {
+                    println!("{name}  {ms} ms captured, but nothing was playing");
+                }
                 println!("              play some audio and run this again to check this leg");
             }
             AudioLegState::Silent => println!("{name}  {ms} ms captured, but all of it silent"),

@@ -113,16 +113,25 @@ fn leg_state(
     peak: f32,
     heard_playback: Option<bool>,
 ) -> AudioLegState {
-    if milliseconds == 0 {
-        return AudioLegState::NothingCaptured;
-    }
     if peak > 0.0 {
         return AudioLegState::Working;
     }
     // Nothing was played, so the system leg was never asked a question it
     // could answer. Only the system leg: a microphone has nothing to wait for.
+    //
+    // **Before the zero check, not after.** A CoreAudio process tap delivers
+    // no callbacks whatsoever while nothing is playing — not silence, nothing
+    // — so zero milliseconds from it is an unasked question and not a failure.
+    // Ordering this after the zero check made a healthy machine report
+    // "nothing captured … Meetings will record, and be marked partial", which
+    // sends the Operator to System Settings over a tap doing exactly what it
+    // should. The recorder's `judge_silent_leg` already drew this line; the
+    // two now agree.
     if channel == AudioChannel::System && heard_playback == Some(false) {
         return AudioLegState::NotTested;
+    }
+    if milliseconds == 0 {
+        return AudioLegState::NothingCaptured;
     }
     AudioLegState::Silent
 }
@@ -184,6 +193,29 @@ mod tests {
     fn a_leg_that_delivered_nothing_is_not_the_same_as_one_that_delivered_silence() {
         assert_eq!(
             leg_state(AudioChannel::Mic, 0, 0.0, None),
+            AudioLegState::NothingCaptured
+        );
+    }
+
+    #[test]
+    fn an_idle_tap_delivering_nothing_is_untested_rather_than_broken() {
+        // The tap produces no callbacks at all while nothing plays, so zero
+        // milliseconds from it says nothing about whether it works. Reporting
+        // that as a failure told a healthy machine its Meetings would be
+        // partial.
+        assert_eq!(
+            leg_state(AudioChannel::System, 0, 0.0, Some(false)),
+            AudioLegState::NotTested
+        );
+        // But with something playing, zero really is nothing captured.
+        assert_eq!(
+            leg_state(AudioChannel::System, 0, 0.0, Some(true)),
+            AudioLegState::NothingCaptured
+        );
+        // And a microphone that delivered nothing is broken whatever was
+        // playing: it should have produced frames of zeros.
+        assert_eq!(
+            leg_state(AudioChannel::Mic, 0, 0.0, Some(false)),
             AudioLegState::NothingCaptured
         );
     }
