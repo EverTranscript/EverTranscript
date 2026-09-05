@@ -891,19 +891,62 @@ impl Core {
             // Map. A chunk that fails is skipped rather than fatal: five parts
             // of six is a usable record of the meeting and none is not.
             // Cancellation is the Operator, not a bad chunk — it stops.
-            let mut parts = vec![summary::prompt::scrub(&first.text)];
+            //
+            // **A chunk that comes back injected counts as a chunk that
+            // failed.** `prompt::verify` refuses output that is not a summary
+            // of the piece it was given, which is measured to happen: the
+            // registered model obeys instructions written into a transcript.
+            // Treating it as a failure rather than a fatal error is the same
+            // judgement as above — one poisoned chunk should not cost the
+            // Operator the other five — and the count reaches the record
+            // through `gaps`, so the loss is visible rather than silent.
+            fn kept(text: &str, piece: &str) -> Option<String> {
+                let part = summary::prompt::scrub(text);
+                match summary::prompt::verify(&part, piece) {
+                    Ok(()) => Some(part),
+                    Err(why) => {
+                        tracing::warn!(
+                            %why,
+                            "a Summary was refused: it is not a summary of this meeting"
+                        );
+                        None
+                    }
+                }
+            }
+
+            let mut parts = Vec::with_capacity(chunks.len());
             let mut failed = 0usize;
+            match kept(&first.text, &chunks[0]) {
+                Some(part) => parts.push(part),
+                None => failed += 1,
+            }
             for piece in &chunks[1..] {
                 if cancel.is_cancelled() {
                     anyhow::bail!("{}", summary::BackendError::Cancelled);
                 }
                 match winner.generate(&request_for(piece), &cancel) {
-                    Ok(text) => parts.push(summary::prompt::scrub(&text)),
+                    Ok(text) => match kept(&text, piece) {
+                        Some(part) => parts.push(part),
+                        None => failed += 1,
+                    },
                     Err(summary::BackendError::Cancelled) => {
                         anyhow::bail!("{}", summary::BackendError::Cancelled)
                     }
                     Err(_) => failed += 1,
                 }
+            }
+
+            // Nothing survived. A Meeting with no Summary is a gap the
+            // Operator can fill by regenerating; a Meeting whose Summary is
+            // whatever the transcript told the model to write is a false
+            // record, and ADR-0009 will not let them edit it out.
+            if parts.is_empty() {
+                anyhow::bail!(
+                    "{}",
+                    summary::BackendError::Malformed(
+                        "the Backend returned nothing that was a summary of this meeting".into()
+                    )
+                );
             }
 
             let text = if chunks.len() == 1 {
@@ -922,7 +965,21 @@ impl Core {
                      Combine them into a single summary in the same format.\n\n{combined}"
                 ));
                 match winner.generate(&reduce, &cancel) {
-                    Ok(text) => summary::prompt::scrub(&text),
+                    // Checked against the whole transcript rather than the
+                    // partial summaries it was handed, because that is what
+                    // its action items are claims about.
+                    Ok(text) => {
+                        let reduced = summary::prompt::scrub(&text);
+                        match summary::prompt::verify(&reduced, &transcript) {
+                            Ok(()) => reduced,
+                            // The parts are already verified, so falling back
+                            // to them loses polish rather than truth.
+                            Err(why) => {
+                                tracing::warn!(%why, "the reduce pass was refused");
+                                combined
+                            }
+                        }
+                    }
                     Err(summary::BackendError::Cancelled) => {
                         anyhow::bail!("{}", summary::BackendError::Cancelled)
                     }
