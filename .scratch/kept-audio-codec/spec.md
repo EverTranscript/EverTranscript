@@ -115,7 +115,7 @@ The sidecar, `packaging/build.sh`'s staging step, the fourth signed binary, the 
 
 ### Still open
 
-1. **Bitrate**, per the note above.
+1. ~~**Bitrate**~~ — **settled 2026-09-05: 128 kbps**, 64 per channel, 58 MB/hr. A listening check could still move it; nothing is blocked on one.
 2. **Disk exhaustion mid-Meeting.** Much smaller now, but not zero — a silent recorder still grows a file nobody is watching. Neither competitor guards this at all (anarlog propagates the write error and fails its recorder actor; Meetily has nothing), and this product already has the parts: `models::free_space_bytes()` and the `checked_add(HEADROOM)` pattern at `provision.rs:76`. The behaviour that matches ADR-0019 is to stop writing audio, keep transcribing, and put the reason in `audio_notes` — which is what the sink already does when its encoder will not start.
 3. **Migration.** Existing `.m4a` Meetings must keep playing: symphonia keeps `aac` + `isomp4` and gains `mp3`. New Meetings write `.mp3`; `meetings.audio_path` already carries the extension, so nothing else needs to know which era a Meeting belongs to. Nothing is re-encoded, and a mixed History is the steady state.
 

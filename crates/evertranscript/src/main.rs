@@ -436,6 +436,13 @@ async fn run_audio_check(seconds: u64) -> Result<()> {
     use evertranscript_protocol::AudioCheckVerdict;
     use evertranscript_protocol::AudioLegState;
 
+    // This is the one command whose entire job is explaining capture, and it
+    // ran without a subscriber — `init_tracing` was called only by `daemon`,
+    // so every line the capture path emits, including "recording without a
+    // microphone" and the reason attached to it, went nowhere. A diagnostic
+    // that discards the diagnosis is worse than none: it looks like the
+    // absence of a problem.
+    init_tracing();
     println!("Listening for {seconds}s. Play some audio — a meeting, a video, anything.\n");
     // In-process on purpose: this subcommand is documented to run without the
     // Core, so it works before anything is installed. The Client asks the
