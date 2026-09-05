@@ -58,6 +58,23 @@ pub const BITRATE: Bitrate = Bitrate::Kbps128;
 /// decoding it.
 pub const BYTES_PER_SECOND: u64 = 128_000 / 8;
 
+/// Free space below which a recording stops keeping audio.
+///
+/// Not zero, and that is the point: a disk filled to 100% takes the machine
+/// down with it, not just this recording — the model downloader leaves 2 GiB
+/// of headroom for the same reason, having already cost this project a day's
+/// build cache. A Meeting is worth less than the Operator's computer.
+///
+/// At 58 MB/hr a recording needs seventeen hours to eat a gigabyte, so this
+/// stops a runaway rather than an ordinary meeting.
+const FREE_SPACE_FLOOR: u64 = 1024 * 1024 * 1024;
+
+/// How much audio to write between free-space checks.
+///
+/// `statvfs` per block, forty times a second, would be a syscall storm for a
+/// number that moves slowly.
+const SPACE_CHECK_SECONDS: f64 = 30.0;
+
 /// What a Meeting's audio file is called under the audio directory.
 pub fn audio_path(audio_dir: &Path, meeting_key: &str) -> PathBuf {
     audio_dir.join(format!("{meeting_key}.mp3"))
@@ -95,6 +112,19 @@ pub struct AudioSink {
     /// Reused across blocks so a recording does not allocate a fresh output
     /// buffer forty times a second.
     encoded: Vec<u8>,
+    /// Where to ask about free space, and when to ask next. `None` for a sink
+    /// that is not writing to a real directory, which is how tests stand one
+    /// up.
+    space: Option<SpaceWatch>,
+}
+
+struct SpaceWatch {
+    directory: PathBuf,
+    next_check_seconds: f64,
+    /// Injected so a test can force the condition. Every real disk on every
+    /// developer machine has room, so a guard whose floor is a constant is a
+    /// guard whose failing branch is never run.
+    floor_bytes: u64,
 }
 
 impl AudioSink {
@@ -105,10 +135,13 @@ impl AudioSink {
         let path = audio_path(audio_dir, meeting_key);
         let file = std::fs::File::create(&path)
             .with_context(|| format!("creating {}", path.display()))?;
-        Ok(Self::with_writer(
-            path,
-            Box::new(std::io::BufWriter::new(file)),
-        ))
+        let mut sink = Self::with_writer(path, Box::new(std::io::BufWriter::new(file)));
+        sink.space = Some(SpaceWatch {
+            directory: audio_dir.to_path_buf(),
+            next_check_seconds: SPACE_CHECK_SECONDS,
+            floor_bytes: FREE_SPACE_FLOOR,
+        });
+        Ok(sink)
     }
 
     /// A sink writing somewhere other than a file. Tests use this to stand up
@@ -122,6 +155,7 @@ impl AudioSink {
             total_samples: 0,
             disabled: None,
             encoded: Vec::new(),
+            space: None,
         }
     }
 
@@ -187,7 +221,38 @@ impl AudioSink {
             .map_err(|error| anyhow::anyhow!("encoding: {error:?}"))?;
         out.write_all(&self.encoded).context("writing audio")?;
         self.total_samples += block.samples.len();
+        self.check_free_space()?;
         Ok(())
+    }
+
+    /// Stops keeping audio before the disk is full rather than when it is.
+    ///
+    /// A silent recorder that nobody is watching is exactly the shape that
+    /// fills a disk — Auto-Record is silent by design (ADR-0023), and one
+    /// Meeting on this machine ran for 69 hours before anyone noticed. ADR-0019
+    /// settles what to do about it: the record is the transcript and audio is
+    /// the bonus, so the audio stops, the transcript continues, and the reason
+    /// goes into the Meeting.
+    fn check_free_space(&mut self) -> Result<()> {
+        let seconds = self.seconds_written();
+        let Some(watch) = self.space.as_mut() else {
+            return Ok(());
+        };
+        if seconds < watch.next_check_seconds {
+            return Ok(());
+        }
+        watch.next_check_seconds = seconds + SPACE_CHECK_SECONDS;
+        let floor = watch.floor_bytes;
+        let free = crate::models::free_space_bytes(&watch.directory);
+        if free >= floor {
+            return Ok(());
+        }
+        anyhow::bail!(
+            "stopped to leave the disk usable — {} MB free, below the {} MB this \
+             keeps in reserve",
+            free / 1_048_576,
+            floor / 1_048_576
+        )
     }
 
     /// Flushes the encoder's tail and closes the file.
@@ -452,6 +517,55 @@ mod tests {
         sink.write(&block(0.3, -0.3, 4800))
             .await
             .expect("further writes are no-ops");
+    }
+
+    #[tokio::test]
+    async fn a_disk_with_no_room_left_stops_the_audio_and_says_so() {
+        // ADR-0019 decides this: the record is the transcript and audio is the
+        // bonus, so a disk running out costs the audio and not the Meeting.
+        // And it stops *before* the disk is full rather than when it is — a
+        // disk at 100% takes the whole machine down, and a Meeting is worth
+        // less than the Operator's computer.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sink = AudioSink::new(dir.path(), "nospace1").expect("sink");
+        // No disk is this large, so the guard must decide there is no room.
+        sink.space = Some(SpaceWatch {
+            directory: dir.path().to_path_buf(),
+            next_check_seconds: 0.0,
+            floor_bytes: u64::MAX,
+        });
+
+        sink.write(&block(0.3, -0.3, 4800))
+            .await
+            .expect("a full disk must not fail the Meeting");
+
+        assert!(sink.is_disabled(), "the audio must stop");
+        let reason = sink.disabled_reason().expect("with a reason");
+        assert!(
+            reason.contains("free") && reason.contains("reserve"),
+            "the Meeting must say why it has no audio, got {reason:?}"
+        );
+
+        // And it stays stopped rather than retrying into a full disk.
+        sink.write(&block(0.3, -0.3, 4800))
+            .await
+            .expect("further writes are no-ops");
+    }
+
+    #[tokio::test]
+    async fn a_disk_with_room_is_left_alone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sink = AudioSink::new(dir.path(), "hasroom1").expect("sink");
+        sink.space = Some(SpaceWatch {
+            directory: dir.path().to_path_buf(),
+            next_check_seconds: 0.0,
+            floor_bytes: 1,
+        });
+        for _ in 0..10 {
+            sink.write(&block(0.3, -0.3, 4800)).await.expect("write");
+        }
+        assert!(!sink.is_disabled(), "{:?}", sink.disabled_reason());
+        assert!(sink.seconds_written() > 0.4);
     }
 
     #[test]
