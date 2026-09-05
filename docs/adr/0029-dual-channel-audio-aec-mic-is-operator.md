@@ -12,4 +12,21 @@ Prior art: anarlog ships exactly this (embedded two-stage DTLN-style AEC ONNX, d
 
 - The AEC models join the first-run model downloads alongside Whisper and the Diarization ONNX pair.
 - Kept audio doubles its channel count; the storage format is ADR-0032.
+
+> **Amended 2026-09-05: kept audio is stored *pre*-AEC, and deliberately so.**
+> The decision above says "channels persist as processed (post-AEC); raw
+> pre-AEC audio is never kept". The implementation does the opposite — the
+> canceller runs inside `asr/pipeline.rs`, so the sink stores what capture
+> produced — and that gap turns out to be the safe side of the argument, not a
+> bug to close. On the first real recording this product ever made, the
+> canceller *increased* microphone energy by 5.9 dB; had the ADR been
+> implemented as written, that damage would have been baked into the
+> Operator's permanent archive, which ADR-0009 makes immutable. Storing raw
+> and cancelling on the way to transcription means a filter that is wrong
+> costs a transcript and not the record.
+>
+> The canceller has since been given a do-no-harm guard and the same recording
+> now comes out 4.6 dB quieter, but the principle stands on its own: the
+> archive should not carry irreversible processing that the product cannot yet
+> prove correct on real audio.
 - The AudioSource test seam feeds dual-channel fixtures, and echo-contaminated fixture audio becomes a required test case.

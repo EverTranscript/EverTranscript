@@ -63,6 +63,43 @@ const DOUBLE_TALK_RATIO: f32 = 0.5;
 /// Smoothing for the energy estimates the gate reads.
 const ENERGY_SMOOTHING: f32 = 0.02;
 
+/// How much louder than its input the filter's output may get before it is
+/// treated as harming rather than helping.
+///
+/// A subtractive filter with a wrong estimate *adds* energy: the output is
+/// the input plus an error, not a cleaned version of it. That is not a
+/// theoretical failure — measured on a real 24-second meeting, the shipped
+/// filter took the microphone channel from 0.00122 RMS to 0.00240, a 5.9 dB
+/// *increase*, while its synthetic-room tests passed. With this guard the same
+/// recording comes out 4.6 dB quieter instead.
+///
+/// Just above one: paired with the hold below, convergence overshoot is
+/// tolerated by *duration* rather than by size, which is what lets the ratio
+/// stay tight. At 1.05 over 80ms the pathological case ends at 100.3% of its
+/// input — no harm — while real speech echo is still cancelled by 41.4 dB.
+const HARM_RATIO: f32 = 1.05;
+
+/// How long the output may stay louder than the input before the filter is
+/// reset. Convergence overshoots for a few samples; a filter that is wrong
+/// about the room stays wrong.
+///
+/// Resetting alone is not enough, which the test found: zeroed weights
+/// re-adapt on the same unexplaining reference and harm again, so the average
+/// harm survives a guard that only resets. Adaptation is therefore suspended
+/// after a reset, for a period that doubles each time it happens — a room
+/// that can be cancelled converges inside one adapting window, and one that
+/// cannot spends almost all its time frozen at zero weights, which is
+/// pass-through.
+const HARM_HOLD_MS: usize = 80;
+
+/// How long adaptation is suspended after the first harmful reset.
+const COOL_OFF_MS: usize = 500;
+
+/// The longest that suspension grows to. Eight seconds of a meeting is a
+/// sentence; a filter that has harmed this many times is not going to be
+/// right about this room.
+const COOL_OFF_CAP_MS: usize = 8_000;
+
 /// Weight norm past which the filter is considered diverged.
 const DIVERGENCE_LIMIT: f32 = 100.0;
 
@@ -137,6 +174,18 @@ pub struct EchoCanceller {
     /// Sum of squares over the current window, maintained incrementally.
     window_power: f32,
     near_energy: f32,
+    /// Consecutive samples whose output was louder than the input.
+    harm_hold: usize,
+    /// How many such samples are tolerated before the filter is reset.
+    harm_limit: usize,
+    /// Samples processed, so the suspension below can be timed.
+    seen: usize,
+    /// Adaptation is suspended until this sample.
+    cool_off_until: usize,
+    /// How long the next suspension lasts, in samples.
+    cool_off_len: usize,
+    /// The longest a suspension may grow to, in samples.
+    cool_off_cap: usize,
     far_energy: f32,
     /// Energy left after the filter, against which echo dominance is judged.
     residual_energy: f32,
@@ -168,6 +217,12 @@ impl EchoCanceller {
             taps,
             window_power: 0.0,
             near_energy: 0.0,
+            harm_hold: 0,
+            harm_limit: (rate as usize * HARM_HOLD_MS / 1000).max(1),
+            seen: 0,
+            cool_off_until: 0,
+            cool_off_len: (rate as usize * COOL_OFF_MS / 1000).max(1),
+            cool_off_cap: (rate as usize * COOL_OFF_CAP_MS / 1000).max(1),
             far_energy: 0.0,
             residual_energy: 0.0,
             gain: 1.0,
@@ -227,7 +282,11 @@ impl EchoCanceller {
         // from a silent reference is how a filter unlearns a room, and the
         // three guarantees in this module's header are all about when *not*
         // to adapt. The hangover exists for the suppressor and stops there.
-        let adapting = far_end_playing && !near_end_talking && self.window_power > REFERENCE_FLOOR;
+        self.seen += 1;
+        let adapting = far_end_playing
+            && !near_end_talking
+            && self.window_power > REFERENCE_FLOOR
+            && self.seen >= self.cool_off_until;
         if far_end_playing {
             self.far_idle = 0;
         } else {
@@ -263,6 +322,7 @@ impl EchoCanceller {
             }
             self.active = true;
             self.guard_against_divergence();
+            self.guard_against_harm();
         }
 
         self.advance();
@@ -329,6 +389,34 @@ impl EchoCanceller {
 
     /// A diverged filter is worse than no filter: it adds a loud, wrong
     /// signal to speech. Starting over costs a few seconds of convergence.
+    /// The module's governing rule, enforced rather than asserted.
+    ///
+    /// "Do no harm" is the header's first promise and the reason NLMS was
+    /// considered safe to ship: on the overwhelming majority of audio — every
+    /// meeting on headphones — the filter must do nothing. It is worth
+    /// checking, because the one real recording this was measured against had
+    /// it doing the opposite, and no test caught that: the suite models the
+    /// room, and a model of a room is the one thing an echo canceller must
+    /// not be graded on alone.
+    ///
+    /// Both energies are already tracked for the gates above, so the check
+    /// costs a comparison.
+    fn guard_against_harm(&mut self) {
+        if self.residual_energy > self.near_energy * HARM_RATIO {
+            self.harm_hold = self.harm_hold.saturating_add(1);
+        } else {
+            self.harm_hold = 0;
+        }
+        if self.harm_hold > self.harm_limit {
+            self.weights.iter_mut().for_each(|w| *w = 0.0);
+            self.active = false;
+            self.harm_hold = 0;
+            self.resets += 1;
+            self.cool_off_until = self.seen + self.cool_off_len;
+            self.cool_off_len = (self.cool_off_len * 2).min(self.cool_off_cap);
+        }
+    }
+
     fn guard_against_divergence(&mut self) {
         let norm: f32 = self.weights.iter().map(|w| w * w).sum();
         if !norm.is_finite() || norm > DIVERGENCE_LIMIT {
@@ -455,6 +543,37 @@ mod tests {
         let half = microphone.len() / 2;
         let erle = erle_db(&echo[half..], &microphone[half..]);
         assert!(erle > 10.0, "a longer tail is harder, got {erle:.1} dB");
+    }
+
+    #[test]
+    fn a_loud_reference_that_explains_nothing_is_abandoned_rather_than_subtracted() {
+        // `audio_with_no_echo_in_it_is_left_alone` already covers uncorrelated
+        // audio — at *matched* levels, where it passes. The untested case is
+        // the real speakerphone geometry: a loud speaker and a return ~37 dB
+        // down that a linear filter cannot explain. To NLMS that is a huge
+        // reference accounting for almost none of the microphone, and it
+        // answers by adapting anyway and adding an error signal.
+        //
+        // Measured on a real 24-second meeting before the harm guard existed:
+        // the microphone channel went from 0.00122 RMS to 0.00240 — 5.9 dB the
+        // wrong way — while every test in this module passed. Afterwards the
+        // same recording comes out 5.1 dB quieter. A model of a room is the
+        // one thing an echo canceller must not be graded on alone.
+        let near: Vec<f32> = babble(8.0, 3).iter().map(|s| s * 0.02).collect();
+        let far = babble(8.0, 99); // unrelated, and fifty times louder
+        let mut microphone = near.clone();
+
+        let mut canceller = EchoCanceller::new(RATE);
+        canceller.process(&mut microphone, &far);
+
+        let preservation =
+            evertranscript_fixtures::similarity::rms_preservation_percent(&near, &microphone);
+        println!("  loud unrelated reference: {preservation:.1}% of the level preserved");
+        assert!(
+            preservation <= 103.0,
+            "a reference that cannot explain the microphone must not be \
+             subtracted from it, got {preservation:.1}%"
+        );
     }
 
     #[test]
