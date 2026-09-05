@@ -51,7 +51,11 @@ impl DecodedMeeting {
     }
 }
 
-/// Reads a Meeting's stereo AAC back into two mono channels at 16 kHz.
+/// Reads a Meeting's kept stereo audio back into two mono channels at 16 kHz.
+///
+/// The format follows the era it was recorded in — MP3 since ADR-0032's
+/// 2026-09-05 reversal, AAC before it — and both keep playing forever
+/// (ADR-0009), which is why the probe hint follows the file.
 ///
 /// **Left is mic, right is system** — the convention `audio::sink` writes and
 /// the one thing here that would be catastrophic to get backwards: swapping
