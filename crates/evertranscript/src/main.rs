@@ -359,9 +359,11 @@ fn run_daemon_owning_the_main_thread(runtime: tokio::runtime::Runtime) -> Result
             if let Err(error) = core.preselect_local_backend().await {
                 tracing::warn!(%error, "could not record the preselected Backend");
             }
-            if let Err(error) = core.provision_if_fresh(cancel).await {
-                tracing::warn!(%error, "provisioning did not complete; models can be fetched later");
-            }
+            // Until they are all here, or shutdown. A single attempt at
+            // startup left an install that was offline at the wrong moment
+            // permanently without the models it needs, on a machine that may
+            // never be relaunched.
+            core.provision_until_complete(cancel).await;
         });
     }
 

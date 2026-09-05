@@ -90,8 +90,9 @@ transcript, not the voice profiles — unless you explicitly choose a cloud \
 service for summaries, and then it is the text of those meetings that goes. \
 That is a promise about your meetings, not about the network. Separately, this \
 app makes three kinds of call: an update check you can switch off, the model \
-downloads it needs to work — the first ones start on their own, the rest when \
-you ask — and that cloud summary service if you chose one. Nothing else.
+downloads it needs to work — these start on their own, whenever something it \
+needs is missing — and that cloud summary service if you chose one. Nothing \
+else.
 
 The source is open. You can check all of this rather than believe it.";
 
@@ -144,7 +145,7 @@ EverTranscript 不会替你征求任何人的同意，不会在会议中自报�
 
 它不会索引你的文件、不会读取通讯录、不会查看屏幕内容。只有在你授权后它才会读取日历，\
 且只读取本机上已有的日历，绝不访问云端日历账户。它唯一会通过网络发送的内容是：\
-一个你可以关闭的更新检查、由你触发的模型下载，以及——当你明确选择云端摘要服务时——\
+一个你可以关闭的更新检查、在缺少所需模型时自动开始的模型下载，以及——当你明确选择云端摘要服务时——\
 那些会议的文本。
 
 源代码是公开的。以上每一条你都可以自行核实，而不必选择相信。";

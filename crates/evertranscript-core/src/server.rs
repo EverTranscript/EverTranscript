@@ -1920,7 +1920,7 @@ impl Core {
         Ok(())
     }
 
-    pub async fn provision_if_fresh(
+    pub async fn provision_missing_models(
         &self,
         cancel: CancellationToken,
     ) -> Result<models::provision::Provision> {
@@ -1936,23 +1936,7 @@ impl Core {
             })
             .collect();
 
-        let settings = self.settings.lock().await.clone();
         let machine = models::provision::Machine {
-            // What the *Operator* has settled counts as configured, and only
-            // that. This used to also read `summary_backend.is_some()`, which
-            // looks like the same question and is not: `preselect_local_backend`
-            // writes that field on a fresh install, and it runs immediately
-            // before this — so every fresh install arrived here already looking
-            // configured, decided `AskFirst`, and downloaded nothing. The
-            // Briefing promises "the first ones start on their own"; they never
-            // did, for anyone. Two functions written to describe the same fresh
-            // install, ordered so the first destroys the evidence the second
-            // reads.
-            //
-            // The Briefing is the one thing only a person can do, so it is the
-            // whole test. `provisioning_survives_the_backend_preselect` in
-            // tests/model_download.rs runs them in the production order.
-            configured: settings.briefing_acknowledged,
             models_present: missing.is_empty(),
             free_bytes: models::free_space_bytes(&self.models_dir),
             needed_bytes: missing.iter().map(|entry| entry.integrity.size_bytes).sum(),
@@ -1968,7 +1952,7 @@ impl Core {
                 info!(
                     megabytes = total / 1_048_576,
                     models = missing.len(),
-                    "provisioning a fresh install"
+                    "fetching the models this install is missing"
                 );
                 self.fetch_models(None, cancel).await?;
             }
@@ -1982,12 +1966,53 @@ impl Core {
                     "not provisioning: there is not enough room"
                 );
             }
-            models::provision::Provision::AskFirst => {
-                info!("not provisioning: this install is already configured");
-            }
             models::provision::Provision::NothingMissing => {}
         }
         Ok(decision)
+    }
+
+    /// Keeps trying until every required model is present, or shutdown.
+    ///
+    /// One attempt is not enough for a promise that the product will work:
+    /// the first start after an install is exactly when a laptop is most
+    /// likely to be on a hotel network, asleep, or tethered, and a fetch that
+    /// failed there used to wait for the next launch — which on a machine that
+    /// stays logged in is never. Downloads resume rather than restart, so a
+    /// retry costs only what the last one did not finish.
+    ///
+    /// Backs off to half an hour. A missing model is not urgent enough to
+    /// retry hard, and a machine that is offline for a day should not spend it
+    /// asking.
+    pub async fn provision_until_complete(&self, cancel: CancellationToken) {
+        const FIRST: std::time::Duration = std::time::Duration::from_secs(60);
+        const LONGEST: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+        if models::provision::fetching_disabled() {
+            info!(
+                "not fetching models: {} is set",
+                models::provision::DISABLE_ENV
+            );
+            return;
+        }
+
+        let mut wait = FIRST;
+        loop {
+            match self.provision_missing_models(cancel.clone()).await {
+                Ok(models::provision::Provision::NothingMissing) => return,
+                Ok(other) => debug!(?other, "models are still missing; will look again"),
+                Err(error) => {
+                    warn!(%error, "fetching models did not finish; will try again")
+                }
+            }
+            if cancel.is_cancelled() {
+                return;
+            }
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = tokio::time::sleep(wait) => {}
+            }
+            wait = (wait * 2).min(LONGEST);
+        }
     }
 
     /// Downloads what is missing. A corrupted file is removed first so the

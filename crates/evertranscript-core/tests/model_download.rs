@@ -349,7 +349,7 @@ async fn a_core_provisions_only_when_it_is_asked_to() {
     );
 
     // **In the production order.** `main.rs` calls `preselect_local_backend()`
-    // two lines before `provision_if_fresh()`, and the freshness test used to
+    // two lines before `provision_missing_models()`, and the freshness test used to
     // read `summary_backend.is_some()` — which the preselect had just written.
     // So every fresh install decided `AskFirst` and downloaded nothing, while
     // the Briefing promised "the first ones start on their own". Asserting on
@@ -371,7 +371,7 @@ async fn a_core_provisions_only_when_it_is_asked_to() {
     // with models missing must reach a decision *about* them, never conclude
     // there is nothing to do.
     let decision = core
-        .provision_if_fresh(CancellationToken::new())
+        .provision_missing_models(CancellationToken::new())
         .await
         .map(|decision| format!("{decision:?}"))
         .unwrap_or_else(|error| format!("attempted and failed: {error}"));

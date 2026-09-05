@@ -22,10 +22,6 @@
 /// What a machine looks like when the question is asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Machine {
-    /// Whether this install has ever been set up — the Briefing acknowledged,
-    /// a Backend chosen, anything at all written. False means a fresh
-    /// install; true means an upgrade or a returning Operator.
-    pub configured: bool,
     /// Whether every provisioned model is already present.
     pub models_present: bool,
     /// Free bytes where the models would land.
@@ -37,18 +33,32 @@ pub struct Machine {
 /// What to do about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provision {
-    /// Fetch, unasked. Only ever on a fresh install.
+    /// Fetch, unasked. Whenever anything required is missing.
     Fetch,
     /// Everything needed is already here.
     NothingMissing,
-    /// Missing, but this install is not fresh — an upgrade that introduces a
-    /// new model asks rather than helping itself. A fresh install consented to
-    /// setting the product up; an upgrade consented to a newer version of what
-    /// it already had, which is a smaller thing.
-    AskFirst,
     /// Missing, and there is not room. Said before starting rather than
     /// discovered at ninety percent, with the numbers so the Operator can act.
     NotEnoughSpace { free_bytes: u64, needed_bytes: u64 },
+}
+
+/// Set this to stop the Core fetching models it is missing.
+///
+/// Since 2026-09-05 a daemon start fetches whatever is missing, on any
+/// install, and retries until it arrives. That is right for a product and
+/// wrong for a test harness: the guarantee suite starts the Core dozens of
+/// times against the real models directory, and without this the first run
+/// began pulling gigabytes from the real mirror — into a real Operator's
+/// application-support folder, and in CI on every push. Found exactly that
+/// way, 47 MB in.
+///
+/// Not a supported way to run the product. A Core that will not fetch cannot
+/// transcribe, and nothing in the UI would say why.
+pub const DISABLE_ENV: &str = "EVERTRANSCRIPT_NO_MODEL_FETCH";
+
+/// Whether fetching has been switched off for this process.
+pub fn fetching_disabled() -> bool {
+    std::env::var_os(DISABLE_ENV).is_some_and(|value| !value.is_empty())
 }
 
 /// Headroom to leave beyond the download itself.
@@ -60,12 +70,19 @@ pub enum Provision {
 const HEADROOM: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Whether to fetch what is missing without being asked.
+///
+/// **Any missing required model is fetched, on every start, however old the
+/// install is.** This used to hold back on anything already configured, on the
+/// reasoning that a fresh install consented to being set up while an upgrade
+/// consented only to a newer version of what it already had. That is a real
+/// distinction and it cost more than it bought: a product that cannot
+/// transcribe is not a smaller version of itself, it is inert, and the
+/// Operator who upgrades into that state has no way to tell why. The download
+/// is Sanctioned Traffic either way (ADR-0034), pinned by checksum, and the
+/// Briefing says it happens.
 pub fn decide(machine: Machine) -> Provision {
     if machine.models_present {
         return Provision::NothingMissing;
-    }
-    if machine.configured {
-        return Provision::AskFirst;
     }
     // **Checked, not saturating.** A saturating add pins the requirement at
     // the maximum and then compares equal to it, so a need that cannot be
@@ -90,9 +107,8 @@ mod tests {
 
     const GIB: u64 = 1024 * 1024 * 1024;
 
-    fn fresh() -> Machine {
+    fn missing() -> Machine {
         Machine {
-            configured: false,
             models_present: false,
             free_bytes: 100 * GIB,
             needed_bytes: 4 * GIB,
@@ -100,35 +116,35 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_install_with_room_fetches() {
-        assert_eq!(decide(fresh()), Provision::Fetch);
+    fn anything_missing_with_room_is_fetched() {
+        assert_eq!(decide(missing()), Provision::Fetch);
     }
 
     #[test]
-    fn a_configured_install_asks_instead_of_helping_itself() {
-        // The upgrade case. Someone who installed a newer version of what they
-        // had did not ask for a multi-gigabyte download to begin by itself.
-        let machine = Machine {
-            configured: true,
-            ..fresh()
-        };
-        assert_eq!(decide(machine), Provision::AskFirst);
+    fn an_install_that_has_been_running_for_years_still_fetches() {
+        // This used to be the upgrade case, and used to hold back: someone who
+        // installed a newer version of what they had did not ask for a
+        // multi-gigabyte download to begin by itself. It cost more than it
+        // bought. An install missing a required model cannot transcribe, and
+        // holding back leaves it inert with nothing to say why — so age is no
+        // longer part of the question, and the only thing that is, is whether
+        // anything is missing.
+        assert_eq!(decide(missing()), Provision::Fetch);
     }
 
     #[test]
     fn nothing_is_fetched_when_nothing_is_missing() {
         let machine = Machine {
             models_present: true,
-            ..fresh()
+            ..missing()
         };
         assert_eq!(decide(machine), Provision::NothingMissing);
-        // And that holds however the rest of the machine looks — a configured
-        // install with everything present is not an upgrade to ask about.
+        // And that holds however the rest of the machine looks: nothing to
+        // fetch outranks having no room to fetch it into.
         let machine = Machine {
             models_present: true,
-            configured: true,
             free_bytes: 0,
-            ..fresh()
+            ..missing()
         };
         assert_eq!(decide(machine), Provision::NothingMissing);
     }
@@ -138,7 +154,7 @@ mod tests {
         let machine = Machine {
             free_bytes: 3 * GIB,
             needed_bytes: 4 * GIB,
-            ..fresh()
+            ..missing()
         };
         assert_eq!(
             decide(machine),
@@ -156,7 +172,7 @@ mod tests {
         let machine = Machine {
             free_bytes: 4 * GIB + 1,
             needed_bytes: 4 * GIB,
-            ..fresh()
+            ..missing()
         };
         assert!(matches!(decide(machine), Provision::NotEnoughSpace { .. }));
     }
@@ -168,7 +184,7 @@ mod tests {
         let machine = Machine {
             free_bytes: u64::MAX,
             needed_bytes: u64::MAX,
-            ..fresh()
+            ..missing()
         };
         assert!(matches!(decide(machine), Provision::NotEnoughSpace { .. }));
     }
@@ -179,6 +195,6 @@ mod tests {
         // exists to express. `decide` answers a question; it cannot start a
         // download, so a Core nobody asks provisions nothing, which is what
         // keeps the guarantee tests meaningful.
-        let _ = decide(fresh());
+        let _ = decide(missing());
     }
 }
