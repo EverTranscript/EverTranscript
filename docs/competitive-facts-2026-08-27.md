@@ -23,4 +23,14 @@ Per-product notables:
 
 Corrections vs 2026-07-09: **anarlog is no longer "thin"** — it ships cross-meeting voiceprints, channel attribution, notes/summaries, a CLI, and an MCP server (though its *local* multi-speaker clustering is a stub; that remains cloud-side, per the 2026-08-27 deep-mine). Our verified differentiators, post-sweep: the **Closed Boundary** (all three ship cloud paths for meeting content), **silent Auto-Record** (anarlog prompts per meeting; Granola leans on calendar + cloud; Meetily CE has none), the **always-on Rust Core daemon + query CLI** (nobody runs a daemon; Granola pays full-Electron-at-login instead), and **working Windows detection** (anarlog's is a stub). Detection-with-local-only-storage remains uncontested.
 
+## Correction, 2026-09-05 — audio timing
+
+`audio/mod.rs` justified absolute capture timestamps partly by asserting that both open-source competitors "omit this and ship an audio-vs-transcript drift that grows with every dropout". The second half does not survive checking: **anarlog works the drift problem, from the other end.** It carries an `audio-sync` crate — `drift.rs` (`LagTrendTracker`, `DriftTrendSnapshot`), `estimator.rs`, `level.rs`, `probe.rs` — that tracks and estimates lag rather than preventing it by stamping frames on a shared capture clock. Two designs with different failure modes, not a presence and an absence.
+
+What still stands, and is the actual argument for our design: a gap must be *explicit* rather than silently shortening the file. Estimation corrects after the fact and degrades with each dropout; a shared monotonic clock makes the gap a fact in the timeline. That claim is about us and needs no competitor to hold.
+
+The claim has been removed from `audio/mod.rs`, which points here instead — a competitive assertion in a code comment cannot be re-verified and rots without saying so. **This is the second under-read of anarlog** (see the "no longer thin" correction above); assume the same of any competitor claim older than a sweep.
+
+Also mined 2026-09-05, not yet acted on: anarlog ships **no ffmpeg** — `hound` (WAV), `vorbis_rs` (Ogg Vorbis), `mp3lame-encoder`, in-process; its `audio-device` crate is device *enumeration* over `cidre::core_audio` (not ScreenCaptureKit), and capture proper lives in `audio-actual`. Its `audio-norm/encode.rs` and `audio-utils/vorbis.rs` are prior art for the codec question reopened in ADR-0032. None of its eleven audio crates are published to crates.io — they are workspace-internal path members, so they are prior art to read, never a dependency (`.scratch/kept-audio-codec/spec.md`).
+
 Adopted implications live in ADR-0027–0032.

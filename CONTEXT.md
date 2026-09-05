@@ -33,6 +33,18 @@ _Avoid_: call, session
 **Transcript**:
 The timestamped text record of a Meeting produced by live transcription.
 
+**Channel**:
+Which half of a Meeting a sound belongs to — the microphone, which is the Operator (ADR-0029), or the system audio, which is everyone else. It labels Transcript segments and the two sides of Kept Audio (left = microphone, right = system). A fact about recorded sound, and it outlives the recording that produced it.
+_Avoid_: track, side
+
+**Leg**:
+The running capture of one Channel. Legs start, fail, restart and end independently: the system leg going away must never stop the microphone, and neither may stop the Meeting. A Meeting recorded with one Leg is kept and marked partial — with the reason, in the record — rather than looking like a Meeting nobody spoke in.
+_Avoid_: stream, input (a Leg is a capture in progress; the Channel is what it captures, and only the Channel survives into the record)
+
+**Kept Audio**:
+The audio kept beside a Meeting's Transcript in History (ADR-0019). The Transcript is the record; Kept Audio is the bonus — a Meeting whose audio was lost is degraded and says so, never failed.
+_Avoid_: recording (a Meeting is the recording; this is its sound)
+
 **Diarization**:
 Post-meeting attribution of Transcript segments to Speakers. It is never live.
 
