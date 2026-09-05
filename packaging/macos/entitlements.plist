@@ -20,6 +20,15 @@
     <key>com.apple.security.device.audio-input</key>
     <true/>
 
+    <!-- V8 writes the machine code it runs. Under the hardened runtime that
+         is refused without this, and the refusal is not a degraded feature:
+         the process dies before any of our code runs, with "Failed to
+         reserve virtual memory for CodeRange" on stderr and nothing in the
+         window, because there is no window. The Client is Electron
+         (ADR-0025), so this entry is as load-bearing as the executable. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
     <!-- The History folder is the Operator's and may live wherever they put
          it (ADR-0035). -->
     <key>com.apple.security.files.user-selected.read-write</key>
