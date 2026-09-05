@@ -121,7 +121,10 @@ These are live in the build and say so where an Operator can see it.
 
 - **Cloud provider data-handling labels read `unverified`**, with a test
   keeping them honest. ADR-0010 wants a human to have read the terms at
-  release time; nobody has.
+  release time. The terms are now read, quoted and linked in
+  `docs/provider-terms-2026-09-05.md` — what is outstanding is a person
+  putting their name to them, which is the part of the ADR that cannot be
+  done for them.
 - **Four Windows executable names in `WINDOWS_EXECUTABLES`** were checked
   against a shipping competitor's table rather than read off a running
   machine — and one of the two Tencent products' names was deleted on a bad

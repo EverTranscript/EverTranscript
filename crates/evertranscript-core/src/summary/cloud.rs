@@ -63,11 +63,17 @@ pub struct Preset {
 
 /// The curated list (ADR-0010: no-training-by-default providers only).
 ///
-/// **The labels here are placeholders and are marked as such by their
-/// `verified_on` date.** ADR-0010 requires verification at release time by
-/// someone who read the terms; nobody has, and writing plausible values with
-/// a plausible date would be exactly the false assurance the ADR forbids.
-/// The date says `unverified` so the surface can say so too.
+/// **The labels here are unverified and say so in their `verified_on`
+/// field.** ADR-0010 requires verification at release time by someone who
+/// read the terms; writing plausible values with a plausible date would be
+/// exactly the false assurance the ADR forbids.
+///
+/// The terms have since been read and quoted in
+/// `docs/provider-terms-2026-09-05.md`, which also carries the exact edit
+/// that signs them off. What is missing is therefore a person's judgement
+/// rather than the legwork — and a person is what ADR-0010 is asking for.
+/// Until then the date says `unverified`, and the Client renders that as
+/// "not verified — treat as unknown".
 pub const PRESETS: &[Preset] = &[
     Preset {
         id: "openai",
@@ -81,11 +87,23 @@ pub const PRESETS: &[Preset] = &[
             verified_on: "unverified",
         }),
     },
+    // Reached through Anthropic's OpenAI-compatibility layer, which they
+    // describe as "primarily intended to test and compare model
+    // capabilities" rather than a production path. It works for what this
+    // product sends — bearer auth is supported, and our single system
+    // message survives their hoist-and-concatenate rule — and the
+    // alternative is a second Backend implementation and a second
+    // exfiltration surface to audit, which is precisely what one
+    // OpenAI-shaped client exists to avoid.
     Preset {
         id: "anthropic",
         display_name: "Anthropic",
         base_url: "https://api.anthropic.com/v1",
-        default_model: "claude-sonnet-4-5",
+        // Was `claude-sonnet-4-5`, whose dated form retires no sooner than
+        // 2026-09-29. A retired model answers with an HTTP error, and this
+        // client reports only the status code, so the Operator's experience
+        // of that day would have been the word `HTTP 404` and nothing else.
+        default_model: "claude-opus-5",
         data_handling: Some(DataHandling {
             trains_on_inputs: false,
             retention: "see provider terms",
