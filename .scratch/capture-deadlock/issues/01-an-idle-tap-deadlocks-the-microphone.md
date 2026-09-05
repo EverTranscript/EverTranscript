@@ -1,6 +1,20 @@
-# The system-audio tap deadlocks the microphone, and the Meeting records nothing
+# An idle system-audio tap deadlocks the microphone, and the Meeting records nothing
 
 Status: needs-triage
+
+> **Corrected 2026-09-05, after the first write-up said the tap deadlocks the
+> microphone outright. It does not.** A CoreAudio process tap delivers no
+> callbacks at all when no process is playing audio — not silence, nothing —
+> and *that* is the state in which starting cpal's input AudioUnit deadlocks.
+> With audio playing, both legs work: 7490 ms on the microphone and 7560 ms on
+> the system leg, in the same binary that hangs on a silent machine. Measured
+> three ways: the tap alone reports 0 frames silent and 468 frames with a tone
+> playing; `audio-check` hangs silent and succeeds with the tone; and cpal
+> alone works either way. The history fits — 2026-09-01's working run was
+> during a Teams call.
+>
+> So the trigger is **a Meeting that begins while nothing is playing**, which
+> is an ordinary way for one to begin.
 
 Found 2026-09-05 on the author's M-series Mac, macOS 26.6.2, after a working
 install on 2026-09-01. It is why every Meeting since has come out empty.
@@ -27,7 +41,7 @@ AudioOutputUnitStart → AudioDeviceStart_mac_imp → HAL_HardwarePlugIn_DeviceS
    → _pthread_cond_wait → _pthread_mutex_firstfit_lock_slow → __psynch_mutexwait
 ```
 
-## It is ours, not the machine's
+## It is ours, not the machine's — but only while the tap is idle
 
 Isolated with a probe in our own binary, same device (`MacBook Pro Microphone`,
 F32/48000/1ch), one variable:
