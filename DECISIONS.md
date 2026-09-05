@@ -908,3 +908,30 @@ What is left is the check that earns its cost. It makes the `Said at` column do 
 **The remaining gap is stated rather than closed.** A total hijack that emits no table still passes: nothing separates `BREACH` from a terse summary without reading it. That is a garbage record, not a false one — the lesser harm, and the one the product can survive. It is in what-v1-is-not, and the canary asserts the narrow thing that *is* guaranteed: the injected text must not escape the Summary body and become the Meeting's name.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q61 — m4-summary/09 — finding
+
+**Question:** M4's close-out owes chunk-boundary behaviour measured on a ninety-minute meeting through a real Backend, because "a Summary that reads beautifully on five minutes and falls apart on ninety" is the milestone's named failure and nothing had ever run one. What does it actually do?
+**Options considered:** record a real ninety-minute meeting / synthesize a transcript with planted ground truth / measure only the chunker without a model
+**Chosen:** **Synthesized a coherent ninety-minute transcript with four commitments planted at known offsets**, and ran the real map-reduce over it. 1,080 lines, 70,614 characters, three chunks.
+**Decided-by:** agent
+**Justification:** A recording would be more honest about speech and useless for this: nobody would know the right answer. Planted probes make "the middle was dropped" a measurement rather than an impression — one commitment early, one deep inside the middle chunk, one late, and one deliberately split across a boundary. The fixture is asserted to keep each probe in the chunk this claims, so a change to the chunker's budget fails loudly instead of quietly turning the file into a measurement of something else. What it cannot show is disfluency, ASR error and crosstalk; that half of the criterion stays open.
+
+**The finding: chunking is not what drops the middle. The reduce is.**
+
+| stage | commitments kept |
+| --- | --- |
+| map (each chunk's own summary) | **3 of 3**, on every run |
+| reduce (the three combined) | **1 of 3** |
+
+Every chunk summarized its own content correctly. The reduce pass — handed three partial summaries and asked to combine them — kept the first chunk's action items and discarded the rest. Measured across three runs with nothing changed between them; an earlier run that scored 3/3 end to end was the same map output getting luckier in the reduce, which is what made the loss look like flakiness until the stages were separated. **The overlapping-chunk machinery works.** Asking a 4B to merge three summaries loses most of what it is given.
+
+That is why the assertion in the test is at the map stage only. Gating on the reduce would make the build red on a coin flip, and a test nobody can act on teaches everyone to ignore the suite.
+
+**Second, smaller finding: the overlap is sized for adjacent lines.** `OVERLAP_TOKENS` is 100, about five lines, twenty-five seconds. The planted straddle — "Tomas, can you own the migration plan?" answered fifty seconds later with "Yes — I can have that ready by Thursday" — is lost, because neither chunk holds both halves and the acceptance is referential on its own. The constant's own doc gives an example where the ask and the answer are adjacent. Real ones are not.
+
+**Third, and it was found by this measurement rather than by review: `verify` was wrong.** Shipped in Q60, it compared the `Said at` timestamp's speaker to the named one, and it refused an honest ninety-minute Summary on the first run — the model credited Tomas with a line Tomas really did say while citing a timestamp five seconds off, where Ines was speaking. On a transcript dense enough to be real, an off-by-one citation is indistinguishable from a false attribution by position alone, and no tolerance window separates them: in Q60's injection the truthful speaker sat *six* seconds from the cited time, closer than the honest slip. Rebuilt to ask whether the named person said the thing — half the item's distinctive words must appear in their own speech — which still refuses Q60's injection and no longer refuses correct work. A slipped timestamp is now a degraded citation rather than a false statement about a colleague.
+
+Rebuilding it also exposed that the rule was **stricter in Chinese than in English**: ideographs are alphanumeric, so a whole Chinese clause became one token matching only verbatim, which would have refused any paraphrased Chinese action item in a product whose transcripts are routinely Chinese. Chinese is now matched by character bigram, so it degrades the same way English does.
+**Outcome:** applied
+**Ref:** (pending)
