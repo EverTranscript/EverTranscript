@@ -170,20 +170,29 @@ function Sidebar({
 }): React.JSX.Element {
   return (
     <aside className="flex h-full flex-col border-r border-[--color-line] bg-[--color-surface-raised]">
-      <header className="flex items-center justify-between border-b border-[--color-line] px-4 py-3">
+      {/* Four controls in a 280px column, and their labels genuinely do not
+          fit on one line. `justify-between` alone pushed them to the edges
+          with nothing between, so they ran together — "EverTranscriptVoices
+          What it knows". Truncating the name instead just moved the damage:
+          it became "Eve…".
+          So the row wraps. Nothing is hidden and nothing collides, at any
+          width and in any translation — which matters here, because the
+          Chinese labels are a different length again. */}
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-[--color-line] px-4 py-3">
         <button
           type="button"
           onClick={onSettings}
           title={t("settings.open")}
-          className="text-sm font-semibold hover:text-[--color-ink-muted]"
+          className="whitespace-nowrap text-sm font-semibold hover:text-[--color-ink-muted]"
         >
           {t("app.title")}
         </button>
+        <div className="flex shrink-0 items-center gap-2">
         <button
           type="button"
           onClick={onRegistry}
           title={t("registry.title")}
-          className="text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
+          className="whitespace-nowrap text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
         >
           {t("registry.open")}
         </button>
@@ -191,7 +200,7 @@ function Sidebar({
           type="button"
           onClick={onPosture}
           title={t("posture.title")}
-          className="text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
+          className="whitespace-nowrap text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
         >
           {t("posture.open")}
         </button>
@@ -199,7 +208,7 @@ function Sidebar({
           <button
             type="button"
             onClick={onStop}
-            className="rounded bg-[--color-recording] px-2.5 py-1 text-xs font-medium text-white"
+            className="whitespace-nowrap rounded bg-[--color-recording] px-2.5 py-1 text-xs font-medium text-white"
           >
             {t("action.stop")}
           </button>
@@ -207,11 +216,12 @@ function Sidebar({
           <button
             type="button"
             onClick={onRecord}
-            className="rounded border border-[--color-line] px-2.5 py-1 text-xs font-medium hover:bg-[--color-surface]"
+            className="whitespace-nowrap rounded border border-[--color-line] px-2.5 py-1 text-xs font-medium hover:bg-[--color-surface]"
           >
             {t("action.record")}
           </button>
         )}
+        </div>
       </header>
 
       <ul className="min-h-0 flex-1 overflow-y-auto">
