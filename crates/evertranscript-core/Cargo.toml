@@ -77,4 +77,6 @@ objc2-event-kit = { version = "0.3.2", default-features = false, features = [
 evertranscript-fixtures = { path = "../evertranscript-fixtures" }
 hound = "3"
 tempfile = "3"
-tokio = { version = "1", features = ["full"] }
+# `test-util` for paused time: a watchdog with a five-second grace should
+# not cost five seconds of test.
+tokio = { version = "1", features = ["full", "test-util"] }

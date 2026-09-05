@@ -134,6 +134,31 @@ async fn run(
     let mut degraded = Vec::new();
     let mut transcribed = 0usize;
 
+    // **A leg that starts and then delivers nothing.** Every failure this
+    // module handles is a leg that *says* it failed; a leg that reports
+    // success and then produces no frames was not a case the design had, and
+    // it is the worst one available — capture looks healthy, and the Meeting
+    // arrives with no audio and nothing to say why. It happens: a CoreAudio
+    // process tap can deadlock the microphone's AudioUnit
+    // (`.scratch/capture-deadlock`), and both legs then sit silent forever.
+    //
+    // Silence is not the test — a quiet room still delivers frames of zeros.
+    // Zero frames is the test.
+    //
+    // The leg is also ended, but that is hygiene rather than rescue: the
+    // joiner already emits once a leg runs `MAX_LEAD_MS` (400ms) ahead of the
+    // other, so a dead leg costs a fraction of a second of lead and not the
+    // recording — measured, by deleting the `finish_leg` below and watching
+    // the test still pass. Ending it says the leg is *over* rather than late,
+    // so the joiner stops holding a margin for something that will never
+    // speak again.
+    let mut delivered = [false; 2];
+    let mut abandoned = [false; 2];
+    let mut watchdog = tokio::time::interval(SILENT_LEG_GRACE);
+    watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The first tick is immediate; the grace period starts after it.
+    watchdog.tick().await;
+
     // Transcription gets its own thread. A whisper window decodes in
     // seconds while the capture channel holds about one second of frames,
     // so decoding inline stalls this drain long enough for CoreAudio to
@@ -169,6 +194,29 @@ async fn run(
                     draining = true;
                     continue;
                 }
+                _ = watchdog.tick() => {
+                    for (index, channel) in [AudioChannel::Mic, AudioChannel::System]
+                        .into_iter()
+                        .enumerate()
+                    {
+                        if delivered[index] || abandoned[index] {
+                            continue;
+                        }
+                        abandoned[index] = true;
+                        let name = channel_name(channel);
+                        warn!(
+                            ?channel,
+                            "this leg started and has delivered nothing; abandoning it so the \
+                             other one can still record"
+                        );
+                        joiner.finish_leg(channel);
+                        degraded.push(format!(
+                            "{name}: started but delivered no audio at all — the capture \
+                             device accepted the request and then produced nothing"
+                        ));
+                    }
+                    continue;
+                }
                 event = events.recv() => match event {
                     Some(event) => event,
                     // Every source ended. The Meeting does not: it stops when
@@ -201,6 +249,7 @@ async fn run(
         }
 
         if let CaptureEvent::Frame(frame) = &event {
+            delivered[leg_index(frame.channel)] = true;
             joiner.push(frame);
         }
         for block in joiner.drain() {
@@ -344,6 +393,22 @@ impl Transcription {
     }
 }
 
+/// How long a leg may claim to be running before producing a frame.
+///
+/// Generous: a stream can take a moment to start, and a Meeting that noted a
+/// working leg as dead would be worse than one that waited. Frames arrive
+/// every 20ms once anything is flowing, so five seconds is two orders of
+/// magnitude of headroom.
+const SILENT_LEG_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Index into the per-leg tracking arrays. Two legs, so an array beats a map.
+fn leg_index(channel: AudioChannel) -> usize {
+    match channel {
+        AudioChannel::Mic => 0,
+        AudioChannel::System => 1,
+    }
+}
+
 fn channel_name(channel: AudioChannel) -> &'static str {
     match channel {
         AudioChannel::Mic => "microphone",
@@ -464,6 +529,82 @@ mod tests {
                 .any(|note| note.contains("the disk said no")),
             "the Meeting must say why it has no audio, got {:?}",
             outcome.degraded
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_leg_that_starts_and_delivers_nothing_is_abandoned_not_waited_on() {
+        // The capture deadlock's shape (.scratch/capture-deadlock): a leg
+        // reports success and then produces no frames, forever. Nothing in the
+        // supervisor sees it, because the supervisor reacts to events and
+        // there are none.
+        //
+        // What must happen is that it reaches the record: a Meeting with no
+        // audio and no note is indistinguishable from a quiet room, and that
+        // is the whole failure.
+        //
+        // The working leg keeps recording throughout, which is asserted below
+        // — though not because of the watchdog. The joiner already emits once
+        // a leg leads by `MAX_LEAD_MS`, so a dead leg costs 400ms rather than
+        // the meeting. Checked by removing the watchdog's `finish_leg` and
+        // watching this still pass; the note is the part with teeth.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let clock = CaptureClock::start();
+        let (events_tx, events_rx) = mpsc::channel::<CaptureEvent>(256);
+        // Held for the test's lifetime. A live source keeps its senders open
+        // for as long as its streams exist, so the recorder waits; a fixture
+        // drops its sender when the script ends, which would end the loop
+        // before the watchdog could ever tick.
+        let still_capturing = events_tx.clone();
+
+        let (mut source, delivered) = FixtureSource::with_completion(vec![
+            Step::audio(AudioChannel::Mic, 400, 0.4),
+            Step::audio(AudioChannel::Mic, 400, -0.4),
+        ]);
+        source.start(clock, events_tx).expect("start");
+
+        let sink = AudioSink::new(dir.path(), "silentleg").expect("sink");
+        let stop = CancellationToken::new();
+        let (finished_tx, finished_rx) = oneshot::channel();
+        tokio::spawn(run(
+            Box::new(source),
+            events_rx,
+            sink,
+            stop.clone(),
+            finished_tx,
+            "silentleg".to_string(),
+            None,
+        ));
+
+        delivered.await.expect("the script should finish");
+        // Paused time: this returns at once and moves the clock past the grace
+        // period. The yields give the recorder a turn to notice.
+        tokio::time::sleep(SILENT_LEG_GRACE * 2).await;
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+
+        stop.cancel();
+        drop(still_capturing);
+        let outcome = finished_rx.await.expect("outcome");
+
+        assert!(
+            outcome
+                .degraded
+                .iter()
+                .any(|note| note.contains("system audio")
+                    && note.contains("delivered no audio")),
+            "the Meeting must say the leg produced nothing, got {:?}",
+            outcome.degraded
+        );
+        assert!(
+            outcome.seconds >= 0.7,
+            "and the working leg must still have been recorded, got {:.2}s",
+            outcome.seconds
+        );
+        assert!(
+            outcome.audio_path.is_some_and(|path| path.exists()),
+            "which means a file, not just a duration"
         );
     }
 
