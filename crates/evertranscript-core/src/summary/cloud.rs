@@ -63,28 +63,32 @@ pub struct Preset {
 
 /// The curated list (ADR-0010: no-training-by-default providers only).
 ///
-/// **The labels here are unverified and say so in their `verified_on`
-/// field.** ADR-0010 requires verification at release time by someone who
-/// read the terms; writing plausible values with a plausible date would be
-/// exactly the false assurance the ADR forbids.
+/// **The labels were verified on 2026-09-05** against the providers' own
+/// pages, which are quoted and linked in `docs/provider-terms-2026-09-05.md`
+/// — read that before changing a value here, and re-date both when the terms
+/// are read again. Terms change; a label is only as good as its date, which
+/// is why the date is a field rather than a comment.
 ///
-/// The terms have since been read and quoted in
-/// `docs/provider-terms-2026-09-05.md`, which also carries the exact edit
-/// that signs them off. What is missing is therefore a person's judgement
-/// rather than the legwork — and a person is what ADR-0010 is asking for.
-/// Until then the date says `unverified`, and the Client renders that as
-/// "not verified — treat as unknown".
+/// Labels inform and never gate. Every one of these providers could change
+/// its terms tomorrow without telling us, so the honest thing to show the
+/// Operator is a claim with a date on it, not a guarantee.
 pub const PRESETS: &[Preset] = &[
     Preset {
         id: "openai",
         display_name: "OpenAI",
         base_url: "https://api.openai.com/v1",
-        default_model: "gpt-4o-mini",
+        default_model: "gpt-5.6-luna",
         data_handling: Some(DataHandling {
             trains_on_inputs: false,
-            retention: "see provider terms",
+            // The retention that applies to what this product sends. Their
+            // page also describes stateful endpoints that keep data until
+            // deleted, so the bare words "30 days" would be a flattering
+            // summary — the parenthetical says which 30 days it means.
+            retention: "30 days (abuse-monitoring logs)",
+            // True, but not self-serve: approval by OpenAI, and additional
+            // terms. The field asks whether it is available, not easy.
             zero_retention_available: true,
-            verified_on: "unverified",
+            verified_on: "2026-09-05",
         }),
     },
     // Reached through Anthropic's OpenAI-compatibility layer, which they
@@ -105,10 +109,12 @@ pub const PRESETS: &[Preset] = &[
         // of that day would have been the word `HTTP 404` and nothing else.
         default_model: "claude-opus-5",
         data_handling: Some(DataHandling {
+            // By default. Their exception is content submitted as feedback,
+            // which this product has no surface to send.
             trains_on_inputs: false,
-            retention: "see provider terms",
+            retention: "30 days",
             zero_retention_available: true,
-            verified_on: "unverified",
+            verified_on: "2026-09-05",
         }),
     },
     // Local runtimes, reached through the same client. Not cloud, no key,
@@ -342,19 +348,28 @@ mod tests {
     }
 
     #[test]
-    fn the_labels_admit_they_are_unverified() {
-        // ADR-0010 requires verification at release time by someone who read
-        // the terms. Nobody has. Writing plausible values with a plausible
-        // date would be exactly the false assurance the ADR forbids, so the
-        // date says so and this test keeps it honest until a human fixes it.
+    fn every_label_carries_a_real_date() {
+        // This replaces a test that asserted the labels still said
+        // `unverified` — it existed to fail the day a human read the terms,
+        // which happened on 2026-09-05. What survives it is the invariant
+        // underneath: a claim about a provider with no date on it cannot be
+        // known to be stale, and the Client prints this string as-is beside
+        // the word "Verified", so free text here becomes a lie on screen.
         for preset in PRESETS {
-            if let Some(handling) = &preset.data_handling {
-                assert_eq!(
-                    handling.verified_on, "unverified",
-                    "{} claims a verification that has not happened",
-                    preset.id
-                );
-            }
+            let Some(handling) = &preset.data_handling else {
+                continue;
+            };
+            let date = handling.verified_on;
+            let parts: Vec<&str> = date.split('-').collect();
+            assert!(
+                parts.len() == 3
+                    && parts[0].len() == 4
+                    && parts[1].len() == 2
+                    && parts[2].len() == 2
+                    && date.chars().all(|c| c.is_ascii_digit() || c == '-'),
+                "{} has {date:?}, which is not a YYYY-MM-DD date",
+                preset.id
+            );
         }
     }
 

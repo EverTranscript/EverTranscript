@@ -1,14 +1,16 @@
 # Cloud provider data-handling terms — read 2026-09-05
 
-**Status: legwork done, signature outstanding.** This file exists so that
-ticket `m4-summary/05-cloud-backends`'s open criterion becomes a five-minute
-read rather than an afternoon. ADR-0010 requires that a *human* has read
-each provider's terms at release time; the quotes and links below are what
-that human should check. **Until someone does, `verified_on` stays
-`unverified` in `summary/cloud.rs` and the guard test stays.**
+**Status: read and signed off 2026-09-05.** ADR-0010 requires that a *human*
+has read each provider's terms at release time. The quotes and links below
+are what was read; the Operator read them and accepted them, and
+`summary/cloud.rs` now carries `verified_on: "2026-09-05"` instead of
+`unverified`.
 
-Everything here was fetched on 2026-09-05. Terms change; re-verify before
-each release, and re-date this file rather than editing it in place.
+**This file is the evidence behind a claim the product makes on screen** —
+the Client prints `Verified: 2026-09-05` beside each cloud Backend. Terms
+change without announcement, so the date is the mechanism, not decoration:
+re-read all four sources before each release and write a *new* dated file
+rather than editing this one, exactly as `competitive-facts-*.md` does.
 
 ## What this product actually sends
 
@@ -39,13 +41,15 @@ Source: <https://developers.openai.com/api/docs/guides/your-data>
   "subject to prior approval by OpenAI and acceptance of additional
   requirements." Arranged through their sales team.
 
-Proposed label: `trains_on_inputs: false`, `retention: "30 days
+Label as shipped: `trains_on_inputs: false`, `retention: "30 days
 (abuse-monitoring logs)"`, `zero_retention_available: true`.
 
-The `retention` string is the one that most wants a human's eye. "30 days"
+The `retention` string was the one that most wanted a human's eye. "30 days"
 alone would be a slightly flattering summary of a page that also describes
 endpoints retaining until deletion; the parenthetical is there so the label
-says which 30 days it means.
+says which 30 days it means. `zero_retention_available: true` is likewise
+true-but-not-easy — approval by OpenAI plus additional terms — and the field
+asks whether ZDR is available, not whether it is convenient.
 
 ## Anthropic
 
@@ -68,7 +72,7 @@ Sources: <https://privacy.claude.com/en/articles/7996866-how-long-do-you-store-m
   sends" above.
 - **Zero retention.** Available by agreement.
 
-Proposed label: `trains_on_inputs: false`, `retention: "30 days"`,
+Label as shipped: `trains_on_inputs: false`, `retention: "30 days"`,
 `zero_retention_available: true`.
 
 ## The Anthropic preset is an OpenAI-compatibility layer, and Anthropic hedges it
@@ -114,28 +118,40 @@ Active Claude model IDs as of this date: `claude-fable-5-1`,
 `claude-sonnet-4-6`, `claude-sonnet-4-5-20250929`,
 `claude-haiku-4-5-20251001`.
 
-The `openai` preset ships `gpt-4o-mini`, which is **not** deprecated and
-carries no announced shutdown date, so it still works. It is also two
-generations old: OpenAI's current chat models are `gpt-6-astra` ("our most
-capable"), `gpt-5.6-sol` (general purpose), `gpt-5.6-terra`
-(latency-sensitive), and `gpt-5.6-luna` (cost-optimised)
-(<https://developers.openai.com/api/docs/models>). Left alone deliberately —
-an old-but-working default is a product judgement, not a defect, and it is
-the Operator's picker to change. Worth revisiting: an Operator who chose
-Cloud over the bundled local model and landed on a small 2024 model may get
-a *worse* Summary than the local Qwen3-4B they turned down.
+The `openai` preset shipped `gpt-4o-mini`, which is **not** deprecated and
+carries no announced shutdown date — so unlike the Anthropic case this was a
+defaults judgement rather than a defect. It was two generations old, and an
+Operator who chose Cloud over the bundled local Qwen3-4B could plausibly
+have landed on a *worse* Summary than the one they turned down. Changed to
+`gpt-5.6-luna`, OpenAI's current cost-optimised model — the closest thing to
+what `gpt-4o-mini` was when it was first chosen.
 
-## Signing this off
+OpenAI's current chat models: `gpt-6-astra` ("our most capable"),
+`gpt-5.6-sol` (general purpose), `gpt-5.6-terra` (latency-sensitive), and
+`gpt-5.6-luna` (cost-optimised)
+(<https://developers.openai.com/api/docs/models>).
 
-When a human has read the four sources above, the change is:
+## What was done on sign-off
 
-1. Fill the two `retention` strings in `crates/evertranscript-core/src/summary/cloud.rs`.
-2. Set both `verified_on` fields to the date they read them.
-3. Delete `the_labels_admit_they_are_unverified` — the test exists to fail
-   at exactly that moment, and keeping it would then be the lie in the
-   other direction.
-4. Tick the open criterion in `.scratch/m4-summary/issues/05-cloud-backends.md`.
+1. The two `retention` strings filled in
+   (`crates/evertranscript-core/src/summary/cloud.rs`).
+2. Both `verified_on` fields set to `2026-09-05`.
+3. `the_labels_admit_they_are_unverified` deleted — it existed to fail at
+   exactly this moment, and keeping it would have been the lie in the other
+   direction. `every_label_carries_a_real_date` replaces it: the Client
+   prints this string verbatim beside the word "Verified", so free text
+   there becomes a lie on screen.
+4. The criterion ticked in `.scratch/m4-summary/issues/05-cloud-backends.md`.
 
-The Client already renders `verified_on == "unverified"` as "not verified —
-treat as unknown" (`i18n.ts`, both locales), so today's surface is honest
-without any of the above.
+## Owed at the next release
+
+Re-read all four sources and write `docs/provider-terms-<date>.md`, then
+re-date the `verified_on` fields. A label whose date has gone stale is the
+failure mode this whole mechanism exists to make visible — the Client shows
+the date to the Operator precisely so that a year-old claim looks like a
+year-old claim.
+
+One known rough edge, deliberately not fixed: `retention` is rendered raw
+and is English only, so the Chinese locale shows an English phrase. It is a
+quote of the provider's own English terms, and translating a legal
+characterisation is a worse risk than leaving it legible.
