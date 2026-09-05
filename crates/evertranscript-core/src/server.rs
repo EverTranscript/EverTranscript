@@ -243,6 +243,52 @@ pub type SourceFactory = Arc<dyn Fn() -> Box<dyn audio::AudioSource> + Send + Sy
 /// itself.
 pub type SummaryBackendFactory = Arc<dyn Fn() -> ChosenBackends + Send + Sync>;
 
+/// When a Meeting a killed Core left open should be dated to end.
+///
+/// Three candidates, and `now` is not one of them: dating it to whenever the
+/// next Core happened to start is how a Meeting nobody attended acquires a
+/// duration. What actually happened is bounded by two things, and the longer
+/// one wins because both are lower bounds on a recording that really ran:
+///
+/// * **Recovered audio.** The encoder is CBR, so the file's length is the
+///   duration it holds. A real 69-hour orphan is what made this the deciding
+///   term:
+///   its row was never touched after creation, so the timestamp below said
+///   the Meeting lasted no time at all while 6 GB of its audio sat on disk.
+/// * **`updated_at`.** The last thing that wrote to the row — the final
+///   transcript segment, usually. The only evidence there is when no audio
+///   survived.
+fn interrupted_end(
+    started_at: &str,
+    last_touched: Option<String>,
+    recovered_bytes: Option<u64>,
+) -> String {
+    let fallback = || last_touched.clone().unwrap_or_else(|| started_at.to_string());
+    let Some(bytes) = recovered_bytes else {
+        return fallback();
+    };
+    let Ok(start) = chrono::DateTime::parse_from_rfc3339(started_at) else {
+        return fallback();
+    };
+    // The encoder is CBR, so a file's length is its duration — no decode pass
+    // at startup to learn how long a Meeting ran.
+    let recorded = chrono::TimeDelta::try_seconds(audio::sink::seconds_from_bytes(bytes) as i64);
+    let Some(from_audio) = recorded.map(|delta| start + delta) else {
+        return fallback();
+    };
+    // Whichever is later. Audio usually wins, but a Meeting that transcribed
+    // past the last audio to reach disk has evidence of running longer than
+    // the audio proves, and discarding that would be the same mistake in
+    // reverse.
+    match last_touched
+        .as_deref()
+        .and_then(|touched| chrono::DateTime::parse_from_rfc3339(touched).ok())
+    {
+        Some(touched) if touched > from_audio => touched.to_rfc3339(),
+        _ => from_audio.to_rfc3339(),
+    }
+}
+
 /// Persists transcript segments as they are produced, and announces them.
 async fn write_segments(
     store: Store,
@@ -1333,17 +1379,111 @@ impl Core {
         *self.source_factory.lock().await = factory;
     }
 
-    /// Merges any checkpoints a previous Core left behind after a crash.
-    pub async fn recover_interrupted_audio(&self) {
-        match audio::sink::recover_interrupted(&self.audio_dir()).await {
-            Ok(recoveries) if !recoveries.is_empty() => {
+    /// Puts the record back in order after a Core that did not shut down
+    /// cleanly.
+    ///
+    /// A killed Core leaves two things behind, and they are settled together
+    /// because neither is readable without the other: checkpoints on disk,
+    /// and a Meeting row that is still `active`.
+    ///
+    /// **The row was the half nobody collected.** Nothing consulted it at
+    /// startup, so it stayed open — and a Meeting stays open until something
+    /// stops it, which for an Auto-Recorded one is Detection noticing the app
+    /// go away, possibly hours later. What the record then held was a Meeting
+    /// that "ran" for as long as the app happened to stay open, with no
+    /// audio, no transcript and no note: indistinguishable from a Meeting
+    /// nobody spoke in, except that the duration was invented, and the
+    /// duration is the part anyone reads. It also blocks the next recording,
+    /// because `start_meeting_armed` refuses while one is active — so a Core
+    /// killed once declines to record until something closes the row.
+    ///
+    /// Order matters. The active row is read *first*, because attaching
+    /// recovered audio moves `updated_at`, and `updated_at` is the last
+    /// moment there is any evidence the Meeting was alive — which is what it
+    /// gets ended at, rather than now.
+    pub async fn reconcile_after_restart(&self) {
+        let interrupted = match self
+            .store
+            .read(|connection| {
+                let Some(meeting) = meetings::active(connection)? else {
+                    return Ok(None);
+                };
+                let touched = meetings::last_touched(connection, &meeting.id)?;
+                Ok(Some((meeting, touched)))
+            })
+            .await
+        {
+            Ok(found) => found,
+            Err(error) => {
+                warn!(%error, "could not look for an interrupted Meeting");
+                None
+            }
+        };
+
+        let Some((meeting, last_touched)) = interrupted else {
+            return;
+        };
+
+        // A killed Core leaves a playable file, not a directory of fragments:
+        // MP3 is a frame stream, so what reached disk is already a recording
+        // (ADR-0032). "Recovery" is therefore a question about one path — and
+        // about the row, which is the half that used to be missed.
+        let key = mirror::id8(&meeting.id);
+        let recovered = audio::sink::orphaned_audio(&self.audio_dir(), &key);
+        if let Some((path, bytes)) = &recovered {
+            let relative = self.relative_to_history(path);
+            let id = meeting.id.clone();
+            if let Err(error) = self
+                .store
+                .write(move |connection| meetings::set_audio_path(connection, &id, &relative))
+                .await
+            {
+                warn!(%error, meeting = %meeting.id, "could not attach recovered audio");
+            } else {
                 info!(
-                    count = recoveries.len(),
-                    "recovered audio from recordings a previous run did not finish"
+                    meeting = %meeting.id,
+                    seconds = audio::sink::seconds_from_bytes(*bytes),
+                    "recovered audio and attached it to its Meeting"
                 );
             }
-            Ok(_) => {}
-            Err(error) => warn!(%error, "audio recovery failed"),
+        }
+
+        // The note is the point. A Meeting that was cut short and says so is
+        // a record; one that is merely short is a wrong one.
+        let mut notes = meeting.audio_notes.clone();
+        notes.push(match &recovered {
+            Some(_) => "interrupted: the Core stopped without ending this Meeting. Its audio \
+                        survives up to the moment it stopped, minus at most the final frame; \
+                        any transcript still in flight was lost."
+                .to_string(),
+            None => "interrupted: the Core stopped without ending this Meeting, and no audio \
+                     reached disk before it did."
+                .to_string(),
+        });
+
+        let id = meeting.id.clone();
+        let ended_at = interrupted_end(
+            &meeting.started_at,
+            last_touched,
+            recovered.as_ref().map(|(_, bytes)| *bytes),
+        );
+        let result = self
+            .store
+            .write(move |connection| {
+                meetings::set_audio_notes(connection, &id, &notes)?;
+                meetings::stop_at(connection, &id, &ended_at)
+            })
+            .await;
+        match result {
+            Ok(_) => {
+                warn!(
+                    meeting = %meeting.id,
+                    recovered = recovered.is_some(),
+                    "closed a Meeting a previous Core left open"
+                );
+                self.wake_mirror();
+            }
+            Err(error) => warn!(%error, "could not close the interrupted Meeting"),
         }
     }
 
@@ -2257,6 +2397,19 @@ impl Server {
                 Ok(serde_json::to_value(HistorySearchResponse { results })?)
             }
 
+            // Recording, on the Core, for as long as the caller asked. It is
+            // the Core that records in production, so it is the Core that has
+            // to be the one asked — a check the Client ran in its own process
+            // would prove that Electron can reach a microphone and nothing
+            // about the process that actually captures Meetings.
+            ClientRequest::AudioCheck(params) => {
+                let seconds = params
+                    .seconds
+                    .unwrap_or(audio::check::DEFAULT_SECONDS)
+                    .clamp(1, 120);
+                Ok(serde_json::to_value(audio::check::run(seconds).await)?)
+            }
+
             ClientRequest::ModelsStatus(_) => Ok(serde_json::to_value(self.core.models_status()?)?),
 
             ClientRequest::ModelsFetch(params) => {
@@ -2558,5 +2711,55 @@ fn describe_watchlist(list: &crate::detect::watchlist::Watchlist) -> WatchlistRe
     WatchlistResponse {
         entries: list.entries().iter().map(row).collect(),
         suggestions: list.suggestions().iter().map(row).collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STARTED: &str = "2026-09-01T18:08:17.381177-07:00";
+
+    #[test]
+    fn a_recovered_orphan_is_dated_by_its_audio_not_its_untouched_row() {
+        // The real one this came from: a Meeting whose Core died three days
+        // earlier, whose row was never written again because there was no
+        // transcription model to write segments, and whose recovered audio
+        // ran for 69 hours. Dating it by `updated_at` made it a Meeting of
+        // zero length holding 6 GB of sound.
+        let bytes = 69 * 60 * 60 * audio::sink::BYTES_PER_SECOND;
+        let ended = interrupted_end(STARTED, Some(STARTED.to_string()), Some(bytes));
+        let start = chrono::DateTime::parse_from_rfc3339(STARTED).expect("start");
+        let end = chrono::DateTime::parse_from_rfc3339(&ended).expect("end");
+        assert_eq!((end - start).num_hours(), 69);
+    }
+
+    #[test]
+    fn a_row_written_past_the_audio_keeps_its_own_evidence() {
+        // Transcription outliving the audio that reached disk is evidence the
+        // Meeting ran longer than the audio proves. Taking the audio here
+        // would be the same mistake pointed the other way.
+        let bytes = 60 * audio::sink::BYTES_PER_SECOND; // one minute of audio
+        let touched = "2026-09-01T19:08:17.381177-07:00"; // an hour later
+        let ended = interrupted_end(STARTED, Some(touched.to_string()), Some(bytes));
+        assert_eq!(
+            chrono::DateTime::parse_from_rfc3339(&ended).expect("end"),
+            chrono::DateTime::parse_from_rfc3339(touched).expect("touched")
+        );
+    }
+
+    #[test]
+    fn with_no_audio_and_no_writes_it_claims_nothing() {
+        // Nothing survived and nothing ever touched the row, so there is no
+        // evidence of any duration. Inventing one is the whole failure.
+        assert_eq!(interrupted_end(STARTED, None, None), STARTED);
+    }
+
+    #[test]
+    fn an_unparseable_start_falls_back_rather_than_guessing() {
+        assert_eq!(
+            interrupted_end("not a timestamp", Some("also not".to_string()), Some(4096)),
+            "also not"
+        );
     }
 }

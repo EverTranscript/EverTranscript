@@ -13,7 +13,6 @@ use evertranscript_core::Core;
 use evertranscript_core::Server;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
-use evertranscript_core::audio::sink::ffmpeg_available;
 use evertranscript_core::client::CoreClient;
 use evertranscript_core::transport;
 use evertranscript_protocol::AudioChannel;
@@ -92,19 +91,9 @@ impl Drop for TestCore {
     }
 }
 
-async fn skip_without_ffmpeg() -> bool {
-    if ffmpeg_available().await {
-        return false;
-    }
-    eprintln!("skipping: ffmpeg is not available on this machine");
-    true
-}
 
 #[tokio::test]
 async fn recording_a_meeting_writes_audio_and_records_where_it_went() {
-    if skip_without_ffmpeg().await {
-        return;
-    }
     let core = TestCore::start(vec![
         Step::audio(AudioChannel::Mic, 400, 0.4),
         Step::audio(AudioChannel::System, 400, -0.4),
@@ -159,9 +148,6 @@ async fn recording_a_meeting_writes_audio_and_records_where_it_went() {
 
 #[tokio::test]
 async fn a_device_swap_mid_meeting_does_not_split_the_recording() {
-    if skip_without_ffmpeg().await {
-        return;
-    }
     // The AirPods scenario, end to end: capture pauses, the device changes,
     // capture resumes. One Meeting, one audio file, the outage represented.
     let core = TestCore::start(vec![
@@ -243,43 +229,80 @@ async fn a_meeting_records_even_when_capture_cannot_start() {
 
 #[tokio::test]
 async fn audio_from_an_interrupted_run_is_recovered_on_the_next_start() {
-    if skip_without_ffmpeg().await {
-        return;
-    }
     let dir = tempfile::tempdir().expect("tempdir");
     let history_dir = dir.path().join("History");
 
-    // A Core that recorded and was killed before finalizing: the checkpoint
-    // directory survives with sealed segments in it.
-    {
+    // A Core that recorded and was killed without ever stopping the Meeting.
+    let started = {
         let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
-        core.set_source_factory(Arc::new(|| Box::new(FixtureSource::simple(200))))
+        core.set_source_factory(Arc::new(|| Box::new(FixtureSource::simple(2_000))))
             .await;
-        core.start_meeting(None, Some("Zoom".to_string()))
+        let meeting = core
+            .start_meeting(None, Some("Zoom".to_string()))
             .await
             .expect("start");
-        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // Wait for audio to actually reach disk. Since ADR-0032's reversal
+        // there is no checkpoint to seal: the encoder writes continuously, so
+        // the file exists and grows from the first block.
+        for _ in 0..100 {
+            if audio_bytes(&history_dir, &meeting.id) > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        meeting.id
         // Dropped without stop_meeting(): exactly what kill -9 leaves.
-    }
+    };
 
-    let checkpoints = history_dir.join(".data/audio/.checkpoints");
-    if !checkpoints.exists() {
-        // The scripted audio may not have filled a checkpoint; nothing to
-        // recover is a valid outcome, not a failure.
-        return;
-    }
+    let bytes = audio_bytes(&history_dir, &started);
+    assert!(
+        bytes > 0,
+        "a killed Core must leave a playable file, not a directory of fragments"
+    );
 
     let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
-    core.recover_interrupted_audio().await;
+    core.reconcile_after_restart().await;
+
+    let meetings = core.list_meetings(10, 0).await.expect("list");
+    let meeting = meetings.first().expect("the interrupted Meeting survives");
+    assert_eq!(meeting.id, started, "and it is the same one");
+
+    // Leaving the bytes on disk was never the hard part; pointing the record
+    // at them is what did not happen before.
+    let audio = meeting
+        .audio_path
+        .as_ref()
+        .expect("recovered audio must be attached to its Meeting");
     assert!(
-        !checkpoints.exists()
-            || std::fs::read_dir(&checkpoints)
-                .into_iter()
-                .flatten()
-                .count()
-                == 0,
-        "recovery must consume the checkpoint directory"
+        history_dir.join(audio).exists(),
+        "and the path in the record must lead to a real file, got {audio}"
     );
+
+    // The other half of a kill: the row was left open.
+    assert!(
+        meeting.ended_at.is_some(),
+        "an interrupted Meeting must be closed rather than left running"
+    );
+    assert!(
+        meeting
+            .audio_notes
+            .iter()
+            .any(|note| note.contains("interrupted")),
+        "and must say it was cut short, got {:?}",
+        meeting.audio_notes
+    );
+}
+
+/// Bytes of kept audio on disk for a Meeting, keyed the way the sink keys it.
+fn audio_bytes(history_dir: &std::path::Path, meeting_id: &str) -> u64 {
+    let key: String = meeting_id
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(8)
+        .collect();
+    std::fs::metadata(history_dir.join(format!(".data/audio/{key}.mp3")))
+        .map(|meta| meta.len())
+        .unwrap_or(0)
 }
 
 #[tokio::test]
@@ -290,9 +313,6 @@ async fn a_meeting_that_lost_a_capture_leg_says_so_in_its_record_and_its_mirror(
     // explain it — indistinguishable, to the person reading their notes
     // later, from a meeting where nobody else spoke. On a machine without
     // the system-audio permission that is every meeting.
-    if skip_without_ffmpeg().await {
-        return;
-    }
     let core = TestCore::start(vec![
         Step::audio(AudioChannel::Mic, 200, 0.5),
         Step::Unavailable {

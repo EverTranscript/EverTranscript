@@ -61,8 +61,13 @@ pub fn decode(path: &Path) -> Result<DecodedMeeting> {
     let file = std::fs::File::open(path)?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
 
+    // The hint follows the file rather than being fixed: Meetings recorded
+    // before ADR-0032's 2026-09-05 reversal are `.m4a`, and ones after are
+    // `.mp3`. Both keep playing forever (ADR-0009), so both must probe.
     let mut hint = Hint::new();
-    hint.with_extension("m4a");
+    if let Some(extension) = path.extension().and_then(|ext| ext.to_str()) {
+        hint.with_extension(extension);
+    }
     let probed = symphonia::default::get_probe().format(
         &hint,
         stream,

@@ -19,7 +19,7 @@ use super::whisper::WHISPER_RATE;
 use crate::audio::SAMPLE_RATE;
 use crate::audio::aec;
 use crate::audio::dsp;
-use crate::audio::joiner::StereoBlock;
+use crate::audio::StereoBlock;
 
 /// One transcribed span, ready to become a row in the record.
 #[derive(Debug, Clone, PartialEq)]

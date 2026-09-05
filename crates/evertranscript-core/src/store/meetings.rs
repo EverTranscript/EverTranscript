@@ -179,6 +179,53 @@ pub fn stop(connection: &Connection, id: &str) -> Result<Meeting> {
     get(connection, id)?.ok_or_else(|| anyhow::anyhow!("no Meeting with id {id}"))
 }
 
+/// Ends the Meeting at a given moment rather than now.
+///
+/// For a Meeting a killed Core left open, `now` would be a lie the record
+/// keeps: it dates the end to whenever the next Core happened to start, which
+/// on a laptop that slept overnight is a sixteen-hour Meeting. The caller
+/// passes the last moment there is evidence for instead.
+pub fn stop_at(connection: &Connection, id: &str, ended_at: &str) -> Result<Meeting> {
+    connection.execute(
+        "UPDATE meetings SET ended_at = ?2, updated_at = ?3 WHERE id = ?1 AND ended_at IS NULL",
+        params![id, ended_at, now_rfc3339()],
+    )?;
+    get(connection, id)?.ok_or_else(|| anyhow::anyhow!("no Meeting with id {id}"))
+}
+
+/// When this Meeting's row was last written.
+///
+/// Not on `Meeting`: no Client has ever needed it, and widening a protocol
+/// type to carry a bookkeeping column would put it on every wire message and
+/// in the generated bindings. The one caller is restart reconciliation, which
+/// uses it as the last moment there is evidence a killed Meeting was alive.
+pub fn last_touched(connection: &Connection, id: &str) -> Result<Option<String>> {
+    Ok(connection
+        .query_row(
+            "SELECT updated_at FROM meetings WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Meetings whose id starts with `prefix`.
+///
+/// The audio and Mirror filenames key on the id8 (`mirror::id8`), so coming
+/// back the other way — from a file on disk to the Meeting it belongs to —
+/// starts here. Callers confirm with `id8` itself rather than trusting the
+/// prefix, so there is still one definition of what an id8 is.
+pub fn with_id_prefix(connection: &Connection, prefix: &str) -> Result<Vec<Meeting>> {
+    let sql = format!("SELECT {MEETING_COLUMNS} FROM meetings WHERE id LIKE ?1 ESCAPE '\\'");
+    let mut statement = connection.prepare(&sql)?;
+    let escaped = prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let rows = statement.query_map(params![format!("{escaped}%")], row_to_meeting)?;
+    Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+}
+
 pub fn get(connection: &Connection, id: &str) -> Result<Option<Meeting>> {
     let sql = format!("SELECT {MEETING_COLUMNS} FROM meetings WHERE id = ?1");
     Ok(connection

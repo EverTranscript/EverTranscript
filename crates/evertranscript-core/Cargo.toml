@@ -33,6 +33,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 async-trait = "0.1.92"
+mp3lame-encoder = "0.2.5"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 # Apple Silicon has a GPU worth using: on CPU, large-v3-turbo decodes a

@@ -126,7 +126,7 @@ enum Command {
         /// Seconds to listen for. Longer is more conclusive: a refused
         /// system-audio permission looks exactly like nobody talking until
         /// enough audio has been played to prove otherwise.
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = evertranscript_core::audio::check::DEFAULT_SECONDS)]
         seconds: u64,
     },
     /// Read and write a Meeting's Notes — your own writing, editable
@@ -432,107 +432,59 @@ async fn run(cli: Cli) -> Result<()> {
 /// leg on a machine that will record nothing — so this listens instead, and
 /// reports what arrived.
 async fn run_audio_check(seconds: u64) -> Result<()> {
-    use evertranscript_core::audio::AudioSource;
-    use evertranscript_core::audio::CaptureClock;
-    use evertranscript_core::audio::CaptureEvent;
-    use evertranscript_core::audio::live::LiveSource;
     use evertranscript_protocol::AudioChannel;
+    use evertranscript_protocol::AudioCheckVerdict;
+    use evertranscript_protocol::AudioLegState;
 
     println!("Listening for {seconds}s. Play some audio — a meeting, a video, anything.\n");
-    let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(4096);
-    let mut source = LiveSource::new();
-    let started = source.start(CaptureClock::start(), events_tx);
+    // In-process on purpose: this subcommand is documented to run without the
+    // Core, so it works before anything is installed. The Client asks the
+    // Core for the same check over `audio/check`, and both land in the same
+    // function — the two surfaces cannot come to different conclusions about
+    // the same machine.
+    let report = evertranscript_core::audio::check::run(seconds).await;
 
-    let mut unavailable: Vec<(AudioChannel, String)> = Vec::new();
-    // Whether anything played during the window. Without it, "captured, but
-    // all of it silent" reads as a permission problem even when the
-    // Operator simply had nothing playing — which is the same confusion the
-    // Core's own refusal check used to make (DECISIONS Q9).
-    //
-    // `None` means this platform cannot say, and that is not the same as
-    // "nothing played": reading it as `false` would make every silent
-    // system leg on such a platform report the quiet-meeting wording, which
-    // is the confusion in the other direction.
-    let mut heard_playback: Option<bool> = None;
-    if let Err(error) = &started {
-        println!("Nothing can be recorded on this machine:\n  {error:#}");
-    } else {
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
-        while std::time::Instant::now() < until {
-            if let Some(active) = evertranscript_core::audio::system::output_is_active() {
-                heard_playback = Some(heard_playback.unwrap_or(false) || active);
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-        }
-    }
-    source.stop();
-
-    // Two legs, so two counters; AudioChannel is a protocol type and not
-    // worth making map-keyable for this.
-    let (mut mic, mut system) = ((0u64, 0.0f32), (0u64, 0.0f32));
-    while let Ok(event) = events_rx.try_recv() {
-        match event {
-            CaptureEvent::Frame(frame) => {
-                let peak = frame
-                    .samples
-                    .iter()
-                    .fold(0.0f32, |max, sample| max.max(sample.abs()));
-                let entry = match frame.channel {
-                    AudioChannel::Mic => &mut mic,
-                    AudioChannel::System => &mut system,
-                };
-                entry.0 += frame.duration_ms();
-                entry.1 = entry.1.max(peak);
-            }
-            CaptureEvent::Unavailable { channel, reason }
-            | CaptureEvent::Degraded { channel, reason } => unavailable.push((channel, reason)),
-            CaptureEvent::StreamFailed { channel, error } => unavailable.push((channel, error)),
-            CaptureEvent::DeviceChanged { .. } => {}
-        }
+    if let Some(error) = &report.could_not_start {
+        println!("Nothing can be recorded on this machine:\n  {error}");
     }
 
-    let mut usable = 0;
-    // A leg nothing was played into was never asked a question it could
-    // answer, so it is neither working nor broken.
-    let mut unchecked = 0;
-    for (channel, name, (ms, peak)) in [
-        (AudioChannel::Mic, "Microphone  ", mic),
-        (AudioChannel::System, "System audio", system),
-    ] {
-        // Frames whose samples are all zero are the failure this whole check
-        // exists to catch, so they do not count as a working leg.
-        if ms > 0 && peak > 0.0 {
-            usable += 1;
-            println!("{name}  {ms} ms captured, peak level {peak:.3}");
-        } else if ms > 0 && channel == AudioChannel::System && heard_playback == Some(false) {
-            // Nothing was played, so this leg was never asked a question it
-            // could answer. Reporting "silent" here would send the Operator
-            // to System Settings over nothing at all.
-            unchecked += 1;
-            println!("{name}  {ms} ms captured, but nothing was playing");
-            println!("              play some audio and run this again to check this leg");
-        } else if ms > 0 {
-            println!("{name}  {ms} ms captured, but all of it silent");
-        } else {
-            println!("{name}  nothing captured");
+    for leg in &report.legs {
+        let name = match leg.channel {
+            AudioChannel::Mic => "Microphone  ",
+            AudioChannel::System => "System audio",
+        };
+        let ms = leg.milliseconds;
+        match leg.state {
+            AudioLegState::Working => {
+                println!("{name}  {ms} ms captured, peak level {:.3}", leg.peak)
+            }
+            AudioLegState::NotTested => {
+                println!("{name}  {ms} ms captured, but nothing was playing");
+                println!("              play some audio and run this again to check this leg");
+            }
+            AudioLegState::Silent => println!("{name}  {ms} ms captured, but all of it silent"),
+            AudioLegState::NothingCaptured => println!("{name}  nothing captured"),
         }
-        if let Some((_, reason)) = unavailable.iter().find(|(c, _)| *c == channel) {
+        if let Some(reason) = &leg.reason {
             println!("              {reason}");
         }
     }
 
     println!();
-    match (usable, unchecked) {
-        (2, _) => println!("Both legs work. Meetings will record in full."),
-        // Saying "one leg works" here would answer a question this run did
-        // not ask: nothing was played, so the other leg was never tested.
-        (1, 1) => println!(
-            "The microphone works. The other leg was not tested — play some audio and run this again."
-        ),
-        (1, _) => println!("One leg works. Meetings will record, and be marked partial."),
-        (0, 0) => println!("No audio was captured. Meetings would record nothing."),
-        _ => println!("Nothing could be tested — play some audio and run this again."),
-    }
+    println!(
+        "{}",
+        match report.verdict {
+            AudioCheckVerdict::BothLegsWork => "Both legs work. Meetings will record in full.",
+            AudioCheckVerdict::MicrophoneWorksOtherUntested =>
+                "The microphone works. The other leg was not tested — play some audio and run this again.",
+            AudioCheckVerdict::OneLegWorks =>
+                "One leg works. Meetings will record, and be marked partial.",
+            AudioCheckVerdict::NothingCaptured =>
+                "No audio was captured. Meetings would record nothing.",
+            AudioCheckVerdict::NothingTested =>
+                "Nothing could be tested — play some audio and run this again.",
+        }
+    );
     Ok(())
 }
 

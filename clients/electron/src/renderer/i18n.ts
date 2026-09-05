@@ -45,7 +45,29 @@ const en = {
   "onboarding.permissions.body":
     "EverTranscript records two things: your microphone, and the audio your computer plays. Both need your permission, and macOS grants the system-audio tap whether or not you allowed recording — a refused one delivers silence forever without ever failing. So this checks by recording, not by asking.",
   "onboarding.permissions.check": "Check by recording",
+  "onboarding.permissions.recheck": "Check again",
   "onboarding.permissions.checking": "Listening…",
+  "onboarding.permissions.playSomething":
+    "Play some audio while this runs — a video, a song, anything. The system-audio leg cannot be told apart from a quiet room until something has played.",
+  "onboarding.permissions.leg.mic": "Microphone",
+  "onboarding.permissions.leg.system": "System audio",
+  "onboarding.permissions.state.working": "working",
+  "onboarding.permissions.state.silent":
+    "silent — audio arrived and every sample of it was empty, which is what a refused permission looks like",
+  "onboarding.permissions.state.notTested":
+    "not tested — nothing was playing, so this leg was never asked",
+  "onboarding.permissions.state.nothingCaptured": "nothing arrived",
+  "onboarding.permissions.verdict.bothLegsWork":
+    "Both legs work. Meetings will record in full.",
+  "onboarding.permissions.verdict.microphoneWorksOtherUntested":
+    "The microphone works. The other leg was not tested — play some audio and check again.",
+  "onboarding.permissions.verdict.oneLegWorks":
+    "One leg works. Meetings will record, and be marked partial.",
+  "onboarding.permissions.verdict.nothingCaptured":
+    "No audio was captured. Meetings would record nothing. Grant EverTranscript microphone access in System Settings, then check again.",
+  "onboarding.permissions.verdict.nothingTested":
+    "Nothing could be tested — play some audio and check again.",
+  "onboarding.permissions.couldNotStart": "Capture could not start:",
   "onboarding.models.title": "Models",
   "onboarding.models.body":
     "Transcription needs a model on disk. Summary needs its own, and is optional — it is the one feature you can turn off entirely. Each download is checked against a pinned checksum.",
@@ -218,7 +240,26 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "onboarding.permissions.body":
       "EverTranscript 会录制两路声音：你的麦克风，以及电脑播放的声音。两者都需要你的授权。在 macOS 上，系统声音的采集权限无论你是否允许录音都会被授予——被拒绝时它会永远返回静音而不会报错。因此这一步通过实际录音来检查，而不是询问系统。",
     "onboarding.permissions.check": "通过录音检查",
+    "onboarding.permissions.recheck": "重新检查",
     "onboarding.permissions.checking": "正在监听……",
+    "onboarding.permissions.playSomething":
+      "检查期间请播放一些声音——视频、音乐，什么都行。在有声音播放之前，系统声音这一路与安静的房间无法区分。",
+    "onboarding.permissions.leg.mic": "麦克风",
+    "onboarding.permissions.leg.system": "系统声音",
+    "onboarding.permissions.state.working": "正常",
+    "onboarding.permissions.state.silent":
+      "静音——收到了音频，但每个采样都是空的，这正是权限被拒绝时的样子",
+    "onboarding.permissions.state.notTested":
+      "未检测——当时没有任何声音在播放，这一路没有被真正问到",
+    "onboarding.permissions.state.nothingCaptured": "没有收到任何音频",
+    "onboarding.permissions.verdict.bothLegsWork": "两路都正常，会议将被完整录制。",
+    "onboarding.permissions.verdict.microphoneWorksOtherUntested":
+      "麦克风正常。另一路尚未检测——请播放一些声音后重新检查。",
+    "onboarding.permissions.verdict.oneLegWorks": "只有一路正常。会议仍会录制，并被标记为不完整。",
+    "onboarding.permissions.verdict.nothingCaptured":
+      "没有采集到任何音频，会议将什么都录不到。请在「系统设置」中授予 EverTranscript 麦克风权限，然后重新检查。",
+    "onboarding.permissions.verdict.nothingTested": "无法得出结论——请播放一些声音后重新检查。",
+    "onboarding.permissions.couldNotStart": "无法开始采集：",
     "onboarding.models.title": "模型",
     "onboarding.models.body":
       "转写需要本地模型。摘要有自己的模型，且是可选的——它是唯一可以完全关闭的功能。每次下载都会校验固定的校验和。",

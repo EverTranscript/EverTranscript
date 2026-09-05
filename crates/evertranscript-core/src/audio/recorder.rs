@@ -20,8 +20,8 @@ use super::AudioSource;
 use super::CaptureClock;
 use super::CaptureEvent;
 use super::joiner::Joiner;
-use super::joiner::StereoBlock;
-use super::sink::CheckpointSink;
+use super::StereoBlock;
+use super::sink::AudioSink;
 use super::supervisor::Action;
 use super::supervisor::ChurnPolicy;
 use crate::asr::pipeline::TranscribedSegment;
@@ -79,7 +79,7 @@ impl Recorder {
         let (events_tx, events_rx) = mpsc::channel::<CaptureEvent>(256);
         source.start(clock.clone(), events_tx)?;
 
-        let sink = CheckpointSink::new(&audio_dir, &meeting_key)?;
+        let sink = AudioSink::new(&audio_dir, &meeting_key)?;
         let stop = CancellationToken::new();
         let (finished_tx, finished_rx) = oneshot::channel();
 
@@ -123,7 +123,7 @@ impl Recorder {
 async fn run(
     mut source: Box<dyn AudioSource>,
     mut events: mpsc::Receiver<CaptureEvent>,
-    mut sink: CheckpointSink,
+    mut sink: AudioSink,
     stop: CancellationToken,
     finished: oneshot::Sender<RecordingOutcome>,
     meeting_key: String,
@@ -240,6 +240,11 @@ async fn run(
     }
 
     let seconds = sink.seconds_written();
+    // Read before `finalize`, which consumes the sink. An encoder that never
+    // started is the one audio failure that reaches here with nothing else to
+    // show for it: no samples were written, so the byte-count check below
+    // cannot see it either.
+    let encoder_failure = sink.disabled_reason().map(str::to_string);
     let audio_path = match sink.finalize().await {
         Ok(path) => path,
         Err(error) => {
@@ -251,6 +256,9 @@ async fn run(
             None
         }
     };
+    if let Some(reason) = encoder_failure {
+        degraded.push(reason);
+    }
     if audio_path.is_none() && seconds > 0.0 && degraded.is_empty() {
         degraded.push(format!(
             "audio file: {seconds:.1}s was captured but no file was produced"
@@ -348,14 +356,19 @@ mod tests {
     use super::*;
     use crate::audio::fixture::FixtureSource;
     use crate::audio::fixture::Step;
-    use crate::audio::sink::ffmpeg_available;
 
-    async fn skip_without_ffmpeg() -> bool {
-        if ffmpeg_available().await {
-            return false;
+    /// An output that refuses every write, so a recording can be driven into
+    /// the degraded path. Since ADR-0032's reversal the encoder is in-process
+    /// and cannot be missing, so a failing *sink* is the failure that remains.
+    struct RefusingWriter;
+
+    impl std::io::Write for RefusingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("the disk said no"))
         }
-        eprintln!("skipping: ffmpeg is not available on this machine");
-        true
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("the disk said no"))
+        }
     }
 
     #[tokio::test]
@@ -365,9 +378,6 @@ mod tests {
         // told its system audio was missing. Ending the leg on that made a
         // wrong sentence cost every remaining minute of the far end, so the
         // note must not stop the audio behind it.
-        if skip_without_ffmpeg().await {
-            return;
-        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, delivered) = FixtureSource::with_completion(vec![
             Step::audio(AudioChannel::System, 200, 0.0),
@@ -406,10 +416,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn audio_that_cannot_be_written_reaches_the_record() {
+        // The failure this test exists for is silent by construction. A sink
+        // that cannot write keeps no samples, so `seconds` is 0.0 and the
+        // "captured but no file" check cannot fire either — the Meeting ends
+        // up with no audio, no note, and a duration that says a recording
+        // happened. The only place the reason exists is the sink, so this
+        // proves it gets from there into the outcome.
+        //
+        // It was a missing ffmpeg binary that used to produce this; since
+        // ADR-0032's reversal the encoder is in-process and cannot go
+        // missing, so a refusing output is the shape the failure takes now.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let clock = CaptureClock::start();
+        let (events_tx, events_rx) = mpsc::channel::<CaptureEvent>(256);
+        let (mut source, delivered) = FixtureSource::with_completion(vec![
+            Step::audio(AudioChannel::Mic, 200, 0.4),
+            Step::audio(AudioChannel::System, 200, -0.4),
+        ]);
+        source.start(clock, events_tx).expect("start");
+
+        let sink = AudioSink::with_writer(
+            dir.path().join("nocodec1.mp3"),
+            Box::new(RefusingWriter),
+        );
+        let stop = CancellationToken::new();
+        let (finished_tx, finished_rx) = oneshot::channel();
+        tokio::spawn(run(
+            Box::new(source),
+            events_rx,
+            sink,
+            stop.clone(),
+            finished_tx,
+            "nocodec1".to_string(),
+            None,
+        ));
+
+        delivered.await.expect("the script should finish");
+        stop.cancel();
+        let outcome = finished_rx.await.expect("outcome");
+
+        assert!(outcome.audio_path.is_none(), "nothing written, no file");
+        assert!(
+            outcome
+                .degraded
+                .iter()
+                .any(|note| note.contains("the disk said no")),
+            "the Meeting must say why it has no audio, got {:?}",
+            outcome.degraded
+        );
+    }
+
+    #[tokio::test]
     async fn a_recording_produces_an_audio_file() {
-        if skip_without_ffmpeg().await {
-            return;
-        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, delivered) = FixtureSource::with_completion(vec![
             Step::audio(AudioChannel::Mic, 400, 0.4),
@@ -445,9 +504,6 @@ mod tests {
         // exactly that, and does it silently — the file is simply shorter
         // than the meeting was. This scripts far more audio than the
         // recorder can consume promptly, so anything abandoned shows up.
-        if skip_without_ffmpeg().await {
-            return;
-        }
         let dir = tempfile::tempdir().expect("tempdir");
         let mut script = Vec::new();
         for _ in 0..50 {
@@ -481,9 +537,6 @@ mod tests {
 
     #[tokio::test]
     async fn losing_system_audio_does_not_stop_the_recording() {
-        if skip_without_ffmpeg().await {
-            return;
-        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, delivered) = FixtureSource::with_completion(vec![
             Step::audio(AudioChannel::Mic, 200, 0.5),
@@ -516,9 +569,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_device_swap_keeps_one_recording_rather_than_splitting_it() {
-        if skip_without_ffmpeg().await {
-            return;
-        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (source, delivered) = FixtureSource::with_completion(vec![
             Step::audio(AudioChannel::Mic, 200, 0.5),

@@ -15,6 +15,14 @@ Three binaries, and they must travel together:
 | `evertranscript` | The Core: the daemon, the CLI, the tray, the record's only writer |
 | `evertranscript-summarizer` | The local Summary sidecar (ADR-0031) |
 
+There was briefly a fourth. ADR-0032 originally specified a bundled ffmpeg,
+and nothing ever staged one: the Core looked for it on `PATH`, a developer's
+Homebrew build answered on every machine anyone tested on, and a process
+spawned by a Finder-launched app — which inherits almost no `PATH` — found
+nothing and recorded every Meeting with no audio at all. That is what
+reopened the decision. Encoding is now in-process (ADR-0032 as reversed
+2026-09-05), so there is no fourth binary to stage, sign, or forget.
+
 The Core is not a helper the Client spawns for convenience: it is the
 process that records, and it runs at login without a window. A package that
 shipped only the Client would ship a UI for a product that is not there.
@@ -35,7 +43,7 @@ something that looks signed.
 
 These need credentials that are deliberately not in this repository:
 
-1. **Developer ID Application certificate** (macOS) — signs all three
+1. **Developer ID Application certificate** (macOS) — signs all four
    binaries. Their codesigning identifiers must agree, or macOS refuses to
    launch the child processes; the failure presents as the Core "not
    starting", with nothing in any log.
@@ -46,6 +54,23 @@ These need credentials that are deliberately not in this repository:
    SmartScreen warns on every download.
 4. **A tagged release** — the cask and manifest point at release artifacts
    and their checksums, so neither can be generated before one exists.
+5. **LGPL-3.0 compliance for the statically linked MP3 encoder.**
+   `mp3lame-sys` compiles LAME *into* the Core, so the obligation attaches
+   to the binary this product signs and notarizes rather than to a separate
+   executable beside it. That is the material difference from the ffmpeg
+   sidecar this replaced, which was a child process an Operator could even
+   substitute by environment variable: a process boundary makes the
+   obligation light, and linking gives that up. It was taken knowingly —
+   ADR-0032 records why.
+
+   What that means in practice — provide the LAME source at the version
+   linked, and a way for a recipient to relink the Core against their own
+   build of it (dynamic linking, or shipping the object files). There is no
+   permissive alternative to fall back to: every MP3 encoder reachable from
+   Rust is LGPL at the library level, and the `lame` crate's MIT applies to
+   its binding code, not to libmp3lame. Whoever signs off on licensing
+   should confirm the shape of this before the first release that carries
+   it.
 
 ## Entitlements
 

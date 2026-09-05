@@ -15,20 +15,12 @@ use evertranscript_core::Core;
 use evertranscript_core::audio::SAMPLE_RATE;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
-use evertranscript_core::audio::sink::ffmpeg_available;
 use evertranscript_fixtures::BILINGUAL_MEETING;
 use evertranscript_fixtures::ENGLISH_MEETING;
 use evertranscript_fixtures::Fixture;
 use evertranscript_fixtures::similarity::Features;
 use evertranscript_protocol::AudioChannel;
 
-async fn skip_without_ffmpeg() -> bool {
-    if ffmpeg_available().await {
-        return false;
-    }
-    eprintln!("skipping: ffmpeg is not available on this machine");
-    true
-}
 
 /// Decodes an encoded file back to mono f32 so it can be compared with what
 /// was recorded. `channel` picks one side of the stereo pair.
@@ -89,9 +81,6 @@ async fn record_fixture(fixture: Fixture, channel: AudioChannel) -> (PathBuf, te
 
 #[tokio::test]
 async fn english_speech_survives_the_capture_pipeline() {
-    if skip_without_ffmpeg().await {
-        return;
-    }
     let (audio_path, _dir) = record_fixture(ENGLISH_MEETING, AudioChannel::Mic).await;
 
     let original = ENGLISH_MEETING.samples();
@@ -115,9 +104,6 @@ async fn english_speech_survives_the_capture_pipeline() {
 
 #[tokio::test]
 async fn mandarin_and_english_survive_the_capture_pipeline() {
-    if skip_without_ffmpeg().await {
-        return;
-    }
     // Code-switching is the Operator's normal case (story 7), so it gets the
     // same end-to-end proof as English rather than being assumed.
     let (audio_path, _dir) = record_fixture(BILINGUAL_MEETING, AudioChannel::Mic).await;
@@ -134,9 +120,6 @@ async fn mandarin_and_english_survive_the_capture_pipeline() {
 
 #[tokio::test]
 async fn the_channels_stay_on_their_own_sides() {
-    if skip_without_ffmpeg().await {
-        return;
-    }
     // Left is the mic, right is system audio. Getting this backwards would
     // silently invert every attribution the moment diarization lands, so it
     // is asserted rather than assumed.
@@ -161,9 +144,6 @@ async fn the_channels_stay_on_their_own_sides() {
 
 #[tokio::test]
 async fn a_recording_lasts_as_long_as_what_went_into_it() {
-    if skip_without_ffmpeg().await {
-        return;
-    }
     // The property the joiner exists to guarantee: audio length tracks the
     // capture timeline, so a timestamp means the same thing in the audio as
     // in the transcript.

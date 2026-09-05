@@ -34,7 +34,10 @@ ort = "2.0.0-rc.10"
 # and cross-platform on purpose: the alternative is AVFoundation on one
 # platform and Media Foundation on the other, which is two decoders to be
 # wrong in two different ways.
-symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4"] }
+# Reading a finished Meeting's audio back for post-meeting work. `mp3` for
+# what ADR-0032 writes now; `aac`/`isomp4` stay for Meetings recorded before
+# the 2026-09-05 reversal, which keep playing forever (ADR-0009).
+symphonia = { version = "0.5", default-features = false, features = ["aac", "isomp4", "mp3"] }
 chrono = { version = "0.4", features = ["clock", "serde"] }
 clap = { version = "4", features = ["derive"] }
 dirs = "5"

@@ -48,9 +48,8 @@ echo
 if [[ -n "${MACOS_SIGNING_IDENTITY:-}" ]]; then
   echo "== signing =="
   for binary in evertranscript evertranscript-summarizer; do
-    # All three identifiers must agree, or macOS refuses to launch the
-    # children and it presents as the Core "not starting", with nothing in
-    # any log to say why.
+    # Both identifiers must agree, or macOS refuses to launch the child and it
+    # presents as the Core "not starting", with nothing in any log to say why.
     codesign --force --timestamp --options runtime \
       --entitlements "$root/packaging/macos/entitlements.plist" \
       --sign "$MACOS_SIGNING_IDENTITY" "$out/$binary"

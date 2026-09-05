@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { AudioCheckResponse } from "@protocol/AudioCheckResponse";
 import type { JsonRpcNotification } from "@protocol/JsonRpcNotification";
 import type { Meeting } from "@protocol/Meeting";
 import type { ModelProgressParams } from "@protocol/ModelProgressParams";
@@ -482,6 +483,62 @@ export function usePosture() {
   }, []);
 
   return { posture, error };
+}
+
+/**
+ * Can this machine actually record?
+ *
+ * Answered by recording, because on macOS asking does not work: the
+ * system-audio tap is granted whether or not capture was allowed, and a
+ * refused one delivers silence forever without ever failing. Onboarding said
+ * exactly this and then checked nothing — the step rendered a paragraph, the
+ * two strings for its button were translated into both locales and referenced
+ * nowhere, and the first sign of a refused permission was a Meeting that came
+ * out empty.
+ *
+ * The Core does the listening rather than the renderer. Electron reaching a
+ * microphone through `getUserMedia` would prove something true about
+ * Electron; the process that records Meetings is the Core, and it is the one
+ * whose permission matters.
+ */
+export function useAudioCheck(): {
+  report: AudioCheckResponse | null;
+  checking: boolean;
+  error: string | null;
+  check: (seconds?: number) => void;
+} {
+  const [report, setReport] = useState<AudioCheckResponse | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const check = useCallback(
+    (seconds?: number) => {
+      if (checking) return;
+      setChecking(true);
+      setError(null);
+      // The previous verdict goes now rather than when the new one lands: a
+      // stale "both legs work" sitting on screen for the length of the next
+      // check is a claim about a recording that has not happened yet.
+      setReport(null);
+      void (async () => {
+        try {
+          setReport(
+            await window.evertranscript.request<AudioCheckResponse>(
+              "audio/check",
+              seconds === undefined ? {} : { seconds },
+            ),
+          );
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+          setChecking(false);
+        }
+      })();
+    },
+    [checking],
+  );
+
+  return { report, checking, error, check };
 }
 
 /**

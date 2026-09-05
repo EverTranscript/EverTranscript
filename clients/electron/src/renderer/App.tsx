@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 
+import type { AudioLegReport } from "@protocol/AudioLegReport";
 import type { Meeting } from "@protocol/Meeting";
 import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 
 import { isMessageKey, t } from "./i18n";
 import type { Speaker } from "@protocol/Speaker";
 import {
+  useAudioCheck,
   useCore,
   useMeetingWriting,
   useRegistry,
@@ -1245,6 +1247,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
             <p className="mt-2 text-sm text-[--color-ink-muted]">
               {t("onboarding.permissions.body")}
             </p>
+            <AudioCheckPanel />
           </section>
         ) : null}
 
@@ -1320,6 +1323,83 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
  * product started on its own, and a permanent empty progress bar would be
  * its own kind of noise.
  */
+/**
+ * The check the permissions step describes.
+ *
+ * Its copy has always said "this checks by recording, not by asking" — and
+ * the step rendered a paragraph and a Next button. The strings for this
+ * button existed, in both locales, referenced by nothing. What that cost is
+ * specific: a refused system-audio tap delivers silence and never errors, so
+ * the first sign of it was a Meeting that came out empty, hours later, with
+ * nothing to say why.
+ *
+ * Never blocking. A machine can legitimately fail this step — no microphone,
+ * a permission the Operator wants to grant later — and refusing to let them
+ * past a truthful "no" would be worse than the silence it replaces. The
+ * verdict is information, not a gate.
+ */
+function AudioCheckPanel(): React.ReactElement {
+  const { report, checking, error, check } = useAudioCheck();
+
+  const legLabel = (channel: AudioLegReport["channel"]) =>
+    channel === "mic"
+      ? t("onboarding.permissions.leg.mic")
+      : t("onboarding.permissions.leg.system");
+
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        disabled={checking}
+        onClick={() => check()}
+        className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised] disabled:opacity-40"
+      >
+        {checking
+          ? t("onboarding.permissions.checking")
+          : report
+            ? t("onboarding.permissions.recheck")
+            : t("onboarding.permissions.check")}
+      </button>
+
+      {checking ? (
+        <p className="mt-2 text-xs text-[--color-ink-muted]">
+          {t("onboarding.permissions.playSomething")}
+        </p>
+      ) : null}
+
+      {error ? (
+        <p className="mt-2 text-xs text-[--color-danger]">{error}</p>
+      ) : null}
+
+      {report ? (
+        <div className="mt-3 rounded border border-[--color-line] px-3 py-2 text-xs">
+          {report.couldNotStart ? (
+            <p className="mb-2">
+              {t("onboarding.permissions.couldNotStart")} {report.couldNotStart}
+            </p>
+          ) : null}
+          <dl className="space-y-1">
+            {report.legs.map((leg) => (
+              <div key={leg.channel} className="flex justify-between gap-3">
+                <dt className="text-[--color-ink-muted]">
+                  {legLabel(leg.channel)}
+                </dt>
+                <dd className="text-right">
+                  {t(`onboarding.permissions.state.${leg.state}`)}
+                  {leg.reason ? ` — ${leg.reason}` : ""}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <p className="mt-2">
+            {t(`onboarding.permissions.verdict.${report.verdict}`)}
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ModelDownload(): React.ReactElement | null {
   const { active, cancel } = useModelDownload();
   if (!active) return null;

@@ -6,14 +6,18 @@
 //! 1. **Absolute capture timestamps.** Every frame is stamped when captured,
 //!    on one clock shared by both channels. Audio position and transcript
 //!    timing both derive from it, so a capture gap is explicit rather than
-//!    silently shortening the file. Both open-source competitors omit this
-//!    and ship an audio-vs-transcript drift that grows with every dropout.
+//!    silently shortening the file: without it a transcript drifts further
+//!    from its audio with every dropout and is correct nowhere after the
+//!    first one. Where other products land is recorded in
+//!    `docs/competitive-facts-*.md`, dated and marked for re-verification,
+//!    rather than asserted here where it cannot be checked and rots quietly.
 //! 2. **The session owns the sink; capture streams are replaceable leaves.**
 //!    A device swap replaces a stream, never the Meeting.
 //! 3. **The legs are independent.** The system-audio leg failing must not
 //!    stop the microphone, and neither may stop the recording.
 
 pub mod aec;
+pub mod check;
 pub mod dsp;
 pub mod fixture;
 pub mod joiner;
@@ -25,6 +29,13 @@ pub mod supervisor;
 pub mod system;
 
 use evertranscript_protocol::AudioChannel;
+
+/// The hand-off between capture and transcription, re-exported here because
+/// this is where the seam is declared — beside `AudioSource`, `CaptureClock`
+/// and `CaptureOffset` — rather than one level down in the joiner that
+/// happens to build it. It carries the shared-clock offset, which is what
+/// lets a Transcript segment and the audio it came from agree (1, above).
+pub use joiner::StereoBlock;
 
 /// Capture sample rate. 48 kHz is what both platforms hand us natively;
 /// the 16 kHz ASR needs is resampled downstream (ticket 06).

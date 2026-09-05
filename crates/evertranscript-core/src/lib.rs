@@ -74,10 +74,12 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
 
     let core = Core::new()?;
 
-    // Before serving anything: merge audio checkpoints a previous run left
-    // behind. A Core that was killed mid-meeting gets its recording back,
-    // minus at most the checkpoint that was in flight.
-    core.recover_interrupted_audio().await;
+    // Before serving anything: settle whatever a previous run left half
+    // done. A Core that was killed mid-meeting gets its recording back, minus
+    // at most the checkpoint that was in flight — and the Meeting it was
+    // killed inside gets closed and told what it lost, rather than staying
+    // open and blocking the next one.
+    core.reconcile_after_restart().await;
 
     let (events_tx, events_rx) = mpsc::channel(transport::CHANNEL_CAPACITY);
 

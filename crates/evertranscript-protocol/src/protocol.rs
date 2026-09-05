@@ -209,6 +209,19 @@ client_request_definitions! {
         params: HistorySearchParams,
         response: HistorySearchResponse,
     },
+    /// Records for a few seconds and reports what actually arrived.
+    ///
+    /// A question about permission that is answered by recording rather than
+    /// by asking, because on macOS asking does not work: the system-audio tap
+    /// is granted whether or not capture was allowed, and a refused one
+    /// delivers silence forever without ever failing. The Core is the process
+    /// that records in production, so it is the process that must be asked —
+    /// which is why this is a request rather than something the Client could
+    /// do for itself with `getUserMedia`.
+    AudioCheck => "audio/check" {
+        params: AudioCheckParams,
+        response: AudioCheckResponse,
+    },
     /// What the Core has on disk and what it still needs.
     ModelsStatus => "models/status" {
         params: ModelsStatusParams,
@@ -1026,6 +1039,87 @@ pub struct TranscriptCaptionsDroppedParams {
 }
 
 // -------------------------------------------------------------------- Models
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AudioCheckParams {
+    /// How long to listen. Longer is more conclusive: a refused system-audio
+    /// permission looks exactly like nobody talking until enough has been
+    /// played to prove otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub seconds: Option<u64>,
+}
+
+/// What one capture leg did during the check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AudioLegState {
+    /// Audio arrived and some of it was not silence.
+    Working,
+    /// Audio arrived and every sample of it was zero. This is what a refused
+    /// permission looks like, and it is the whole reason the check records.
+    Silent,
+    /// Audio arrived, all of it silence, and nothing was playing — so this
+    /// leg was never asked a question it could answer. Not the same as
+    /// `Silent`, and reporting it as such sends the Operator to System
+    /// Settings over nothing at all.
+    NotTested,
+    /// The leg delivered nothing whatsoever.
+    NothingCaptured,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AudioLegReport {
+    pub channel: AudioChannel,
+    pub state: AudioLegState,
+    /// How much audio arrived on this leg.
+    #[ts(type = "number")]
+    pub milliseconds: u64,
+    /// The loudest sample seen, 0.0 to 1.0.
+    pub peak: f32,
+    /// What the capture layer said went wrong, when it said anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+}
+
+/// What the check adds up to. Each surface writes its own words from this:
+/// the CLI prints English, the Client looks up a translation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum AudioCheckVerdict {
+    /// Both legs delivered real audio.
+    BothLegsWork,
+    /// The microphone works and nothing was played, so the other leg was
+    /// never tested. Saying "one leg works" here would answer a question
+    /// this run did not ask.
+    MicrophoneWorksOtherUntested,
+    /// One leg works and the other does not. Meetings record, marked partial.
+    OneLegWorks,
+    /// Nothing arrived on either leg. Meetings would record nothing.
+    NothingCaptured,
+    /// Nothing could be concluded — play some audio and check again.
+    NothingTested,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct AudioCheckResponse {
+    pub legs: Vec<AudioLegReport>,
+    pub verdict: AudioCheckVerdict,
+    /// Set when capture could not be started at all, which is a different
+    /// answer from "started and heard nothing".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub could_not_start: Option<String>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

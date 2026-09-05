@@ -274,11 +274,37 @@ async fn a_meeting_auto_record_started_recovers_from_a_crash_like_any_other() {
 
     // A new Core over the same History, as the next start would be.
     let recovered = Core::with_history_dir_acknowledged(history).expect("core");
-    recovered.recover_interrupted_audio().await;
+    recovered.reconcile_after_restart().await;
 
     let meetings = recovered.list_meetings(10, 0).await.expect("list");
     assert_eq!(meetings.len(), 1, "the auto-started Meeting must survive");
     assert_eq!(meetings[0].id, started, "and be the same one");
+
+    // Surviving is not enough, and this is the half the test used to stop
+    // short of. A row left `active` keeps accruing wall-clock until something
+    // stops it, and `start_meeting_armed` refuses to record while one is —
+    // so a Core killed once produced a Meeting of invented length and then
+    // declined to record the next one.
+    assert!(
+        meetings[0].ended_at.is_some(),
+        "an interrupted Meeting must be closed, not left running forever"
+    );
+    assert!(
+        meetings[0]
+            .audio_notes
+            .iter()
+            .any(|note| note.contains("interrupted")),
+        "and it must say it was cut short, or it reads as a Meeting nobody \
+         spoke in: got {:?}",
+        meetings[0].audio_notes
+    );
+
+    // The proof that closing it unblocks the next recording, which is the
+    // consequence an Operator actually meets.
+    recovered
+        .start_meeting(None, Some("us.zoom.xos".to_string()))
+        .await
+        .expect("a Meeting must be startable after recovery");
 }
 
 #[tokio::test]
