@@ -144,6 +144,7 @@ pub struct Posture {
 /// it on.
 pub fn sanctioned_traffic(
     updates_enabled: bool,
+    models_missing: bool,
     summary_backend: Option<&str>,
     summary_base_url: Option<&str>,
 ) -> Vec<SanctionedTraffic> {
@@ -166,13 +167,22 @@ pub fn sanctioned_traffic(
         SanctionedTraffic {
             name: "Model downloads",
             host: crate::models::registry::base_url(),
-            what_it_sends: "A request for a named file, at a moment you \
-                            asked for it. Each one is checked against a \
+            what_it_sends: "A request for a named file, whenever one this \
+                            app needs is missing. Each is checked against a \
                             pinned checksum.",
-            // Only when something is missing and the Operator asks. Never
-            // in the background.
-            enabled: false,
-            disableable: true,
+            // **Derived, and it used to be a hardcoded `false`** — with the
+            // comment "only when the Operator asks; never in the background",
+            // which stopped being true when a fresh install began fetching
+            // unasked (ADR-0034, amended 2026-09-01) and is now wrong twice
+            // over: any missing model is fetched at every start and retried
+            // until it arrives. This surface exists to be checkable, and a
+            // constant is not a fact about this installation.
+            enabled: models_missing,
+            // There is no switch. The product cannot transcribe without these,
+            // so "turn it off" would mean "stop working" — which is what
+            // deleting the app is for. Saying it is disableable when nothing
+            // disables it is the reassurance this module forbids.
+            disableable: false,
         },
         SanctionedTraffic {
             name: "Cloud Summary",
@@ -206,22 +216,51 @@ mod tests {
         // ADR-0034 makes this list closed. A fourth entry is a
         // milestone-sized decision, and this test is what makes adding one
         // deliberate rather than incidental.
-        assert_eq!(sanctioned_traffic(true, None, None).len(), 3);
+        assert_eq!(sanctioned_traffic(true, false, None, None).len(), 3);
     }
 
     #[test]
     fn with_local_summary_and_updates_off_nothing_is_enabled() {
         // The guarantee in its final form, computed rather than asserted.
-        let traffic = sanctioned_traffic(false, Some("local"), None);
+        let traffic = sanctioned_traffic(false, false, Some("local"), None);
         assert!(traffic.iter().all(|entry| !entry.enabled));
         assert!(currently_silent(&traffic, true));
+    }
+
+    #[test]
+    fn a_missing_model_shows_up_here_rather_than_being_denied() {
+        // This entry used to be a hardcoded `enabled: false` with the comment
+        // "only when the Operator asks; never in the background" — which
+        // stopped being true when a fresh install began fetching unasked, and
+        // is now wrong twice over: any missing model is fetched at every start
+        // and retried until it arrives. A surface that exists to be checkable
+        // cannot answer from a constant.
+        let missing = sanctioned_traffic(false, true, Some("local"), None);
+        let downloads = missing
+            .iter()
+            .find(|entry| entry.name == "Model downloads")
+            .expect("the entry exists");
+        assert!(downloads.enabled, "a download is going to happen; say so");
+        assert!(
+            !downloads.disableable,
+            "there is no switch: the product cannot transcribe without them"
+        );
+        assert!(!currently_silent(&missing, false));
+
+        let present = sanctioned_traffic(false, false, Some("local"), None);
+        assert!(
+            present
+                .iter()
+                .all(|entry| !entry.enabled),
+            "with everything on disk and updates off, nothing is enabled"
+        );
     }
 
     #[test]
     fn choosing_a_cloud_backend_shows_up_here_immediately() {
         // The surface must not keep saying "nothing leaves this machine"
         // after somebody turned on the one thing that does.
-        let traffic = sanctioned_traffic(false, Some("openai"), None);
+        let traffic = sanctioned_traffic(false, false, Some("openai"), None);
         let summary = traffic
             .iter()
             .find(|entry| entry.name == "Cloud Summary")
@@ -233,7 +272,7 @@ mod tests {
 
     #[test]
     fn a_custom_endpoint_is_named_rather_than_hidden() {
-        let traffic = sanctioned_traffic(false, Some("my-box"), Some("https://llm.example/v1"));
+        let traffic = sanctioned_traffic(false, false, Some("my-box"), Some("https://llm.example/v1"));
         let summary = traffic
             .iter()
             .find(|entry| entry.name == "Cloud Summary")
@@ -247,13 +286,13 @@ mod tests {
         // The update check is the reason the switch exists. Claiming
         // silence while it is on would be false in the one direction that
         // matters.
-        let traffic = sanctioned_traffic(true, Some("local"), None);
+        let traffic = sanctioned_traffic(true, false, Some("local"), None);
         assert!(!currently_silent(&traffic, true));
     }
 
     #[test]
     fn a_missing_model_means_not_silent_because_it_will_be_fetched() {
-        let traffic = sanctioned_traffic(false, Some("local"), None);
+        let traffic = sanctioned_traffic(false, false, Some("local"), None);
         assert!(!currently_silent(&traffic, false));
     }
 

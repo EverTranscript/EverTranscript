@@ -610,6 +610,7 @@ impl Core {
 
         let traffic = crate::posture::sanctioned_traffic(
             settings.check_for_updates,
+            !all_present,
             settings.summary_backend.as_deref(),
             settings.summary_base_url.as_deref(),
         );
