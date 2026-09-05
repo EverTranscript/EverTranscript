@@ -318,32 +318,6 @@ pub fn delete(connection: &Connection, id: &str) -> Result<DeletedMeeting> {
         "DELETE FROM search_index WHERE meeting_id = ?1",
         params![id],
     )?;
-    // **And every Speaker that was only ever heard here.**
-    //
-    // A Speaker exists because a voice was heard; one heard nowhere is not a
-    // person the record knows, it is a Voiceprint with nothing attached. That
-    // matters more than tidiness: a Voiceprint is regulated biometric data in
-    // some places (ADR-0035), so leaving one behind means the Operator deleted
-    // a Meeting and the biometric derived from it outlived the deletion, with
-    // nothing in the product to show it had.
-    //
-    // Only the orphans. A Speaker heard in other Meetings is a person the
-    // record still knows, and deleting one Meeting must not erase them —
-    // that is what Voiceprint deletion is for, and ADR-0009 keeps the two
-    // operations separate on purpose.
-    connection.execute(
-        "DELETE FROM speaker_exemplars WHERE speaker_id IN (
-             SELECT id FROM speakers WHERE id NOT IN
-                 (SELECT DISTINCT speaker_id FROM transcript_segments
-                  WHERE speaker_id IS NOT NULL))",
-        [],
-    )?;
-    connection.execute(
-        "DELETE FROM speakers WHERE id NOT IN
-             (SELECT DISTINCT speaker_id FROM transcript_segments
-              WHERE speaker_id IS NOT NULL)",
-        [],
-    )?;
     Ok(DeletedMeeting {
         existed: true,
         mirror_filename: meeting.mirror_filename,
@@ -560,66 +534,6 @@ mod tests {
         crate::store::schema::configure(&connection).expect("configure");
         crate::store::schema::migrate(&mut connection).expect("migrate");
         connection
-    }
-
-    #[test]
-    fn deleting_a_meeting_takes_the_voices_only_it_ever_heard() {
-        // A Voiceprint is regulated biometric data in some places (ADR-0035),
-        // so one that outlives every Meeting it came from means the Operator
-        // deleted their record and the biometric survived it, with nothing in
-        // the product to show that had happened. Found with four such
-        // Speakers sitting in a Registry whose Meetings were all gone.
-        //
-        // Only the orphans, though: a Speaker heard elsewhere is a person the
-        // record still knows, and ADR-0009 keeps whole-Meeting deletion and
-        // Voiceprint deletion as separate acts on purpose.
-        let connection = connection();
-        let kept = start(&connection, None, Some("Zoom")).expect("start");
-        stop(&connection, &kept.id).expect("stop");
-        let doomed = start(&connection, None, Some("Zoom")).expect("start");
-        stop(&connection, &doomed.id).expect("stop");
-
-        let heard_twice = crate::store::speakers::create(&connection, false).expect("speaker");
-        let heard_once = crate::store::speakers::create(&connection, false).expect("speaker");
-        for (meeting, speaker) in [
-            (&kept.id, &heard_twice.id),
-            (&doomed.id, &heard_twice.id),
-            (&doomed.id, &heard_once.id),
-        ] {
-            let segment = append_segment(
-                &connection,
-                meeting,
-                evertranscript_protocol::AudioChannel::System,
-                0,
-                1000,
-                "hello",
-            )
-            .expect("segment");
-            connection
-                .execute(
-                    "UPDATE transcript_segments SET speaker_id = ?2 WHERE id = ?1",
-                    params![segment.id, speaker],
-                )
-                .expect("attribute");
-        }
-
-        delete(&connection, &doomed.id).expect("delete");
-
-        let remaining: Vec<String> = connection
-            .prepare("SELECT id FROM speakers")
-            .expect("prepare")
-            .query_map([], |row| row.get(0))
-            .expect("query")
-            .collect::<std::result::Result<_, _>>()
-            .expect("rows");
-        assert!(
-            remaining.contains(&heard_twice.id),
-            "a Speaker heard in another Meeting is a person the record still knows"
-        );
-        assert!(
-            !remaining.contains(&heard_once.id),
-            "a Speaker heard nowhere is a Voiceprint with nothing attached"
-        );
     }
 
     #[test]
