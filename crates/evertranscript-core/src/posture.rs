@@ -62,7 +62,9 @@ pub const FORECLOSED: &[Foreclosed] = &[
     Foreclosed {
         capability: "Indexes the filesystem",
         proof: "The only paths it opens are its own History folder and its \
-                model directory",
+                model directory — checked by running a recording and reading \
+                the process's open files, in tests/guarantees.rs, rather than \
+                promised here",
     },
     Foreclosed {
         capability: "Reads contacts",

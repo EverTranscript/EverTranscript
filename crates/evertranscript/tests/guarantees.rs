@@ -57,6 +57,34 @@ fn wait_for_core(history: &Path, runtime: &Path) {
 /// full recording cycle opens nothing — matters equally on both platforms,
 /// so it is asked for in each platform's own dialect rather than skipped on
 /// one of them.
+/// Regular files the process has open, as absolute paths.
+///
+/// The companion to `open_sockets`, and it exists because one foreclosure had
+/// no test behind it. "Indexes the filesystem" is answered on the guarantees
+/// page with "the only paths it opens are its own History folder and its
+/// model directory" — a claim about behaviour, in a column whose job is to
+/// name where an evaluator can check it, with nothing to check.
+#[cfg(not(windows))]
+fn open_files(pid: u32) -> Vec<String> {
+    let output = Command::new("lsof")
+        .args(["-p", &pid.to_string(), "-F", "tn"])
+        .output()
+        .expect("could not ask this platform what files are open");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut files = Vec::new();
+    let mut is_regular = false;
+    for line in text.lines() {
+        match line.split_at(1) {
+            ("t", kind) => is_regular = kind == "REG",
+            ("n", name) if is_regular && name.starts_with('/') => {
+                files.push(name.to_string())
+            }
+            _ => {}
+        }
+    }
+    files
+}
+
 fn open_sockets(pid: u32) -> String {
     #[cfg(windows)]
     let output = Command::new("netstat").args(["-ano"]).output();
@@ -205,6 +233,65 @@ fn the_binary_links_no_screen_capture_or_location_framework() {
             "CloudKit is tolerated only as AppKit's dependency, and AppKit is absent:\n{linked}"
         );
     }
+}
+
+#[cfg(not(windows))]
+#[test]
+fn a_recording_opens_no_files_outside_its_own_folders() {
+    // The proof text for "Indexes the filesystem" promises this and, until
+    // now, nothing checked it. Every other foreclosure on that page is
+    // asserted against the built artifact; this one was an assertion about
+    // behaviour with no behaviour test behind it.
+    //
+    // Its own binary, libraries and locale data are not the claim — the claim
+    // is about the Operator's documents. So what is judged is everything
+    // under the home directory that is not this product's own.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let history = dir.path().join("History");
+    let runtime = dir.path().join("run");
+
+    let mut daemon = Command::new(binary())
+        .arg("daemon")
+        .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
+        .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
+        .env(evertranscript_core::tray::DISABLE_ENV, "1")
+        .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
+        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("starting the Core");
+    wait_for_core(&history, &runtime);
+
+    run(&history, &runtime, &["acknowledge"]);
+    run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    run(&history, &runtime, &["record", "stop"]);
+
+    let files = open_files(daemon.id());
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let ours = [
+        dir.path().to_string_lossy().to_string(),
+        format!("{home}/Library/Application Support/EverTranscript"),
+        format!("{home}/Library/Caches"),
+        // Its own executable, which a process always holds open and which
+        // lives under $HOME whenever the checkout does.
+        binary().to_string_lossy().to_string(),
+    ];
+    let strangers: Vec<&String> = files
+        .iter()
+        .filter(|path| !home.is_empty() && path.starts_with(&home))
+        .filter(|path| !ours.iter().any(|prefix| path.starts_with(prefix)))
+        .collect();
+
+    assert!(
+        strangers.is_empty(),
+        "the Core opened files of the Operator's that are none of its \
+         business: {strangers:?}"
+    );
 }
 
 #[test]
