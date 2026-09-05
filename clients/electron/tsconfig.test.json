@@ -6,7 +6,13 @@
   },
   "include": [
     "src/main/**/*",
-    "src/preload/**/*"
+    "src/preload/**/*",
+    // Renderer modules that are plain TypeScript. Not `src/renderer/**/*`:
+    // this extends the main process's config, where JSX does not compile —
+    // which is why renderer logic has to be split out of the components to be
+    // testable at all.
+    "src/renderer/summary-markdown.ts",
+    "src/renderer/summary-markdown.test.ts"
   ],
   "exclude": []
 }

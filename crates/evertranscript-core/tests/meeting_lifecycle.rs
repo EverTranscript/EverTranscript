@@ -136,7 +136,7 @@ async fn recording_a_meeting_produces_a_mirror_on_disk() {
     assert!(
         name.ends_with(&format!(
             "-{}.md",
-            &started.meeting.id.replace('-', "")[..8]
+            evertranscript_core::mirror::short_id(&started.meeting.id)
         )),
         "the filename must carry the id8: {name}"
     );

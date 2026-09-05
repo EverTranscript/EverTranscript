@@ -16,7 +16,7 @@
     "start": "pnpm build && electron .",
     "check:translations": "node scripts/check-translations.mjs",
     "package": "pnpm build && electron-builder --publish never",
-    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/main/*.test.js\""
+    "test": "tsc -p tsconfig.test.json && node --test \"dist-test/**/*.test.js\""
   },
   "dependencies": {
     "react": "^19.2.0",

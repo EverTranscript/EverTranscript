@@ -5,6 +5,7 @@ import type { Meeting } from "@protocol/Meeting";
 import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 
 import { isMessageKey, t } from "./i18n";
+import { parseSpans, parseSummary } from "./summary-markdown";
 import type { Speaker } from "@protocol/Speaker";
 import {
   useAudioCheck,
@@ -1416,12 +1417,11 @@ function AudioCheckPanel(): React.ReactElement {
  * `**Discussion:**` and a row of pipe characters. This is the product's
  * headline output; showing it as syntax undersells it badly.
  *
- * Deliberately small, and deliberately not `dangerouslySetInnerHTML`. This
- * text is written by a language model, so it is untrusted input: building
- * React elements makes injection impossible by construction rather than by
- * sanitising. The subset is what Summaries actually contain — headings, bold,
- * tables, bullets — and anything outside it falls through as plain text,
- * which is exactly the old behaviour and so cannot be a regression.
+ * The parsing lives in `summary-markdown.ts` so it can be run by a test
+ * rather than reasoned about; this is only the rendering. Deliberately not
+ * `dangerouslySetInnerHTML`: Summary text is written by a language model, so
+ * it is untrusted input, and building React elements makes injection
+ * impossible by construction rather than by sanitising.
  */
 function SummaryProse({
   text,
@@ -1430,141 +1430,88 @@ function SummaryProse({
   text: string;
   className?: string;
 }): React.JSX.Element {
-  const lines = text.split("\n");
-  const blocks: React.JSX.Element[] = [];
-  let index = 0;
-
-  const isTableRow = (line: string) => /^\s*\|.*\|\s*$/.test(line);
-  const cells = (line: string) =>
-    line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
-  // `|---|:--:|` and friends: the row that says "the one above was a header".
-  const isDivider = (line: string) =>
-    isTableRow(line) && cells(line).every((cell) => /^:?-{2,}:?$/.test(cell));
-
-  while (index < lines.length) {
-    const line = lines[index] ?? "";
-
-    if (line.trim() === "") {
-      index += 1;
-      continue;
-    }
-
-    if (isTableRow(line)) {
-      const rows: string[][] = [];
-      let header: string[] | null = null;
-      while (index < lines.length && isTableRow(lines[index] ?? "")) {
-        const current = lines[index] ?? "";
-        if (isDivider(current)) {
-          header = rows.pop() ?? null;
-        } else {
-          rows.push(cells(current));
+  return (
+    <div className={className}>
+      {parseSummary(text).map((block, index) => {
+        switch (block.kind) {
+          case "heading":
+            return (
+              <p key={index} className="mt-3 font-semibold first:mt-0">
+                <Inline text={block.text} />
+              </p>
+            );
+          case "bullets":
+            return (
+              <ul key={index} className="mt-2 list-disc pl-5">
+                {block.items.map((item, itemIndex) => (
+                  <li key={itemIndex}>
+                    <Inline text={item} />
+                  </li>
+                ))}
+              </ul>
+            );
+          case "table":
+            return (
+              <div key={index} className="mt-2 overflow-x-auto">
+                <table className="w-full border-collapse text-left text-xs">
+                  {block.header ? (
+                    <thead>
+                      <tr>
+                        {block.header.map((cell, column) => (
+                          <th
+                            key={column}
+                            className="border-b border-[--color-line] px-2 py-1 font-medium"
+                          >
+                            <Inline text={cell} />
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                  ) : null}
+                  <tbody>
+                    {block.rows.map((row, rowIndex) => (
+                      <tr key={rowIndex}>
+                        {row.map((cell, column) => (
+                          <td
+                            key={column}
+                            className="border-b border-[--color-line] px-2 py-1 align-top"
+                          >
+                            <Inline text={cell} />
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          default:
+            return (
+              <p key={index} className="mt-2 first:mt-0">
+                <Inline text={block.text} />
+              </p>
+            );
         }
-        index += 1;
-      }
-      blocks.push(
-        <div key={blocks.length} className="mt-2 overflow-x-auto">
-          <table className="w-full border-collapse text-left text-xs">
-            {header ? (
-              <thead>
-                <tr>
-                  {header.map((cell, column) => (
-                    <th
-                      key={column}
-                      className="border-b border-[--color-line] px-2 py-1 font-medium"
-                    >
-                      <Inline text={cell} />
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-            ) : null}
-            <tbody>
-              {rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
-                  {row.map((cell, column) => (
-                    <td
-                      key={column}
-                      className="border-b border-[--color-line] px-2 py-1 align-top"
-                    >
-                      <Inline text={cell} />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>,
-      );
-      continue;
-    }
-
-    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
-    if (heading) {
-      blocks.push(
-        <p key={blocks.length} className="mt-3 font-semibold first:mt-0">
-          <Inline text={heading[2] ?? ""} />
-        </p>,
-      );
-      index += 1;
-      continue;
-    }
-
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items: string[] = [];
-      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index] ?? "")) {
-        items.push((lines[index] ?? "").replace(/^\s*[-*]\s+/, ""));
-        index += 1;
-      }
-      blocks.push(
-        <ul key={blocks.length} className="mt-2 list-disc pl-5">
-          {items.map((item, itemIndex) => (
-            <li key={itemIndex}>
-              <Inline text={item} />
-            </li>
-          ))}
-        </ul>,
-      );
-      continue;
-    }
-
-    const paragraph: string[] = [];
-    while (
-      index < lines.length &&
-      (lines[index] ?? "").trim() !== "" &&
-      !isTableRow(lines[index] ?? "") &&
-      !/^#{1,4}\s/.test(lines[index] ?? "") &&
-      !/^\s*[-*]\s+/.test(lines[index] ?? "")
-    ) {
-      paragraph.push(lines[index] ?? "");
-      index += 1;
-    }
-    blocks.push(
-      <p key={blocks.length} className="mt-2 first:mt-0">
-        <Inline text={paragraph.join(" ")} />
-      </p>,
-    );
-  }
-
-  return <div className={className}>{blocks}</div>;
+      })}
+    </div>
+  );
 }
 
-/** `**bold**` and `` `code` ``, which is all Summaries use inline. */
 function Inline({ text }: { text: string }): React.JSX.Element {
-  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
   return (
     <>
-      {parts.map((part, index) => {
-        if (part.startsWith("**") && part.endsWith("**")) {
-          return <strong key={index}>{part.slice(2, -2)}</strong>;
+      {parseSpans(text).map((span, index) => {
+        if (span.kind === "strong") {
+          return <strong key={index}>{span.text}</strong>;
         }
-        if (part.startsWith("`") && part.endsWith("`") && part.length > 1) {
+        if (span.kind === "code") {
           return (
             <code key={index} className="font-mono text-xs">
-              {part.slice(1, -1)}
+              {span.text}
             </code>
           );
         }
-        return <span key={index}>{part}</span>;
+        return <span key={index}>{span.text}</span>;
       })}
     </>
   );

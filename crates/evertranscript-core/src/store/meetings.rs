@@ -211,10 +211,10 @@ pub fn last_touched(connection: &Connection, id: &str) -> Result<Option<String>>
 
 /// Meetings whose id starts with `prefix`.
 ///
-/// The audio and Mirror filenames key on the id8 (`mirror::id8`), so coming
-/// back the other way — from a file on disk to the Meeting it belongs to —
-/// starts here. Callers confirm with `id8` itself rather than trusting the
-/// prefix, so there is still one definition of what an id8 is.
+/// The audio and Mirror filenames key on the marker (`mirror::short_id`), so
+/// coming back the other way — from a file on disk to the Meeting it belongs
+/// to — starts here. Callers confirm with `short_id` itself rather than
+/// trusting the prefix, so there is still one definition of what a marker is.
 pub fn with_id_prefix(connection: &Connection, prefix: &str) -> Result<Vec<Meeting>> {
     let sql = format!("SELECT {MEETING_COLUMNS} FROM meetings WHERE id LIKE ?1 ESCAPE '\\'");
     let mut statement = connection.prepare(&sql)?;

@@ -1428,7 +1428,7 @@ impl Core {
         // MP3 is a frame stream, so what reached disk is already a recording
         // (ADR-0032). "Recovery" is therefore a question about one path — and
         // about the row, which is the half that used to be missed.
-        let key = mirror::id8(&meeting.id);
+        let key = mirror::short_id(&meeting.id);
         let recovered = audio::sink::orphaned_audio(&self.audio_dir(), &key);
         if let Some((path, bytes)) = &recovered {
             let relative = self.relative_to_history(path);
@@ -1602,7 +1602,7 @@ impl Core {
         match audio::recorder::Recorder::start(
             source,
             self.audio_dir(),
-            mirror::id8(&meeting.id),
+            mirror::short_id(&meeting.id),
             captions,
         ) {
             Ok(recorder) => {

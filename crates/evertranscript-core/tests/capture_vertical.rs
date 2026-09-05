@@ -295,11 +295,10 @@ async fn audio_from_an_interrupted_run_is_recovered_on_the_next_start() {
 
 /// Bytes of kept audio on disk for a Meeting, keyed the way the sink keys it.
 fn audio_bytes(history_dir: &std::path::Path, meeting_id: &str) -> u64 {
-    let key: String = meeting_id
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .take(8)
-        .collect();
+    // The same marker the sink uses, rather than a copy of the rule: this
+    // helper hard-coded 8 and silently stopped finding files when the marker
+    // widened to 12 to stop back-to-back Meetings sharing a filename.
+    let key = evertranscript_core::mirror::short_id(meeting_id);
     std::fs::metadata(history_dir.join(format!(".data/audio/{key}.mp3")))
         .map(|meta| meta.len())
         .unwrap_or(0)

@@ -33,14 +33,35 @@ const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(250);
 /// How many Meetings to rebuild per pass.
 const BATCH: u32 = 64;
 
-/// The first 8 hex characters of the Meeting id: the durable marker in every
+/// How many hex characters of the Meeting id name its files.
+///
+/// **Twelve, not eight, and the difference is data loss.** Meeting ids are
+/// UUIDv7, which begins with a 48-bit millisecond timestamp — so the first
+/// *eight* hex characters are the top 32 bits of that clock, and they only
+/// change every 2^16 ms. Every Meeting started inside the same ~65 seconds
+/// therefore shared a marker, and with it an audio filename and a Mirror
+/// filename.
+///
+/// Reproduced rather than deduced: two back-to-back recordings both became
+/// `01a07231`, one `01a07231.mp3` existed where there should have been two,
+/// and the first Meeting's audio was gone — `File::create` truncates. Both
+/// rows pointed at it, so the record said the budget meeting contained the
+/// migration meeting's audio. ADR-0009 makes the record immutable and this
+/// quietly rewrote it.
+///
+/// Twelve covers the whole millisecond, and two Meetings cannot start in the
+/// same one: `start_meeting_armed` refuses while another is active, so a
+/// second start is separated by at least a stop and its database write.
+const MARKER_CHARS: usize = 12;
+
+/// The leading hex characters of the Meeting id: the durable marker in every
 /// Mirror filename. Retitles rename the file; this is what survives, so it is
 /// what outside references should key on.
-pub fn id8(meeting_id: &str) -> String {
+pub fn short_id(meeting_id: &str) -> String {
     meeting_id
         .chars()
         .filter(|c| c.is_ascii_hexdigit())
-        .take(8)
+        .take(MARKER_CHARS)
         .collect()
 }
 
@@ -74,7 +95,7 @@ pub fn slugify(input: &str) -> String {
         .to_string()
 }
 
-/// `YYYY-MM-DD-<slug>-<id8>.md` (ADR-0035 as amended).
+/// `YYYY-MM-DD-<slug>-<marker>.md` (ADR-0035 as amended).
 pub fn filename(meeting: &Meeting) -> String {
     let date = meetings::local_date(&meeting.started_at);
     let source = meeting
@@ -91,7 +112,7 @@ pub fn filename(meeting: &Meeting) -> String {
             slug
         }
     };
-    format!("{date}-{slug}-{}.md", id8(&meeting.id))
+    format!("{date}-{slug}-{}.md", short_id(&meeting.id))
 }
 
 /// Renders the Meeting as its Mirror.
@@ -574,16 +595,39 @@ mod tests {
 
     #[test]
     fn an_untitled_meeting_is_named_for_its_app_and_date() {
-        assert_eq!(filename(&meeting()), "2026-08-27-zoom-0199a1b2.md");
+        assert_eq!(filename(&meeting()), "2026-08-27-zoom-0199a1b2c3d4.md");
     }
 
     #[test]
-    fn titling_a_meeting_renames_its_mirror_but_keeps_the_id8() {
+    fn two_meetings_a_second_apart_do_not_share_a_filename() {
+        // The bug this length exists for. UUIDv7 opens with a 48-bit
+        // millisecond clock, so the first eight hex characters change only
+        // every ~65 seconds — every Meeting inside one such window shared an
+        // audio filename, and `File::create` truncates. Two back-to-back
+        // recordings really did collapse into one `01a07231.mp3`, with the
+        // earlier Meeting's audio destroyed and its row still pointing at the
+        // later one's.
+        let first = "01a07231-09cc-7a11-b0cb-9f2060337cf3";
+        let second = "01a07231-2b8f-7ab3-b253-46326b8a205a";
+        assert_eq!(
+            first[..8],
+            second[..8],
+            "these are the real ids, and they did share their first eight"
+        );
+        assert_ne!(
+            short_id(first),
+            short_id(second),
+            "so the marker must reach past the coarse half of the clock"
+        );
+    }
+
+    #[test]
+    fn titling_a_meeting_renames_its_mirror_but_keeps_its_marker() {
         let mut meeting = meeting();
         meeting.title = Some("Frank / Jack Sync-Up".to_string());
         assert_eq!(
             filename(&meeting),
-            "2026-08-27-frank-jack-sync-up-0199a1b2.md"
+            "2026-08-27-frank-jack-sync-up-0199a1b2c3d4.md"
         );
     }
 
@@ -591,14 +635,14 @@ mod tests {
     fn chinese_titles_stay_chinese() {
         let mut meeting = meeting();
         meeting.title = Some("预算评审 Q3".to_string());
-        assert_eq!(filename(&meeting), "2026-08-27-预算评审-q3-0199a1b2.md");
+        assert_eq!(filename(&meeting), "2026-08-27-预算评审-q3-0199a1b2c3d4.md");
     }
 
     #[test]
     fn a_title_of_only_punctuation_still_produces_a_usable_name() {
         let mut meeting = meeting();
         meeting.title = Some("!!! ??? ...".to_string());
-        assert_eq!(filename(&meeting), "2026-08-27-meeting-0199a1b2.md");
+        assert_eq!(filename(&meeting), "2026-08-27-meeting-0199a1b2c3d4.md");
     }
 
     #[test]

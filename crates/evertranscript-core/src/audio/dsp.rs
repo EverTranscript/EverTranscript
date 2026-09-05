@@ -29,6 +29,22 @@ pub const TARGET_LUFS: f64 = -23.0;
 /// tone that a model then tries to transcribe.
 const MAX_GAIN: f32 = 8.0;
 
+/// Below this, a channel is treated as holding nothing worth lifting.
+///
+/// Amplifying a channel with no speech in it amplifies whatever noise it does
+/// have, and the consequence is not merely ugly: whisper *invents* words on
+/// near-silence. A cancelled microphone channel came back as "Það er hér" and
+/// "Gracias" — confident, fabricated, and attributed to the Operator, because
+/// the gain below had lifted its residual past the speech gate.
+///
+/// The guard used to be −70 LUFS, which sits under everything and so caught
+/// nothing. Measured on this machine's recordings: real speech runs −17 to
+/// −20 LUFS, while an echo-cancelled microphone channel runs −55 to −67. The
+/// gap is 35 dB, so this sits in the middle with room on both sides — a
+/// genuinely quiet talker is still lifted, and a channel that is only room
+/// tone is left where it is.
+const NOTHING_TO_LIFT_LUFS: f64 = -50.0;
+
 /// True-peak ceiling. Leaves headroom so the AAC encoder never clips.
 const PEAK_CEILING: f32 = 0.891; // −1 dBFS
 
@@ -77,10 +93,17 @@ impl LoudnessNormalizer {
         if enough
             && let Ok(loudness) = self.meter.loudness_global()
             && loudness.is_finite()
-            && loudness > -70.0
         {
-            let wanted = 10f64.powf((TARGET_LUFS - loudness) / 20.0) as f32;
-            let wanted = wanted.clamp(1.0 / MAX_GAIN, MAX_GAIN);
+            // A channel with nothing in it is returned to unity rather than
+            // left holding whatever gain it earned while it did have
+            // something — otherwise a leg that goes quiet keeps its boost and
+            // amplifies the room.
+            let wanted = if loudness > NOTHING_TO_LIFT_LUFS {
+                (10f64.powf((TARGET_LUFS - loudness) / 20.0) as f32)
+                    .clamp(1.0 / MAX_GAIN, MAX_GAIN)
+            } else {
+                1.0
+            };
             // Move a little at a time: a jump would be audible and
             // would change the level mid-sentence.
             self.gain += (wanted - self.gain) * 0.05;
@@ -218,6 +241,33 @@ mod tests {
         assert!(
             peak <= PEAK_CEILING + 1e-4,
             "output must stay under the peak ceiling, got {peak}"
+        );
+    }
+
+    #[test]
+    fn a_channel_with_only_residual_in_it_is_not_lifted_into_speech() {
+        // `silence_is_left_alone` below tests *digital* zero, which no real
+        // channel ever is. The case that matters is a microphone leg after
+        // echo cancellation: not silent, just empty — and lifting it eight
+        // times put its residual above the speech gate, where whisper
+        // invented "Það er hér" and "Gracias" and attributed them to the
+        // Operator.
+        //
+        // −60 dBFS of noise is what that leg measures. Real speech runs 35 dB
+        // above it.
+        let mut normalizer = LoudnessNormalizer::new(16_000).expect("normalizer");
+        let mut residual: Vec<f32> = (0..16_000 * 5)
+            .map(|i| ((i as f32 * 0.37).sin() + (i as f32 * 1.31).sin()) * 0.0005)
+            .collect();
+        let before = rms(&residual);
+        normalizer.process(&mut residual);
+        let after = rms(&residual);
+
+        assert!(
+            after <= before * 1.05,
+            "a channel with nothing in it must not be amplified: {before:.6} \
+             became {after:.6} (gain {:.2})",
+            normalizer.gain()
         );
     }
 
