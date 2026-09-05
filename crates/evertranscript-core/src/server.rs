@@ -263,7 +263,11 @@ fn interrupted_end(
     last_touched: Option<String>,
     recovered_bytes: Option<u64>,
 ) -> String {
-    let fallback = || last_touched.clone().unwrap_or_else(|| started_at.to_string());
+    let fallback = || {
+        last_touched
+            .clone()
+            .unwrap_or_else(|| started_at.to_string())
+    };
     let Some(bytes) = recovered_bytes else {
         return fallback();
     };

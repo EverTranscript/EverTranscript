@@ -21,7 +21,6 @@ use evertranscript_fixtures::Fixture;
 use evertranscript_fixtures::similarity::Features;
 use evertranscript_protocol::AudioChannel;
 
-
 /// Decodes an encoded file back to mono f32 so it can be compared with what
 /// was recorded. `channel` picks one side of the stereo pair.
 fn decode(path: &Path, channel: AudioChannel) -> Vec<f32> {

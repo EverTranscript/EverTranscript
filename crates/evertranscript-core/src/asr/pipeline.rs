@@ -17,9 +17,9 @@ use super::vad::Chunker;
 use super::vad::EnergyDetector;
 use super::whisper::WHISPER_RATE;
 use crate::audio::SAMPLE_RATE;
+use crate::audio::StereoBlock;
 use crate::audio::aec;
 use crate::audio::dsp;
-use crate::audio::StereoBlock;
 
 /// One transcribed span, ready to become a row in the record.
 #[derive(Debug, Clone, PartialEq)]

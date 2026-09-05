@@ -1,0 +1,35 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - button "EverTranscript" [ref=e6]
+      - generic [ref=e7]:
+        - button "Voices" [ref=e8]
+        - button "What it knows" [ref=e9]
+        - button "Record" [ref=e10]
+    - list [ref=e11]:
+      - listitem [ref=e12]:
+        - button "Teams sync — budget Sep 1, 2026, 6:01 PM" [ref=e13]:
+          - generic [ref=e14]: Teams sync — budget
+          - generic [ref=e15]: Sep 1, 2026, 6:01 PM
+  - main [ref=e16]:
+    - generic [ref=e18]:
+      - generic [ref=e19]:
+        - heading "Teams sync — budget" [level=1] [ref=e20]
+        - paragraph [ref=e21]: Sep 1, 2026, 6:01 PM · 6m
+      - generic [ref=e22]:
+        - button "Rename" [ref=e23]
+        - button "Delete" [ref=e24]
+    - generic [ref=e25]:
+      - paragraph [ref=e26]: This recording is incomplete
+      - list [ref=e27]:
+        - listitem [ref=e28]: "system audio: system audio is being played but arrives as silence — grant EverTranscript permission to record system audio in System Settings › Privacy & Security, then start the meeting again"
+    - paragraph [ref=e30]: No transcript yet.
+    - generic [ref=e31]:
+      - generic [ref=e32]:
+        - heading "Summary" [level=2] [ref=e33]
+        - paragraph [ref=e34]: Not generated yet.
+        - button "Generate" [ref=e35]
+      - generic [ref=e36]:
+        - heading "Notes" [level=2] [ref=e37]
+        - paragraph [ref=e38]: Your own writing. Editable during the call and forever after, and it steers the Summary.
+        - textbox "What mattered…" [ref=e39]: Budget review. Frank owns the forecast.

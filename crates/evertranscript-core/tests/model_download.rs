@@ -389,4 +389,3 @@ async fn a_core_provisions_only_when_it_is_asked_to() {
     }
     drop(server);
 }
-

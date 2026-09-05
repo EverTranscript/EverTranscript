@@ -137,10 +137,11 @@ fn leg_state(
 }
 
 fn verdict(legs: &[AudioLegReport]) -> AudioCheckVerdict {
-    let count = |wanted: AudioLegState| {
-        legs.iter().filter(|leg| leg.state == wanted).count()
-    };
-    match (count(AudioLegState::Working), count(AudioLegState::NotTested)) {
+    let count = |wanted: AudioLegState| legs.iter().filter(|leg| leg.state == wanted).count();
+    match (
+        count(AudioLegState::Working),
+        count(AudioLegState::NotTested),
+    ) {
         (2, _) => AudioCheckVerdict::BothLegsWork,
         (1, 1) => AudioCheckVerdict::MicrophoneWorksOtherUntested,
         (1, _) => AudioCheckVerdict::OneLegWorks,

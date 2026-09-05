@@ -91,7 +91,6 @@ impl Drop for TestCore {
     }
 }
 
-
 #[tokio::test]
 async fn recording_a_meeting_writes_audio_and_records_where_it_went() {
     let core = TestCore::start(vec![

@@ -19,8 +19,8 @@ use tracing::warn;
 use super::AudioSource;
 use super::CaptureClock;
 use super::CaptureEvent;
-use super::joiner::Joiner;
 use super::StereoBlock;
+use super::joiner::Joiner;
 use super::sink::AudioSink;
 use super::supervisor::Action;
 use super::supervisor::ChurnPolicy;
@@ -535,10 +535,8 @@ mod tests {
         ]);
         source.start(clock, events_tx).expect("start");
 
-        let sink = AudioSink::with_writer(
-            dir.path().join("nocodec1.mp3"),
-            Box::new(RefusingWriter),
-        );
+        let sink =
+            AudioSink::with_writer(dir.path().join("nocodec1.mp3"), Box::new(RefusingWriter));
         let stop = CancellationToken::new();
         let (finished_tx, finished_rx) = oneshot::channel();
         tokio::spawn(run(
@@ -632,8 +630,7 @@ mod tests {
             outcome
                 .degraded
                 .iter()
-                .any(|note| note.contains("microphone")
-                    && note.contains("delivered no audio")),
+                .any(|note| note.contains("microphone") && note.contains("delivered no audio")),
             "the Meeting must say the leg produced nothing, got {:?}",
             outcome.degraded
         );

@@ -388,7 +388,12 @@ fn run_microphone(
     // open and idle, so the signal goes *after* it returns rather than after
     // the stream is built. See `start_microphone` for why anyone waits.
     let started = stream.play().context("starting the microphone stream");
-    let _ = ready.send(started.as_ref().map(|_| ()).map_err(|error| format!("{error:#}")));
+    let _ = ready.send(
+        started
+            .as_ref()
+            .map(|_| ())
+            .map_err(|error| format!("{error:#}")),
+    );
     started?;
 
     while !stop.load(std::sync::atomic::Ordering::Relaxed) {

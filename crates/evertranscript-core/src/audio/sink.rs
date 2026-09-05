@@ -34,9 +34,9 @@ use mp3lame_encoder::Builder;
 use mp3lame_encoder::Encoder;
 use mp3lame_encoder::FlushNoGap;
 use mp3lame_encoder::InterleavedPcm;
-use mp3lame_encoder::max_required_buffer_size;
 use mp3lame_encoder::Mode;
 use mp3lame_encoder::Quality;
+use mp3lame_encoder::max_required_buffer_size;
 use tracing::info;
 use tracing::warn;
 
@@ -133,8 +133,8 @@ impl AudioSink {
         std::fs::create_dir_all(audio_dir)
             .with_context(|| format!("creating {}", audio_dir.display()))?;
         let path = audio_path(audio_dir, meeting_key);
-        let file = std::fs::File::create(&path)
-            .with_context(|| format!("creating {}", path.display()))?;
+        let file =
+            std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
         let mut sink = Self::with_writer(path, Box::new(std::io::BufWriter::new(file)));
         sink.space = Some(SpaceWatch {
             directory: audio_dir.to_path_buf(),
@@ -499,8 +499,7 @@ mod tests {
         }
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let mut sink =
-            AudioSink::with_writer(dir.path().join("nope.mp3"), Box::new(Refusing));
+        let mut sink = AudioSink::with_writer(dir.path().join("nope.mp3"), Box::new(Refusing));
         sink.write(&block(0.3, -0.3, 4800))
             .await
             .expect("a refused write must not fail the Meeting");

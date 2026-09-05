@@ -251,9 +251,7 @@ mod tests {
 
         let present = sanctioned_traffic(false, false, Some("local"), None);
         assert!(
-            present
-                .iter()
-                .all(|entry| !entry.enabled),
+            present.iter().all(|entry| !entry.enabled),
             "with everything on disk and updates off, nothing is enabled"
         );
     }
@@ -274,7 +272,8 @@ mod tests {
 
     #[test]
     fn a_custom_endpoint_is_named_rather_than_hidden() {
-        let traffic = sanctioned_traffic(false, false, Some("my-box"), Some("https://llm.example/v1"));
+        let traffic =
+            sanctioned_traffic(false, false, Some("my-box"), Some("https://llm.example/v1"));
         let summary = traffic
             .iter()
             .find(|entry| entry.name == "Cloud Summary")

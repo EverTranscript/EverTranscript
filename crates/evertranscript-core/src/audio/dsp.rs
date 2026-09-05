@@ -99,8 +99,7 @@ impl LoudnessNormalizer {
             // something — otherwise a leg that goes quiet keeps its boost and
             // amplifies the room.
             let wanted = if loudness > NOTHING_TO_LIFT_LUFS {
-                (10f64.powf((TARGET_LUFS - loudness) / 20.0) as f32)
-                    .clamp(1.0 / MAX_GAIN, MAX_GAIN)
+                (10f64.powf((TARGET_LUFS - loudness) / 20.0) as f32).clamp(1.0 / MAX_GAIN, MAX_GAIN)
             } else {
                 1.0
             };

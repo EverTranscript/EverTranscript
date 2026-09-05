@@ -76,9 +76,7 @@ fn open_files(pid: u32) -> Vec<String> {
     for line in text.lines() {
         match line.split_at(1) {
             ("t", kind) => is_regular = kind == "REG",
-            ("n", name) if is_regular && name.starts_with('/') => {
-                files.push(name.to_string())
-            }
+            ("n", name) if is_regular && name.starts_with('/') => files.push(name.to_string()),
             _ => {}
         }
     }
