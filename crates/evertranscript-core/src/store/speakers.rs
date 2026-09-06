@@ -126,8 +126,13 @@ pub fn resolve(connection: &Connection, typed: &str) -> Result<Option<String>> {
     if wanted.is_empty() {
         return Ok(None);
     }
+    // **Contains, not starts-with.** The Registry shows a Speaker by its
+    // *tail* (`ids::short_tail`), because ids minted by one Diarization run
+    // share their leading characters — so the form a person has to type back
+    // is a suffix, and a prefix search would never find it. Matching anywhere
+    // costs nothing here: an id that hits two rows is refused either way.
     let mut statement = connection.prepare(
-        "SELECT id FROM speakers WHERE replace(lower(id), '-', '') LIKE ?1 || '%' LIMIT 2",
+        "SELECT id FROM speakers WHERE replace(lower(id), '-', '') LIKE '%' || ?1 || '%' LIMIT 2",
     )?;
     let mut found = statement
         .query_map(params![wanted], |row| row.get::<_, String>(0))?
@@ -586,6 +591,71 @@ mod tests {
             .expect("fk");
         crate::store::schema::migrate(&mut connection).expect("migrate");
         connection
+    }
+
+    #[test]
+    fn a_speaker_resolves_from_the_form_the_registry_prints() {
+        // **The bug this was written for, reproduced.** A Diarization run
+        // mints its Speakers in one burst, and two from the Operator's real
+        // registry share twenty-one leading hex characters — so the Registry
+        // shows a Speaker by its *tail*, and a prefix search would never find
+        // what a person typed back.
+        let connection = db();
+        let first = create(&connection, false).expect("first");
+        let second = create(&connection, false).expect("second");
+        assert_ne!(first.id, second.id);
+
+        for speaker in [&first, &second] {
+            let tail = crate::ids::short_tail(&speaker.id);
+            assert_eq!(
+                resolve(&connection, &tail).expect("resolve"),
+                Some(speaker.id.clone()),
+                "the id the Registry prints ({tail}) must resolve"
+            );
+            assert_eq!(
+                resolve(&connection, &speaker.id).expect("resolve"),
+                Some(speaker.id.clone()),
+                "and so must the full one"
+            );
+        }
+    }
+
+    #[test]
+    fn a_speaker_id_matching_two_is_refused() {
+        // **Two real ids from the Operator's Voice Registry**, both produced
+        // by one Diarization run. Inserted verbatim rather than generated:
+        // an earlier version of this test minted them and asserted they
+        // shared twelve characters, which is exactly the millisecond
+        // boundary — it passed alone and failed in a full run. A fixture
+        // that is sometimes the thing you are testing is not a fixture.
+        let connection = db();
+        let ids = [
+            "01a071fe-55e6-76e0-9571-acea4492076e",
+            "01a071fe-55e6-76e0-9571-ad09cb20699f",
+        ];
+        for id in ids {
+            connection
+                .execute(
+                    "INSERT INTO speakers (id, is_operator, created_at) VALUES (?1, 0, ?2)",
+                    params![id, now_rfc3339()],
+                )
+                .expect("insert");
+        }
+
+        // They agree for twenty-one characters, so anything that short is
+        // ambiguous and must be refused — this id reaches `delete_voiceprint`.
+        assert!(
+            resolve(&connection, "01a071fe55e676e09571a").is_err(),
+            "a prefix matching two Speakers must be refused, not guessed"
+        );
+
+        // And each tail, which is what the Registry actually prints, is not.
+        for id in ids {
+            assert_eq!(
+                resolve(&connection, &crate::ids::short_tail(id)).expect("resolve"),
+                Some(id.to_string())
+            );
+        }
     }
 
     fn segment(connection: &Connection, meeting_id: &str, sequence: i64) -> String {

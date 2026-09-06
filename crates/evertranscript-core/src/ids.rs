@@ -29,6 +29,30 @@ pub fn short(id: &str) -> String {
         .collect()
 }
 
+/// The *trailing* hex characters of an id, for one with no filename to match.
+///
+/// **Leading characters are the wrong end for anything minted in a burst**,
+/// and the measurement is unambiguous: two Speakers taken from a real Voice
+/// Registry — the product of one Diarization run — share **twenty-one**
+/// leading hex characters. Not eight, not twelve. The timestamp is only part
+/// of it; `uuid`'s v7 also carries a sub-millisecond counter, so ids created
+/// together agree far past the milliseconds they share.
+///
+/// No prefix length fixes that. The random half is at the other end, so a
+/// Speaker is shown by its tail, where those same two ids differ from the
+/// first character.
+///
+/// A Meeting keeps [`short`] instead, because its short form is not free to
+/// choose: it must equal the marker in the Mirror filename, so that an id on
+/// screen finds the file on disk. Meetings can afford it — two recordings
+/// cannot start in the same millisecond, and twelve characters is the whole
+/// timestamp.
+pub fn short_tail(id: &str) -> String {
+    let hex: Vec<char> = id.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    let from = hex.len().saturating_sub(SHORT_CHARS);
+    hex[from..].iter().collect()
+}
+
 /// What a person typed, reduced to the characters an id is made of.
 ///
 /// Hyphens go, case is folded. This is what makes the three forms a person
@@ -59,6 +83,36 @@ mod tests {
             short(&first),
             short(&second),
             "twelve reaches the random half"
+        );
+    }
+
+    /// Two Speakers copied out of a real Voice Registry, both produced by one
+    /// Diarization run. They are the reason `short_tail` exists.
+    const BURST: (&str, &str) = (
+        "01a071fe-55e6-76e0-9571-acea4492076e",
+        "01a071fe-55e6-76e0-9571-ad09cb20699f",
+    );
+
+    #[test]
+    fn ids_minted_together_share_far_more_than_a_timestamp() {
+        let (first, second) = BURST;
+        let shared = normalise(first)
+            .chars()
+            .zip(normalise(second).chars())
+            .take_while(|(a, b)| a == b)
+            .count();
+        assert_eq!(shared, 21, "measured off the Operator's own registry");
+
+        // Which is why no prefix length would have done.
+        assert_eq!(
+            short(first),
+            short(second),
+            "leading characters cannot separate these"
+        );
+        assert_ne!(
+            short_tail(first),
+            short_tail(second),
+            "trailing ones separate them at once"
         );
     }
 

@@ -1412,6 +1412,13 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
 ///
 /// It is also exactly what the Mirror filename carries, so an id read here
 /// finds the file on disk, and `evertranscript_core::ids` explains why.
+///
+/// Speakers use `ids::short_tail` instead, and the asymmetry is measured
+/// rather than stylistic: one Diarization run mints every Speaker inside the
+/// same instant, and two taken from a real registry share **twenty-one**
+/// leading characters. No prefix separates those; their tails differ at the
+/// first character. A Meeting has no such problem and does have a filename
+/// to match, so it keeps the leading form.
 fn short(id: &str) -> String {
     evertranscript_core::ids::short(id)
 }
@@ -1422,7 +1429,10 @@ fn display_name_of(speaker: &evertranscript_protocol::Speaker) -> String {
         (None, true) => "You".to_string(),
         // Deliberately not a stored pseudonym: a persisted "Speaker 3" would
         // read as a name somebody chose.
-        (None, false) => format!("(unnamed {})", short(&speaker.id)),
+        (None, false) => format!(
+            "(unnamed {})",
+            evertranscript_core::ids::short_tail(&speaker.id)
+        ),
     }
 }
 
