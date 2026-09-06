@@ -47,9 +47,23 @@ jobs:
       # everything else in this product stands on — had been failing on macOS
       # since the reversal, invisibly to anyone whose machine had ffmpeg from
       # Homebrew. Which was everyone who ran them locally.
+      # **Both platforms, and the first version of this step said macOS only.**
+      # That was fixed where the failure was visible, which is not the same as
+      # where it exists: Windows needs ffmpeg for exactly the same reason and
+      # had never run these tests to say so, because `cargo test` stops at the
+      # first failing target and two Windows-only defects sat ahead of them.
+      # Each fix revealed the next thing that had never run.
       - name: ffmpeg, to decode what the tests recorded
-        if: runner.os == 'macOS'
-        run: brew install ffmpeg
+        shell: bash
+        run: |
+          if command -v ffmpeg >/dev/null 2>&1; then
+            echo "already present: $(ffmpeg -version | head -1)"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            brew install ffmpeg
+          else
+            choco install ffmpeg -y --no-progress
+          fi
+          ffmpeg -version | head -1
 
       - name: Formatting
         run: cargo fmt --all --check
