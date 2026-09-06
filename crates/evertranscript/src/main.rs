@@ -660,7 +660,7 @@ async fn run_captions() -> Result<()> {
             meeting
                 .title
                 .clone()
-                .unwrap_or_else(|| format!("meeting {}", &meeting.id[..8]))
+                .unwrap_or_else(|| format!("meeting {}", short(&meeting.id)))
         ),
         None => println!("nothing is recording; waiting for a Meeting to start\n"),
     }
@@ -811,7 +811,7 @@ async fn run_list(limit: u32, json: bool) -> Result<()> {
     for meeting in response.meetings {
         println!(
             "{}  {}  {}",
-            &meeting.id[..8],
+            short(&meeting.id),
             meeting.started_at,
             display_title(&meeting)
         );
@@ -919,7 +919,7 @@ async fn run_search(query: &str, limit: u32, json: bool) -> Result<()> {
     for result in response.results {
         println!(
             "{}  {}",
-            &result.meeting.id[..8],
+            short(&result.meeting.id),
             display_title(&result.meeting)
         );
         let snippet = result.snippet.replace('\n', " ");
@@ -1400,13 +1400,29 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
     Ok(())
 }
 
+/// The short form of an id, for a column a person reads.
+///
+/// **Twelve characters, not eight, and the difference is correctness rather
+/// than taste.** A UUIDv7 opens with a 48-bit millisecond timestamp, so eight
+/// hex characters are 32 bits of *time*: two ids minted inside the same
+/// sixty-five seconds print identically. For Speakers that is not an edge
+/// case — one Diarization run mints them all in the same instant, so two
+/// different people would appear under the same label, next to a command
+/// that deletes a Voiceprint.
+///
+/// It is also exactly what the Mirror filename carries, so an id read here
+/// finds the file on disk, and `evertranscript_core::ids` explains why.
+fn short(id: &str) -> String {
+    evertranscript_core::ids::short(id)
+}
+
 fn display_name_of(speaker: &evertranscript_protocol::Speaker) -> String {
     match (&speaker.display_name, speaker.is_operator) {
         (Some(name), _) => name.clone(),
         (None, true) => "You".to_string(),
         // Deliberately not a stored pseudonym: a persisted "Speaker 3" would
         // read as a name somebody chose.
-        (None, false) => format!("(unnamed {})", &speaker.id[..8]),
+        (None, false) => format!("(unnamed {})", short(&speaker.id)),
     }
 }
 

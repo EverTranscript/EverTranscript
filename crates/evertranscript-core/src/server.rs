@@ -568,7 +568,10 @@ impl Core {
 
     /// Replaces a Meeting's Notes (ADR-0018).
     pub async fn set_notes(&self, id: &str, notes: &str) -> Result<Meeting> {
-        let id = id.to_string();
+        let id = self
+            .resolve_meeting(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no Meeting with id {id}"))?;
         let notes = notes.to_string();
         let meeting = self
             .store
@@ -1129,7 +1132,10 @@ impl Core {
     /// are not applied: an invitation is evidence about who was invited, and
     /// turning it into who spoke would be inventing attribution.
     pub async fn speaker(&self, id: &str) -> Result<SpeakerDetailResponse> {
-        let id = id.to_string();
+        let id = self
+            .resolve_speaker(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
         self.store
             .read(move |connection| {
                 let row = crate::store::speakers::get(connection, &id)?
@@ -1146,7 +1152,10 @@ impl Core {
 
     /// Names a Speaker, which also confirms its Voiceprint.
     pub async fn speaker_rename(&self, id: &str, display_name: &str) -> Result<SpeakerResponse> {
-        let id = id.to_string();
+        let id = self
+            .resolve_speaker(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
         let display_name = display_name.to_string();
         let speaker = self
             .store
@@ -1166,7 +1175,12 @@ impl Core {
 
     /// Deletes a Speaker's Voiceprint (story 31). The record is untouched.
     pub async fn speaker_delete_voiceprint(&self, id: &str) -> Result<SpeakerResponse> {
-        let id = id.to_string();
+        // A Voiceprint deletion, so the same care as `delete_meeting`: an
+        // ambiguous short id is refused rather than resolved to a guess.
+        let id = self
+            .resolve_speaker(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
         let speaker = self
             .store
             .write(move |connection| {
@@ -1390,6 +1404,12 @@ impl Core {
 
     /// Stops a running Diarization, keeping whatever attribution completed.
     pub async fn diarize_cancel(&self, meeting_id: &str) -> DiarizeStatusResponse {
+        // The running job holds a full id, so a short one would never match
+        // and `cancel` would silently do nothing.
+        let meeting_id = match self.resolve_meeting(meeting_id).await {
+            Ok(Some(resolved)) => resolved,
+            _ => meeting_id.to_string(),
+        };
         if let Some(job) = self.diarization.lock().await.as_ref()
             && job.meeting_id == meeting_id
         {
@@ -1762,8 +1782,31 @@ impl Core {
         }
     }
 
+    /// The stored Meeting id for what a caller passed.
+    ///
+    /// **Every method taking a client-supplied id starts here**, so the short
+    /// form `evertranscript list` prints resolves everywhere rather than only
+    /// where somebody remembered. Resolution happens once, at the top, and
+    /// what flows downstream is always the full id — which is what keeps a
+    /// half-resolved id out of a `DELETE`.
+    async fn resolve_meeting(&self, typed: &str) -> Result<Option<String>> {
+        let typed = typed.to_string();
+        self.store
+            .read(move |connection| meetings::resolve(connection, &typed))
+            .await
+    }
+
+    async fn resolve_speaker(&self, typed: &str) -> Result<Option<String>> {
+        let typed = typed.to_string();
+        self.store
+            .read(move |connection| crate::store::speakers::resolve(connection, &typed))
+            .await
+    }
+
     pub async fn get_meeting(&self, id: &str) -> Result<Option<(Meeting, Vec<TranscriptSegment>)>> {
-        let id = id.to_string();
+        let Some(id) = self.resolve_meeting(id).await? else {
+            return Ok(None);
+        };
         self.store
             .read(move |connection| {
                 let Some(meeting) = meetings::get(connection, &id)? else {
@@ -1775,7 +1818,11 @@ impl Core {
     }
 
     pub async fn retitle_meeting(&self, id: &str, title: &str) -> Result<Meeting> {
-        let (id, title) = (id.to_string(), title.to_string());
+        let id = self
+            .resolve_meeting(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no Meeting with id {id}"))?;
+        let title = title.to_string();
         let meeting = self
             .store
             .write(move |connection| meetings::retitle(connection, &id, &title))
@@ -1791,6 +1838,13 @@ impl Core {
 
     /// Removes a Meeting entirely: rows, Mirror, and audio (story 21).
     pub async fn delete_meeting(&self, id: &str) -> Result<bool> {
+        // Resolved before a single row goes. `resolve` refuses an ambiguous
+        // prefix rather than picking one, which is the whole reason it does
+        // not guess: this call takes the audio with it.
+        let Some(id) = self.resolve_meeting(id).await? else {
+            return Ok(false);
+        };
+        let id = id.as_str();
         let id_for_write = id.to_string();
         let deleted = self
             .store

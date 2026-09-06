@@ -104,6 +104,41 @@ pub fn create(connection: &Connection, is_operator: bool) -> Result<Speaker> {
     get(connection, &id)?.ok_or_else(|| anyhow::anyhow!("the Speaker vanished after insert"))
 }
 
+/// The stored id for something a person typed.
+///
+/// Speakers need this more than Meetings do, not less: one Diarization run
+/// mints every Speaker it finds inside the same millisecond, so their ids
+/// share a long prefix by construction and the short form the Registry
+/// prints is the only thing a person has to type back.
+pub fn resolve(connection: &Connection, typed: &str) -> Result<Option<String>> {
+    let exact: Option<String> = connection
+        .query_row(
+            "SELECT id FROM speakers WHERE id = ?1",
+            params![typed],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exact.is_some() {
+        return Ok(exact);
+    }
+
+    let wanted = crate::ids::normalise(typed);
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    let mut statement = connection.prepare(
+        "SELECT id FROM speakers WHERE replace(lower(id), '-', '') LIKE ?1 || '%' LIMIT 2",
+    )?;
+    let mut found = statement
+        .query_map(params![wanted], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(Some(found.remove(0))),
+        _ => anyhow::bail!("{typed} matches more than one Speaker — use more of the id"),
+    }
+}
+
 pub fn get(connection: &Connection, id: &str) -> Result<Option<Speaker>> {
     let sql = format!("SELECT {SPEAKER_COLUMNS} FROM speakers WHERE id = ?1");
     Ok(connection

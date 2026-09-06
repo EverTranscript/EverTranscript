@@ -12,6 +12,7 @@ pub mod briefing;
 pub mod client;
 pub mod detect;
 pub mod diarize;
+pub mod ids;
 pub mod mirror;
 pub mod models;
 pub mod paths;

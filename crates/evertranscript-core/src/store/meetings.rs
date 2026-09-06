@@ -226,6 +226,52 @@ pub fn with_id_prefix(connection: &Connection, prefix: &str) -> Result<Vec<Meeti
     Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
 }
 
+/// The stored id for something a person typed.
+///
+/// **Three forms of the same id circulate**, and until this existed only one
+/// of them worked. `evertranscript list` prints the leading characters, the
+/// Mirror filename carries the same characters with the hyphens gone, and
+/// the record stores the full hyphenated UUID — so the id the CLI showed you
+/// could not be pasted into the CLI's next command. Every form now resolves.
+///
+/// Ambiguity is an error rather than a guess. These ids reach `delete`,
+/// which takes the audio with it, so resolving "close enough" to the wrong
+/// Meeting is not a mistake this can afford to make quietly.
+pub fn resolve(connection: &Connection, typed: &str) -> Result<Option<String>> {
+    // Exact first: this is the common case — every internal caller and every
+    // Client already holds a full id — and it is the one that uses the index.
+    let exact: Option<String> = connection
+        .query_row(
+            "SELECT id FROM meetings WHERE id = ?1",
+            params![typed],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exact.is_some() {
+        return Ok(exact);
+    }
+
+    let wanted = crate::ids::normalise(typed);
+    if wanted.is_empty() {
+        return Ok(None);
+    }
+    // `replace` gives up the index, which is affordable on one person's
+    // History and is the price of the Mirror filename's hyphen-free form
+    // resolving at all.
+    let mut statement = connection.prepare(
+        "SELECT id FROM meetings WHERE replace(lower(id), '-', '') LIKE ?1 || '%' \
+         ORDER BY started_at DESC LIMIT 2",
+    )?;
+    let mut found = statement
+        .query_map(params![wanted], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(Some(found.remove(0))),
+        _ => anyhow::bail!("{typed} matches more than one Meeting — use more of the id"),
+    }
+}
+
 pub fn get(connection: &Connection, id: &str) -> Result<Option<Meeting>> {
     let sql = format!("SELECT {MEETING_COLUMNS} FROM meetings WHERE id = ?1");
     Ok(connection

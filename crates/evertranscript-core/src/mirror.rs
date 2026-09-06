@@ -52,17 +52,15 @@ const BATCH: u32 = 64;
 /// Twelve covers the whole millisecond, and two Meetings cannot start in the
 /// same one: `start_meeting_armed` refuses while another is active, so a
 /// second start is separated by at least a stop and its database write.
-const MARKER_CHARS: usize = 12;
-
 /// The leading hex characters of the Meeting id: the durable marker in every
 /// Mirror filename. Retitles rename the file; this is what survives, so it is
 /// what outside references should key on.
+///
+/// The same characters the CLI prints, deliberately: an id someone read in
+/// `evertranscript list` is the one in the filename on disk, and both are
+/// long enough to be unique (`ids`).
 pub fn short_id(meeting_id: &str) -> String {
-    meeting_id
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .take(MARKER_CHARS)
-        .collect()
+    crate::ids::short(meeting_id)
 }
 
 /// Turns a title into a filename-safe slug, keeping native characters.

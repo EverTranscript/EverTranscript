@@ -470,3 +470,87 @@ async fn the_history_folder_reads_as_meeting_notes() {
     assert!(Path::new(&core.history_dir).join(".data").is_dir());
     assert!(core.history_dir.join(".data/EverTranscript.db").is_file());
 }
+
+#[tokio::test]
+async fn the_id_the_cli_prints_is_one_the_cli_accepts() {
+    // **Found by running the real thing during a live Teams meeting.** The
+    // CLI printed `01a07431`, the Mirror on disk carried `01a07431dc59`, and
+    // `show` accepted neither — it wanted the full hyphenated UUID. Three
+    // forms of one id, and the only form that worked was the one nothing
+    // displayed.
+    let core = TestCore::start().await;
+    let mut client = core.client().await;
+    let started: MeetingResponse = client
+        .request("meeting/start", Some(json!({ "detectedApp": "Teams" })))
+        .await
+        .expect("start");
+    let _: MeetingResponse = client.request("meeting/stop", None).await.expect("stop");
+
+    let full = started.meeting.id.clone();
+    let marker = evertranscript_core::mirror::short_id(&full);
+    assert_eq!(marker.len(), 12, "the Mirror marker is what `list` prints");
+    let eight: String = full
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(8)
+        .collect();
+
+    for form in [
+        full.as_str(),
+        marker.as_str(),
+        eight.as_str(),
+        full.to_uppercase().as_str(),
+    ] {
+        let response: MeetingDetailResponse = client
+            .request("meeting/get", Some(json!({ "id": form })))
+            .await
+            .unwrap_or_else(|error| panic!("{form} should resolve: {error}"));
+        assert_eq!(
+            response.meeting.id, full,
+            "{form} resolved to the wrong Meeting"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_ambiguous_id_is_refused_rather_than_guessed() {
+    // Two Meetings started moments apart share a long prefix, because a
+    // UUIDv7 opens with a millisecond timestamp. Whatever they share must not
+    // resolve to whichever sorts first: this id reaches `delete`, which takes
+    // the audio with it.
+    let core = TestCore::start().await;
+    let mut client = core.client().await;
+
+    let first: MeetingResponse = client
+        .request("meeting/start", Some(json!({ "detectedApp": "Teams" })))
+        .await
+        .expect("start");
+    let _: MeetingResponse = client.request("meeting/stop", None).await.expect("stop");
+    let second: MeetingResponse = client
+        .request("meeting/start", Some(json!({ "detectedApp": "Zoom" })))
+        .await
+        .expect("start");
+    let _: MeetingResponse = client.request("meeting/stop", None).await.expect("stop");
+
+    let shared: String = first
+        .meeting
+        .id
+        .chars()
+        .zip(second.meeting.id.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a)
+        .filter(|c| c.is_ascii_hexdigit())
+        .collect();
+    assert!(
+        shared.len() >= 6,
+        "ids minted this close should share a prefix, got {shared:?}"
+    );
+
+    let refused = client
+        .request::<MeetingDetailResponse>("meeting/get", Some(json!({ "id": shared })))
+        .await;
+    assert!(
+        refused.is_err(),
+        "an id matching two Meetings must be refused, not resolved to one"
+    );
+}
