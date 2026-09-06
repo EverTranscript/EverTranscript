@@ -72,6 +72,27 @@ These need credentials that are deliberately not in this repository:
    should confirm the shape of this before the first release that carries
    it.
 
+## Artifact names are load-bearing
+
+The in-app updater downloads by filename. electron-builder writes
+`latest.yml` / `latest-mac.yml` naming each artifact, electron-updater asks
+the newest GitHub release for exactly that name, and **GitHub rewrites spaces
+in uploaded asset names**. Those three facts have to agree.
+
+v1.0.0 shipped before they did. NSIS's default `artifactName` is
+`${productName} Setup ${version}.${ext}` — with spaces — so one file had
+three names: `EverTranscript Setup 1.0.0.exe` on disk,
+`EverTranscript-Setup-1.0.0.exe` in `latest.yml`, and
+`EverTranscript.Setup.1.0.0.exe` once GitHub had it. Windows updates would
+have 404'd. The assets were renamed by hand after publishing; macOS was never
+affected, because its name has no spaces to rewrite.
+
+So `nsis.artifactName` is pinned to the hyphenated form, and the packaging
+job asserts the agreement rather than trusting it: every name in
+`latest*.yml` must exist among the built artifacts, and no artifact may carry
+a space. **Any new target — dmg, msi, appimage — needs the same treatment**,
+because the default names for several of them also contain spaces.
+
 ## Entitlements
 
 `macos/entitlements.plist` carries what the product actually needs and

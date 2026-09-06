@@ -150,6 +150,48 @@ jobs:
             exit 1
           fi
 
+      # **The updater downloads by name, so the names have to agree.**
+      # v1.0.0 shipped with three names for one file: electron-builder's NSIS
+      # default is `${productName} Setup ${version}.${ext}`, which has spaces,
+      # so the installer was written as `EverTranscript Setup 1.0.0.exe` while
+      # `latest.yml` asked for `EverTranscript-Setup-1.0.0.exe` — and GitHub,
+      # which replaces spaces in uploaded asset names, stored a third form,
+      # `EverTranscript.Setup.1.0.0.exe`. electron-updater requests the name
+      # in `latest.yml` and would have got a 404 on every Windows update.
+      #
+      # `artifactName` is now pinned to the hyphenated form, and this step is
+      # what keeps it true: it fails if the metadata names a file that was not
+      # built, and if any artifact carries a space for GitHub to rewrite.
+      - name: The update metadata must name files that exist
+        shell: bash
+        working-directory: packaging/out/installers
+        run: |
+          fail=0
+          for artifact in *.exe *.zip; do
+            [ -e "$artifact" ] || continue
+            case "$artifact" in
+              *" "*)
+                echo "::error::$artifact contains a space; GitHub will rename it on upload"
+                fail=1
+                ;;
+            esac
+          done
+          for meta in latest*.yml; do
+            [ -e "$meta" ] || continue
+            names=$(grep -E '^[[:space:]]*(-[[:space:]]+)?(url|path):' "$meta" \
+                    | sed -E 's/.*:[[:space:]]*//' | tr -d '\r' | sort -u)
+            while IFS= read -r name; do
+              [ -n "$name" ] || continue
+              if [ -e "$name" ]; then
+                echo "ok  $meta -> $name"
+              else
+                echo "::error::$meta names $name, which was not built"
+                fail=1
+              fi
+            done <<< "$names"
+          done
+          exit $fail
+
       - name: Checksums
         shell: bash
         run: |
