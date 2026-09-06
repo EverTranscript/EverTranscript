@@ -1759,10 +1759,36 @@ impl Core {
     /// portable: moving the folder must not break every audio reference
     /// (ADR-0035).
     fn relative_to_history(&self, path: &std::path::Path) -> String {
-        path.strip_prefix(&self.history_dir)
-            .unwrap_or(path)
-            .display()
-            .to_string()
+        Self::history_relative(&self.history_dir, path)
+    }
+
+    /// A path under the History folder, as the record stores it.
+    ///
+    /// **Forward slashes on every platform, and that is about ADR-0035 rather
+    /// than taste.** The History folder is the Operator's record and the complete
+    /// portable unit — the thing they copy to another machine, sync, or hand to
+    /// someone. `Path::display` writes the *host's* separator, so a Meeting
+    /// recorded on Windows stored `.data\audio\01a074b1.mp3`, which resolves on
+    /// Windows and nowhere else. The reverse direction was always fine, because
+    /// Windows accepts forward slashes too — which is exactly why this went
+    /// unnoticed: every macOS-written record opened correctly on Windows.
+    ///
+    /// Found when the Windows CI job got far enough to run `capture_vertical`
+    /// for the first time, which it could not do while an earlier test was
+    /// failing ahead of it.
+    ///
+    /// Records already written on Windows keep their backslashes and keep
+    /// working there; nothing rewrites the Operator's rows behind their back.
+    pub(crate) fn history_relative(
+        history_dir: &std::path::Path,
+        path: &std::path::Path,
+    ) -> String {
+        let relative = path.strip_prefix(history_dir).unwrap_or(path);
+        relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
     }
 
     pub async fn list_meetings(&self, limit: u32, offset: u32) -> Result<Vec<Meeting>> {
@@ -2896,6 +2922,30 @@ fn describe_watchlist(list: &crate::detect::watchlist::Watchlist) -> WatchlistRe
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_stored_audio_path_uses_forward_slashes_on_every_platform() {
+        // **ADR-0035: the History folder is the complete portable unit.** It
+        // gets copied to another machine, synced, handed over. `Path::display`
+        // writes the host's separator, so a Meeting recorded on Windows stored
+        // `.data\audio\x.mp3` — resolvable on Windows and nowhere else.
+        //
+        // This went unnoticed because the failure is one-directional: Windows
+        // accepts forward slashes, so every macOS-written record opened there
+        // correctly, and only the reverse was broken. Windows CI caught it the
+        // first time it got far enough to run `capture_vertical`.
+        let history = std::path::Path::new("/tmp/History");
+        let audio = history.join(".data").join("audio").join("01a074b1.mp3");
+        let stored = Core::history_relative(history, &audio);
+
+        assert_eq!(stored, ".data/audio/01a074b1.mp3");
+        assert!(
+            !stored.contains('\\'),
+            "a separator the other platform cannot read: {stored}"
+        );
+        // And it stays relative, so moving the folder does not break it.
+        assert!(!stored.starts_with('/'), "{stored}");
+    }
+
     use super::*;
 
     const STARTED: &str = "2026-09-01T18:08:17.381177-07:00";
