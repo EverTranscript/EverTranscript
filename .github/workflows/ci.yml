@@ -37,6 +37,20 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # **A test-only dependency, and the distinction is the whole point.**
+      # ADR-0032 was reversed to take ffmpeg out of the *product* — the Core
+      # encodes MP3 in-process and spawns nothing. Verifying that it wrote a
+      # correct stereo MP3 still means decoding one, and `fixture_audio_pipeline`
+      # asks ffmpeg to do it at a known 16 kHz. Nothing ships it.
+      #
+      # It was absent here, so those four tests — the capture pipeline, which
+      # everything else in this product stands on — had been failing on macOS
+      # since the reversal, invisibly to anyone whose machine had ffmpeg from
+      # Homebrew. Which was everyone who ran them locally.
+      - name: ffmpeg, to decode what the tests recorded
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
       - name: Formatting
         run: cargo fmt --all --check
 

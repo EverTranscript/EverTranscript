@@ -39,12 +39,43 @@ pub fn free_space_bytes(path: &std::path::Path) -> u64 {
             (stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64)
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // **This used to return `u64::MAX`**, under a comment saying that
+        // refusing to guess beat guessing generously. `u64::MAX` *is* the
+        // most generous guess there is: it says the disk is infinite, so
+        // every caller comparing free space against a floor concluded there
+        // was room. That was survivable while the only caller was the model
+        // download, where "plenty of room" merely means "try the download".
+        // The audio sink then inherited it, and there it meant the
+        // disk-exhaustion guard could not fire on Windows at all — a full
+        // disk would neither stop the recording nor tell the Operator why,
+        // which is the entire scenario the guard exists for. Caught by
+        // `a_disk_with_no_room_left_stops_the_audio_and_says_so` failing on
+        // Windows CI while passing on macOS.
+        use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+        use windows::core::HSTRING;
+
+        let directory = HSTRING::from(probe.as_os_str());
+        let mut available: u64 = 0;
+        // SAFETY: `directory` is a NUL-terminated wide string that outlives
+        // the call, and `available` is a valid writable u64. The other two
+        // out-parameters are optional and not asked for.
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(&directory, Some(&mut available), None, None).is_ok()
+        };
+        // Zero on failure, which is what the unix branch does when `statvfs`
+        // fails. The two platforms agreeing matters more than either default:
+        // a guard that stops recording on both is one behaviour to reason
+        // about, and "the disk might be full" is the safe way to be wrong
+        // about audio the record already treats as a bonus (ADR-0019).
+        if ok { available } else { 0 }
+    }
+
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = probe;
-        // Windows reports this through GetDiskFreeSpaceEx; until that is
-        // wired, refusing to guess is better than guessing generously.
-        u64::MAX
+        0
     }
 }
 
