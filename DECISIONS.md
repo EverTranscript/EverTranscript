@@ -924,7 +924,11 @@ What is left is the check that earns its cost. It makes the `Said at` column do 
 | map (each chunk's own summary) | **3 of 3**, on every run |
 | reduce (the three combined) | **1 of 3** |
 
-Every chunk summarized its own content correctly. The reduce pass — handed three partial summaries and asked to combine them — kept the first chunk's action items and discarded the rest. Measured across three runs with nothing changed between them; an earlier run that scored 3/3 end to end was the same map output getting luckier in the reduce, which is what made the loss look like flakiness until the stages were separated. **The overlapping-chunk machinery works.** Asking a 4B to merge three summaries loses most of what it is given.
+Every chunk summarized its own content correctly. The reduce pass — handed three partial summaries and asked to combine them — kept the first chunk's action items and discarded the rest.
+
+**Correction to this entry's first draft, which said "1/3 on three separate runs".** The three runs on this prompt scored 3/3, 1/3 and 1/3 end to end; only the last of them had the stages separated, and it is the one that showed map 3/3 against reduce 1/3. The 3/3 was the same map output getting luckier downstream — which is exactly what made the loss read as flakiness until the stages were split — but "1/3 three times" overstated it, and the number of runs behind a claim is the part that makes it checkable. Two runs at 1/3, not three.
+
+**The overlapping-chunk machinery works.** Asking a 4B to merge three summaries loses most of what it is given.
 
 That is why the assertion in the test is at the map stage only. Gating on the reduce would make the build red on a coin flip, and a test nobody can act on teaches everyone to ignore the suite.
 
@@ -933,5 +937,26 @@ That is why the assertion in the test is at the map stage only. Gating on the re
 **Third, and it was found by this measurement rather than by review: `verify` was wrong.** Shipped in Q60, it compared the `Said at` timestamp's speaker to the named one, and it refused an honest ninety-minute Summary on the first run — the model credited Tomas with a line Tomas really did say while citing a timestamp five seconds off, where Ines was speaking. On a transcript dense enough to be real, an off-by-one citation is indistinguishable from a false attribution by position alone, and no tolerance window separates them: in Q60's injection the truthful speaker sat *six* seconds from the cited time, closer than the honest slip. Rebuilt to ask whether the named person said the thing — half the item's distinctive words must appear in their own speech — which still refuses Q60's injection and no longer refuses correct work. A slipped timestamp is now a degraded citation rather than a false statement about a colleague.
 
 Rebuilding it also exposed that the rule was **stricter in Chinese than in English**: ideographs are alphanumeric, so a whole Chinese clause became one token matching only verbatim, which would have refused any paraphrased Chinese action item in a product whose transcripts are routinely Chinese. Chinese is now matched by character bigram, so it degrades the same way English does.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q62 — m4-summary/09 — fix
+
+**Question:** Q61 measured the reduce pass keeping one of three planted commitments from a map stage that kept all three. The reduce prompt read, in full: "These are summaries of consecutive parts of one meeting. Combine them into a single summary in the same format." Can that be fixed cheaply?
+**Options considered:** tell the reduce not to drop items / merge the action-item tables mechanically and let the model reduce only prose / raise the model / accept the loss
+**Chosen:** **Told it, and measured that it helped.** The reduce prompt now says the parts cover different stretches and do not repeat each other, so every action item must be carried through — "an item dropped here is gone from the record."
+**Decided-by:** agent
+**Justification:** The old prompt never asked for completeness. It asked for a combination, and a 4B given three summaries produces one shorter summary, which is a reasonable reading of what it was told.
+
+| reduce prompt | commitments kept, per run |
+| --- | --- |
+| before | 1/3, 1/3 |
+| after | 2/3, 2/3, 3/3 |
+
+Every run with the sentence beat every run without it. That is five runs, not fifty, and the metric is noisy — so this is recorded as suggestive rather than settled, and the reduce stays named in what-v1-is-not as the lossy stage. **This is a different case from the prompt edit reverted in Q60**, which produced a null result across runs that interleaved; the discipline is the same either way, which is to measure before keeping.
+
+**The better fix was considered and not taken.** Rule 5's action items are a markdown table — structured data — and merging tables is something code can do exactly, without asking a model to be diligent. Reducing only the prose and concatenating the tables would make the loss impossible rather than less likely. It is also a change to what a Summary *is*: duplicate items across overlapping chunks would need dedup, ordering becomes a decision, and the reduce's ability to notice that two parts describe the same commitment is lost. That is worth doing deliberately rather than as the tail of a measurement, and it belongs to whoever owns the summarize path.
+
+The reduce prompt also moved into `prompt.rs`. It had been written out twice — once in `server.rs` and once in the measurement that is supposed to send exactly what the Core sends — and two copies of that string would have drifted until the measurement quietly stopped measuring production.
 **Outcome:** applied
 **Ref:** (pending)

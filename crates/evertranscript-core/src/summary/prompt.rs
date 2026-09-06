@@ -69,6 +69,29 @@ If nobody did, write 'None noted.' instead of a table.
 dates, or commitments.
 8. Output only the summary. No preamble, no explanation, no code fences.";
 
+/// The reduce pass: several partial summaries, combined into one.
+///
+/// **Measured losing most of what it is given** (DECISIONS Q61). Handed
+/// three partial summaries of a ninety-minute meeting whose map stage had
+/// kept every planted commitment, it produced a Summary carrying one of
+/// three — keeping the first part's items and discarding the rest. The
+/// sentence about not dropping items is there because of that measurement,
+/// not on principle.
+///
+/// It lives here rather than at the call site because the ninety-minute
+/// measurement has to send exactly what the Core sends; two copies of this
+/// string would drift and the measurement would quietly stop measuring
+/// production.
+pub fn reduce_message(combined: &str) -> String {
+    format!(
+        "These are summaries of consecutive parts of one meeting. Combine them \
+         into a single summary in the same format. The parts cover different \
+         stretches of the meeting and do not repeat each other, so carry every \
+         action item from every part through into the result — an item dropped \
+         here is gone from the record.\n\n{combined}"
+    )
+}
+
 /// Markers that end a transcript region or begin a new conversational turn
 /// in the chat templates these models are trained on.
 ///

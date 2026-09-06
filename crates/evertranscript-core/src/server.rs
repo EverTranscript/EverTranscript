@@ -960,10 +960,7 @@ impl Core {
                     anyhow::bail!("{}", summary::BackendError::Cancelled);
                 }
                 let combined = parts.join("\n\n---\n\n");
-                let reduce = request_for(&format!(
-                    "These are summaries of consecutive parts of one meeting. \
-                     Combine them into a single summary in the same format.\n\n{combined}"
-                ));
+                let reduce = request_for(&summary::prompt::reduce_message(&combined));
                 match winner.generate(&reduce, &cancel) {
                     // Checked against the whole transcript rather than the
                     // partial summaries it was handed, because that is what

@@ -119,12 +119,14 @@ from somewhere else, and each is already labelled that way in its ticket.
 
 These are live in the build and say so where an Operator can see it.
 
-- **A ninety-minute meeting loses most of its action items in the reduce.**
-  Measured (Q61): each chunk summarizes its own content correctly — 3 of 3
-  planted commitments, every run — and the pass that combines those three
-  partial summaries keeps 1 of 3. Chunking is not the problem; asking a 4B
-  to merge three summaries is. A long meeting therefore gets a Summary
-  weighted towards its first half.
+- **A ninety-minute meeting can still lose action items in the reduce.**
+  Measured (Q61, Q62): each chunk summarizes its own content correctly — 3
+  of 3 planted commitments, every run — and the pass that combines those
+  three partial summaries keeps 2 or 3 of them, having kept only 1 before
+  the reduce prompt was told the parts do not repeat. Chunking is not the
+  problem; asking a 4B to merge three summaries is, and instructing it helps
+  without fixing it. A long meeting may still get a Summary weighted towards
+  its first half, and the Operator is not told when that happens.
 - **A commitment negotiated across a chunk boundary can vanish.**
   `OVERLAP_TOKENS` covers about five lines — twenty-five seconds. An ask
   answered fifty seconds later falls between two chunks that each hold half
