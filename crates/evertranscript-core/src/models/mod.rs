@@ -61,9 +61,8 @@ pub fn free_space_bytes(path: &std::path::Path) -> u64 {
         // SAFETY: `directory` is a NUL-terminated wide string that outlives
         // the call, and `available` is a valid writable u64. The other two
         // out-parameters are optional and not asked for.
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(&directory, Some(&mut available), None, None).is_ok()
-        };
+        let ok =
+            unsafe { GetDiskFreeSpaceExW(&directory, Some(&mut available), None, None).is_ok() };
         // Zero on failure, which is what the unix branch does when `statvfs`
         // fails. The two platforms agreeing matters more than either default:
         // a guard that stops recording on both is one behaviour to reason
