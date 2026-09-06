@@ -290,11 +290,24 @@ jobs:
           }
           Write-Host "sidecar started and exited on EOF"
 
+      # **The update metadata ships or the updater does not work.** The
+      # Client runs electron-updater, which finds a new version by reading
+      # `latest.yml` / `latest-mac.yml` out of the newest release — so a
+      # release carrying only the installer is a release nothing can update
+      # to or from, and ADR-0034 counts that check as Sanctioned Traffic
+      # entry one: a named feature, not a nicety. electron-builder writes
+      # those files beside the installer and this step used to leave them
+      # behind, which was invisible until a release was actually assembled.
+      #
+      # `.blockmap` travels with them: it is what lets an update download a
+      # diff instead of another hundred megabytes.
       - uses: actions/upload-artifact@v4
         with:
           name: evertranscript-${{ matrix.os }}
           path: |
             packaging/out/installers/*.zip
             packaging/out/installers/*.exe
+            packaging/out/installers/*.blockmap
+            packaging/out/installers/latest*.yml
             packaging/out/installers/SHA256SUMS
           if-no-files-found: error
