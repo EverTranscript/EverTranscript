@@ -1,0 +1,5 @@
+# Build with the stable channel — whatever `rustup update stable` has made current —
+# so a machine whose default toolchain is something else still builds this workspace
+# the way CI does (dtolnay/rust-toolchain@stable in ci.yml and package.yml).
+[toolchain]
+channel = "stable"

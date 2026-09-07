@@ -960,3 +960,13 @@ Every run with the sentence beat every run without it. That is five runs, not fi
 The reduce prompt also moved into `prompt.rs`. It had been written out twice — once in `server.rs` and once in the measurement that is supposed to send exactly what the Core sends — and two copies of that string would have drifted until the measurement quietly stopped measuring production.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q63 — interactive/toolchain — gate-resolution
+
+**Question:** Frank asked that the repo "use rust stable" so it stays aligned with `rustup update stable` — the command that fixed today's `cargo install` failures on fleet machines whose stable channel had fallen behind another crate's MSRV. What does that mean for a workspace that declares no `rust-version`?
+**Options considered:** a `rust-toolchain.toml` naming `channel = "stable"` / a `rust-toolchain.toml` pinning a version / adding a `rust-version` MSRV as well / nothing, since the default toolchain here is already stable
+**Chosen:** `rust-toolchain.toml` at the workspace root with `channel = "stable"`. No version pin, no `rust-version`, no CI change.
+**Decided-by:** agent
+**Justification:** The file was Frank's ask; the reading is mine. A channel selection makes a checkout build with whatever stable rustup currently has — on a machine whose default is something else as much as here — and it is the channel both workflows already install with `dtolnay/rust-toolchain@stable`, so CI is unaffected; `scripts/check.sh` and the cargo-xwin cross build run on the same channel they did before. A root file reaches no member crate's package. Verified with `cargo test --workspace --locked --no-fail-fast` under the override: 710 passed, 1 failed — `detect::macos::tests::a_real_microphone_hold_is_visible_to_the_detector`, which fails identically with the file removed ("the detector saw no process recording at all"), so it is this headless machine's CoreAudio, not the toolchain. Recorded so nobody hunts a toolchain regression here.
+**Outcome:** applied
+**Ref:** (pending)
