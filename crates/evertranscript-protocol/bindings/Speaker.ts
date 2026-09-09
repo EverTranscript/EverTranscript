@@ -37,6 +37,11 @@ voiceprintModel?: string, meetingsSeenIn: number,
  */
 firstSeenAt?: string, 
 /**
+ * That Meeting's id, so a Client can open the recording the voice was
+ * taken from rather than only naming it.
+ */
+firstMeetingId?: string, 
+/**
  * The title of that Meeting, when it has one. Absent rather than
  * "Untitled", which is a Client's word and not a stored fact.
  */

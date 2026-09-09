@@ -90,7 +90,13 @@ export function App(): React.JSX.Element {
             }}
           />
         ) : showingRegistry ? (
-          <RegistryPanel onClose={() => setShowingRegistry(false)} />
+          <RegistryPanel
+            onClose={() => setShowingRegistry(false)}
+            onOpenMeeting={(id) => {
+              setSelectedId(id);
+              setShowingRegistry(false);
+            }}
+          />
         ) : showingPosture ? (
           <PosturePanel onClose={() => setShowingPosture(false)} />
         ) : active ? (
@@ -663,7 +669,13 @@ function SettingsPanel({
  * It opens without a Meeting selected, because it describes what the
  * installation holds rather than anything about one recording.
  */
-function RegistryPanel({ onClose }: { onClose: () => void }): React.JSX.Element {
+function RegistryPanel({
+  onClose,
+  onOpenMeeting,
+}: {
+  onClose: () => void;
+  onOpenMeeting: (meetingId: string) => void;
+}): React.JSX.Element {
   const { speakers, error, rename, forgetVoice } = useRegistry();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -753,18 +765,11 @@ function RegistryPanel({ onClose }: { onClose: () => void }): React.JSX.Element 
                     the storage with legibility, and "which meeting was this
                     taken from" is the first question anyone asks of it. */}
                 {speaker.firstSeenAt ? (
-                  <span
-                    className="mt-0.5 block text-xs text-[--color-ink-muted]"
-                    data-testid="registry-first-seen"
-                  >
-                    {t("registry.firstSeen")} {formatStarted(speaker.firstSeenAt)}{" "}
-                    ·{" "}
-                    {displayTitle({
-                      title: speaker.firstMeetingTitle,
-                      detectedApp: speaker.firstMeetingApp,
-                      startedAt: speaker.firstSeenAt,
-                    })}
-                  </span>
+                  <FirstHeard
+                    speaker={speaker}
+                    startedAt={speaker.firstSeenAt}
+                    onOpenMeeting={onOpenMeeting}
+                  />
                 ) : null}
               </div>
 
@@ -830,6 +835,55 @@ function RegistryPanel({ onClose }: { onClose: () => void }): React.JSX.Element 
         ))}
       </ul>
     </div>
+  );
+}
+
+/**
+ * Where a voice was captured, and a way back to it.
+ *
+ * A button rather than a label when the Meeting is still here: naming the
+ * recording and then making the Operator go find it in the sidebar is the
+ * legibility ADR-0008 promised stopping one step short. The Meeting can be
+ * gone — Voiceprints outlive the recordings they came from (ADR-0009) — and
+ * then this is text, because a control that leads nowhere is worse than none.
+ */
+function FirstHeard({
+  speaker,
+  startedAt,
+  onOpenMeeting,
+}: {
+  speaker: Speaker;
+  startedAt: string;
+  onOpenMeeting: (meetingId: string) => void;
+}): React.JSX.Element {
+  const label = `${t("registry.firstSeen")} ${formatStarted(startedAt)} · ${displayTitle({
+    title: speaker.firstMeetingTitle,
+    detectedApp: speaker.firstMeetingApp,
+    startedAt,
+  })}`;
+  const meetingId = speaker.firstMeetingId;
+
+  if (!meetingId) {
+    return (
+      <span
+        className="mt-0.5 block text-xs text-[--color-ink-muted]"
+        data-testid="registry-first-seen"
+      >
+        {label}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpenMeeting(meetingId)}
+      title={t("registry.openMeeting")}
+      className="mt-0.5 block max-w-full truncate text-left text-xs text-[--color-ink-muted] underline decoration-dotted underline-offset-2 hover:text-[--color-ink]"
+      data-testid="registry-first-seen"
+    >
+      {label}
+    </button>
   );
 }
 

@@ -494,18 +494,19 @@ pub struct Appearances {
     /// start rather than the exemplar's own `created_at`, because that one
     /// records when Diarization ran, not when anybody spoke.
     pub first_seen_at: Option<String>,
+    pub first_meeting_id: Option<String>,
     pub first_meeting_title: Option<String>,
     pub first_meeting_app: Option<String>,
 }
 
 pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearances> {
-    // The title and app are bare columns beside a single `MIN()`, which
+    // The id, title and app are bare columns beside a single `MIN()`, which
     // SQLite documents as taking their values from the row that produced the
     // minimum — so they describe the first Meeting rather than an arbitrary
     // one. Adding a second min/max aggregate here would silently void that.
     let row = connection.query_row(
         "SELECT COUNT(DISTINCT meeting.id), MIN(meeting.started_at),
-                meeting.title, meeting.detected_app
+                meeting.id, meeting.title, meeting.detected_app
            FROM meetings meeting
            JOIN transcript_segments segment ON segment.meeting_id = meeting.id
           WHERE segment.speaker_id = ?1
@@ -517,8 +518,9 @@ pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearan
             Ok(Appearances {
                 meetings: row.get(0)?,
                 first_seen_at: row.get(1)?,
-                first_meeting_title: row.get(2)?,
-                first_meeting_app: row.get(3)?,
+                first_meeting_id: row.get(2)?,
+                first_meeting_title: row.get(3)?,
+                first_meeting_app: row.get(4)?,
             })
         },
     )?;
@@ -1047,6 +1049,7 @@ mod tests {
             seen.first_seen_at.as_deref(),
             Some("2026-01-01T09:00:00+00:00")
         );
+        assert_eq!(seen.first_meeting_id.as_deref(), Some(earlier.id.as_str()));
         assert_eq!(seen.first_meeting_app.as_deref(), Some("Teams"));
         assert_eq!(
             seen.first_meeting_title, None,

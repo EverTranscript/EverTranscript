@@ -94,5 +94,14 @@ grep -q "First heard May 19, 2026, 2:00 PM · Design review" <<<"$rendered" \
 [ "$(grep -o "First heard" <<<"$rendered" | wc -l | tr -d ' ')" = 2 ] \
   || { echo "FAIL: a voice with no Meetings was given a capture anyway"; exit 1; }
 
+# Click through. Alice's capture is the *older* Meeting, and the Client
+# defaults to the newest, so landing on it is only possible if the row
+# actually carried its id — a no-op click would leave "Design review" up.
+playwright-cli -s="$SESSION" click "[data-testid=registry-first-seen] >> nth=0" >/dev/null
+opened=$(playwright-cli -s="$SESSION" --raw eval "el => el.textContent" "main h1")
+echo "opened: $opened"
+grep -q "Microsoft Teams, 2026-03-04" <<<"$opened" \
+  || { echo "FAIL: clicking the capture line did not open that Meeting"; exit 1; }
+
 echo
-echo "e2e passed: the Registry names when each voice was captured, and where"
+echo "e2e passed: the Registry names when each voice was captured and where, and opens it"

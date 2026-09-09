@@ -175,6 +175,7 @@ fn speaker_to_wire(
         voiceprint_model: row.voiceprint_model,
         meetings_seen_in: seen.meetings,
         first_seen_at: seen.first_seen_at,
+        first_meeting_id: seen.first_meeting_id,
         first_meeting_title: seen.first_meeting_title,
         first_meeting_app: seen.first_meeting_app,
         created_at: row.created_at,

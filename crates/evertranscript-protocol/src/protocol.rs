@@ -1231,6 +1231,11 @@ pub struct Speaker {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub first_seen_at: Option<String>,
+    /// That Meeting's id, so a Client can open the recording the voice was
+    /// taken from rather than only naming it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub first_meeting_id: Option<String>,
     /// The title of that Meeting, when it has one. Absent rather than
     /// "Untitled", which is a Client's word and not a stored fact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
