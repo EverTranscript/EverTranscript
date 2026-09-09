@@ -165,8 +165,7 @@ fn speaker_to_wire(
     connection: &rusqlite::Connection,
     row: crate::store::speakers::Speaker,
 ) -> Result<Speaker> {
-    let (meetings_seen_in, first_seen_at) =
-        crate::store::speakers::appearances(connection, &row.id)?;
+    let seen = crate::store::speakers::appearances(connection, &row.id)?;
     Ok(Speaker {
         id: row.id,
         display_name: row.display_name,
@@ -174,8 +173,10 @@ fn speaker_to_wire(
         has_voiceprint: row.has_voiceprint,
         confirmed: row.confirmed,
         voiceprint_model: row.voiceprint_model,
-        meetings_seen_in,
-        first_seen_at,
+        meetings_seen_in: seen.meetings,
+        first_seen_at: seen.first_seen_at,
+        first_meeting_title: seen.first_meeting_title,
+        first_meeting_app: seen.first_meeting_app,
         created_at: row.created_at,
     })
 }

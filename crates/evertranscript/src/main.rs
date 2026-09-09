@@ -1339,6 +1339,15 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
             if let Some(first) = &speaker.first_seen_at {
                 println!("  first seen  {first}");
             }
+            // Where the voice came from, not just when: a timestamp alone
+            // leaves the Operator to go hunting for the Meeting it names.
+            if let Some(meeting) = speaker
+                .first_meeting_title
+                .as_deref()
+                .or(speaker.first_meeting_app.as_deref())
+            {
+                println!("  first in    {meeting}");
+            }
             if let Some(model) = &speaker.voiceprint_model {
                 println!("  model       {model}");
             }

@@ -413,7 +413,9 @@ function EmptyState(): React.JSX.Element {
   );
 }
 
-function displayTitle(meeting: Meeting): string {
+function displayTitle(
+  meeting: Pick<Meeting, "title" | "startedAt" | "detectedApp">,
+): string {
   if (meeting.title && meeting.title.trim()) return meeting.title;
   const date = meeting.startedAt.slice(0, 10);
   return meeting.detectedApp
@@ -745,6 +747,25 @@ function RegistryPanel({ onClose }: { onClose: () => void }): React.JSX.Element 
                   {voiceprintLabel(speaker)} · {speaker.meetingsSeenIn}{" "}
                   {t("registry.meetings")}
                 </span>
+                {/* Where the voice came from, said on the row itself. A
+                    biometric inventory the Operator cannot trace back to a
+                    recording is inspectable in name only — ADR-0008 bought
+                    the storage with legibility, and "which meeting was this
+                    taken from" is the first question anyone asks of it. */}
+                {speaker.firstSeenAt ? (
+                  <span
+                    className="mt-0.5 block text-xs text-[--color-ink-muted]"
+                    data-testid="registry-first-seen"
+                  >
+                    {t("registry.firstSeen")} {formatStarted(speaker.firstSeenAt)}{" "}
+                    ·{" "}
+                    {displayTitle({
+                      title: speaker.firstMeetingTitle,
+                      detectedApp: speaker.firstMeetingApp,
+                      startedAt: speaker.firstSeenAt,
+                    })}
+                  </span>
+                ) : null}
               </div>
 
               <div className="flex shrink-0 gap-2">

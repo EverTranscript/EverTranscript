@@ -481,14 +481,31 @@ pub fn attribute_segment(
     Ok(())
 }
 
-/// How many Meetings a Speaker has been heard in, and when — the facts the
-/// Registry shows beside a name (ticket 08).
+/// How many Meetings a Speaker has been heard in, when the voice was first
+/// captured, and which Meeting captured it — the facts the Registry shows
+/// beside a name (ticket 08).
 ///
 /// Derived rather than counted into a column, so it cannot drift from the
 /// segments it describes.
-pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<(i64, Option<String>)> {
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Appearances {
+    pub meetings: i64,
+    /// The start of the earliest Meeting this voice was heard in. Meeting
+    /// start rather than the exemplar's own `created_at`, because that one
+    /// records when Diarization ran, not when anybody spoke.
+    pub first_seen_at: Option<String>,
+    pub first_meeting_title: Option<String>,
+    pub first_meeting_app: Option<String>,
+}
+
+pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearances> {
+    // The title and app are bare columns beside a single `MIN()`, which
+    // SQLite documents as taking their values from the row that produced the
+    // minimum — so they describe the first Meeting rather than an arbitrary
+    // one. Adding a second min/max aggregate here would silently void that.
     let row = connection.query_row(
-        "SELECT COUNT(DISTINCT meeting.id), MIN(meeting.started_at)
+        "SELECT COUNT(DISTINCT meeting.id), MIN(meeting.started_at),
+                meeting.title, meeting.detected_app
            FROM meetings meeting
            JOIN transcript_segments segment ON segment.meeting_id = meeting.id
           WHERE segment.speaker_id = ?1
@@ -496,7 +513,14 @@ pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<(i64, Op
                  SELECT hint.segment_id FROM attribution_hints hint WHERE hint.speaker_id = ?1
              )",
         params![speaker_id],
-        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<String>>(1)?)),
+        |row| {
+            Ok(Appearances {
+                meetings: row.get(0)?,
+                first_seen_at: row.get(1)?,
+                first_meeting_title: row.get(2)?,
+                first_meeting_app: row.get(3)?,
+            })
+        },
     )?;
     Ok(row)
 }
@@ -978,9 +1002,56 @@ mod tests {
         let speaker = create(&connection, false).expect("speaker");
         correct_attribution(&connection, &segment_id, &speaker.id).expect("correct");
 
-        let (count, first_seen) = appearances(&connection, &speaker.id).expect("appearances");
-        assert_eq!(count, 1);
-        assert!(first_seen.is_some());
+        let seen = appearances(&connection, &speaker.id).expect("appearances");
+        assert_eq!(seen.meetings, 1);
+        assert!(seen.first_seen_at.is_some());
+    }
+
+    #[test]
+    fn appearances_name_the_meeting_the_voice_was_first_heard_in() {
+        // The Registry says *when* a voice was captured and *where*. If the
+        // bare columns beside MIN() ever stopped tracking the minimum, the
+        // two halves would disagree — a first-heard date from one Meeting
+        // and a title from another — and nothing else would catch it.
+        let connection = db();
+        let earlier = meetings::start(&connection, None, Some("Teams")).expect("m1");
+        let later = meetings::start(&connection, Some("Retro"), None).expect("m2");
+        connection
+            .execute(
+                "UPDATE meetings SET started_at = ?2 WHERE id = ?1",
+                params![earlier.id, "2026-01-01T09:00:00+00:00"],
+            )
+            .expect("backdate");
+        connection
+            .execute(
+                "UPDATE meetings SET started_at = ?2 WHERE id = ?1",
+                params![later.id, "2026-02-01T09:00:00+00:00"],
+            )
+            .expect("date");
+
+        let speaker = create(&connection, false).expect("speaker");
+        for meeting in [&earlier, &later] {
+            let segment_id = segment(&connection, &meeting.id, 1);
+            attribute_segment(
+                &connection,
+                &segment_id,
+                Some(&speaker.id),
+                Attribution::Clustered,
+            )
+            .expect("attribute");
+        }
+
+        let seen = appearances(&connection, &speaker.id).expect("appearances");
+        assert_eq!(seen.meetings, 2);
+        assert_eq!(
+            seen.first_seen_at.as_deref(),
+            Some("2026-01-01T09:00:00+00:00")
+        );
+        assert_eq!(seen.first_meeting_app.as_deref(), Some("Teams"));
+        assert_eq!(
+            seen.first_meeting_title, None,
+            "the earlier one is untitled"
+        );
     }
 
     #[test]

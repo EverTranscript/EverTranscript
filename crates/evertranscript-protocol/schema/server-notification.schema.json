@@ -417,7 +417,22 @@
             "null"
           ]
         },
+        "firstMeetingApp": {
+          "description": "The app that Meeting was detected in. Sent beside the title because\nmost Meetings are auto-detected and never titled, and \"Teams, 8 Sep\"\nanswers *which meeting* where \"Untitled\" does not.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "firstMeetingTitle": {
+          "description": "The title of that Meeting, when it has one. Absent rather than\n\"Untitled\", which is a Client's word and not a stored fact.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "firstSeenAt": {
+          "description": "When this voice was first captured: the start of the earliest Meeting\nit was heard in.",
           "type": [
             "string",
             "null"

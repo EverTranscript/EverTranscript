@@ -1226,9 +1226,22 @@ pub struct Speaker {
     pub voiceprint_model: Option<String>,
     #[ts(type = "number")]
     pub meetings_seen_in: i64,
+    /// When this voice was first captured: the start of the earliest Meeting
+    /// it was heard in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub first_seen_at: Option<String>,
+    /// The title of that Meeting, when it has one. Absent rather than
+    /// "Untitled", which is a Client's word and not a stored fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub first_meeting_title: Option<String>,
+    /// The app that Meeting was detected in. Sent beside the title because
+    /// most Meetings are auto-detected and never titled, and "Teams, 8 Sep"
+    /// answers *which meeting* where "Untitled" does not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub first_meeting_app: Option<String>,
     pub created_at: String,
 }
 

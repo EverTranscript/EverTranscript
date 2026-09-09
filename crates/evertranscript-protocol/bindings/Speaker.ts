@@ -30,4 +30,20 @@ confirmed: boolean,
  * explain why an upgrade re-embedded, rather than recognition silently
  * changing quality.
  */
-voiceprintModel?: string, meetingsSeenIn: number, firstSeenAt?: string, createdAt: string, };
+voiceprintModel?: string, meetingsSeenIn: number, 
+/**
+ * When this voice was first captured: the start of the earliest Meeting
+ * it was heard in.
+ */
+firstSeenAt?: string, 
+/**
+ * The title of that Meeting, when it has one. Absent rather than
+ * "Untitled", which is a Client's word and not a stored fact.
+ */
+firstMeetingTitle?: string, 
+/**
+ * The app that Meeting was detected in. Sent beside the title because
+ * most Meetings are auto-detected and never titled, and "Teams, 8 Sep"
+ * answers *which meeting* where "Untitled" does not.
+ */
+firstMeetingApp?: string, createdAt: string, };
