@@ -4,7 +4,7 @@ import type { AudioLegReport } from "@protocol/AudioLegReport";
 import type { Meeting } from "@protocol/Meeting";
 import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 
-import { isMessageKey, t } from "./i18n";
+import { isMessageKey, plural, t } from "./i18n";
 import { parseSpans, parseSummary } from "./summary-markdown";
 import type { Speaker } from "@protocol/Speaker";
 import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
@@ -781,16 +781,18 @@ function RegistryPanel({
                     <button
                       type="button"
                       onClick={() => void toggleMeetings(speaker.id)}
-                      title={t("registry.meetings.show")}
+                      title={t("registry.showMeetings")}
                       aria-expanded={expandedId === speaker.id}
                       className="underline decoration-dotted underline-offset-2 hover:text-[--color-ink]"
                       data-testid="registry-meeting-count"
                     >
-                      {speaker.meetingsSeenIn} {t("registry.meetings")}
+                      {speaker.meetingsSeenIn}{" "}
+                      {plural("registry.meetings", speaker.meetingsSeenIn)}
                     </button>
                   ) : (
                     <>
-                      {speaker.meetingsSeenIn} {t("registry.meetings")}
+                      {speaker.meetingsSeenIn}{" "}
+                      {plural("registry.meetings", speaker.meetingsSeenIn)}
                     </>
                   )}
                 </span>

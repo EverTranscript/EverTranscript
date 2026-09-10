@@ -152,11 +152,12 @@ const en = {
   "registry.close": "Done",
   "registry.you": "You",
   "registry.unnamed": "Unnamed",
-  "registry.meetings": "meetings",
+  "registry.meetings.one": "meeting",
+  "registry.meetings.other": "meetings",
   "registry.firstSeen": "First heard",
   "registry.openMeeting": "Open the Meeting this voice was captured in",
   "registry.openLastMeeting": "Open the Meeting this voice was last heard in",
-  "registry.meetings.show": "List every Meeting this voice was heard in",
+  "registry.showMeetings": "List every Meeting this voice was heard in",
   "registry.lastHeard": "Last heard",
   "registry.model": "Model",
   "registry.voiceprint.none": "No Voiceprint",
@@ -344,11 +345,12 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "registry.close": "完成",
     "registry.you": "你",
     "registry.unnamed": "未命名",
-    "registry.meetings": "场会议",
+    "registry.meetings.one": "场会议",
+    "registry.meetings.other": "场会议",
     "registry.firstSeen": "首次出现",
     "registry.openMeeting": "打开采集到这个声音的会议",
     "registry.openLastMeeting": "打开最近听到这个声音的会议",
-    "registry.meetings.show": "列出这个声音出现过的每一场会议",
+    "registry.showMeetings": "列出这个声音出现过的每一场会议",
     "registry.lastHeard": "最近出现",
     "registry.model": "模型",
     "registry.voiceprint.none": "无声纹",
@@ -404,6 +406,28 @@ function activeLocale(): string {
 
 export function t(key: MessageKey): string {
   return catalogs[activeLocale()]?.[key] ?? en[key];
+}
+
+/** A key the catalog holds one string per plural category for. */
+type PluralKey = "registry.meetings";
+
+/**
+ * A counted noun, in the form the locale actually uses.
+ *
+ * `Intl.PluralRules` rather than a `count === 1` at the call site: English
+ * has two forms and Chinese has one, so either would look right today — and
+ * the hand-written rule is the one that gets copied to the next counted noun
+ * and is then wrong for the three Russian takes. The catalog holds one string
+ * per CLDR category, which is the shape the real runtime replacing this shim
+ * reads too, so the call sites still do not change.
+ *
+ * Falls back to `other`, which CLDR guarantees every locale has, for a
+ * category this catalog does not carry a string for.
+ */
+export function plural(key: PluralKey, count: number): string {
+  const category = new Intl.PluralRules(activeLocale()).select(count);
+  const exact = `${key}.${category}`;
+  return isMessageKey(exact) ? t(exact) : t(`${key}.other` as MessageKey);
 }
 
 /// Whether a string the Core sent is a catalog key rather than prose.

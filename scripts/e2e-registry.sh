@@ -94,6 +94,15 @@ grep -q "First heard May 19, 2026, 2:00 PM · Design review" <<<"$rendered" \
 [ "$(grep -o "First heard" <<<"$rendered" | wc -l | tr -d ' ')" = 2 ] \
   || { echo "FAIL: a voice with no Meetings was given a capture anyway"; exit 1; }
 
+counts=$(playwright-cli -s="$SESSION" --raw eval \
+  "el => [...el.querySelectorAll('[data-testid=registry-meeting-count]')].map(n => n.textContent).join(' | ')" \
+  "main")
+echo "counts: $counts"
+# Both forms in one assertion. A voice heard in no Meeting has no count to
+# click, so it is not in this list at all.
+grep -qF "2 meetings | 1 meeting" <<<"$counts" \
+  || { echo "FAIL: the counts do not agree with their numbers"; exit 1; }
+
 last=$(playwright-cli -s="$SESSION" --raw eval \
   "el => [...el.querySelectorAll('[data-testid=registry-last-heard]')].map(n => n.textContent).join('\n')" \
   "main")
