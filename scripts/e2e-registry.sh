@@ -48,6 +48,18 @@ pnpm -C clients/electron build >/dev/null
 
 echo "== isolated instance =="
 cleanup
+# The debugging port is shared with whatever else is on this machine, and
+# attaching is silent about whose browser it got. A leftover instance of ours
+# clears in a moment; a stranger's DevTools session does not, and driving it
+# would pass or fail against a page that has nothing to do with this repo.
+for _ in $(seq 20); do
+  curl -sf http://127.0.0.1:9222/json/version >/dev/null || break
+  sleep 0.2
+done
+if curl -sf http://127.0.0.1:9222/json/version >/dev/null; then
+  echo "REFUSING: something else is already debugging on 9222"
+  exit 1
+fi
 rm -rf "$ROOT" "$RUNTIME"
 mkdir -p "$RUNTIME" "$EVERTRANSCRIPT_HISTORY_DIR" "$EVERTRANSCRIPT_APP_SUPPORT_DIR"
 cat > "$EVERTRANSCRIPT_APP_SUPPORT_DIR/settings.json" <<'JSON'

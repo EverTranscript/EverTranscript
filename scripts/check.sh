@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Everything CI gates, in the order CI runs it. Run before committing —
+# Everything CI gates, in the order CI runs it, and then the two checks CI
+# cannot run — the Windows cross-compile and the e2e. Run before committing:
 # `cargo fmt` alone has twice let a clippy failure through to a commit.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -44,6 +45,25 @@ echo "== client tests =="
 # The main process has logic worth running, not just typechecking: the Core
 # search decides whether a fresh install works at all (DECISIONS Q44).
 pnpm -C clients/electron test
+
+# The one check that runs the whole product rather than a layer of it —
+# SQLite, Core, socket, Electron main, preload, React — and asserts against
+# what the window renders. Everything above it can pass while the app shows
+# the wrong thing, which is how "the Registry knew and did not say" survived
+# a green suite.
+#
+# **The exception to this file's own rule**, and deliberately so: CI does not
+# gate this one. The Client job is an Ubuntu runner with no Rust toolchain and
+# no display, and giving it both plus a Playwright install to drive an Electron
+# window is a different job, not a step. Optional here for the same reason the
+# Windows cross-check is: a check that refuses to run without a dependency the
+# machine lacks is a check people delete.
+if command -v playwright-cli >/dev/null 2>&1; then
+  echo "== e2e (Voice Registry) =="
+  ./scripts/e2e-registry.sh
+else
+  echo "== e2e (Voice Registry) == skipped: playwright-cli not installed"
+fi
 
 echo
 echo "all checks passed"
