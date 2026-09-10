@@ -771,6 +771,18 @@ function RegistryPanel({
                     onOpenMeeting={onOpenMeeting}
                   />
                 ) : null}
+                {/* Only when it says something the line above did not: for a
+                    voice heard in one Meeting the last time is the first
+                    time, and two identical timestamps read as a bug. */}
+                {speaker.lastHeardAt &&
+                speaker.lastHeardAt !== speaker.firstSeenAt ? (
+                  <span
+                    className="mt-0.5 block text-xs text-[--color-ink-muted]"
+                    data-testid="registry-last-heard"
+                  >
+                    {t("registry.lastHeard")} {formatStarted(speaker.lastHeardAt)}
+                  </span>
+                ) : null}
               </div>
 
               <div className="flex shrink-0 gap-2">

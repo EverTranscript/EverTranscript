@@ -1348,6 +1348,13 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
             {
                 println!("  first in    {meeting}");
             }
+            // Only when it says something the line above did not: for a voice
+            // heard once, the last time is the first time.
+            if let Some(last) = &speaker.last_heard_at
+                && Some(last) != speaker.first_seen_at.as_ref()
+            {
+                println!("  last heard  {last}");
+            }
             if let Some(model) = &speaker.voiceprint_model {
                 println!("  model       {model}");
             }

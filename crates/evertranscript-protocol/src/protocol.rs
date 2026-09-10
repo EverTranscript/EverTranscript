@@ -1247,6 +1247,11 @@ pub struct Speaker {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub first_meeting_app: Option<String>,
+    /// When this voice was last heard: the start of the most recent Meeting
+    /// it appears in. Equal to `first_seen_at` for a voice heard once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_heard_at: Option<String>,
     pub created_at: String,
 }
 

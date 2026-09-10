@@ -482,11 +482,11 @@ pub fn attribute_segment(
 }
 
 /// How many Meetings a Speaker has been heard in, when the voice was first
-/// captured, and which Meeting captured it — the facts the Registry shows
-/// beside a name (ticket 08).
+/// captured, which Meeting captured it, and when it was last heard — the
+/// facts the Registry shows beside a name (ticket 08).
 ///
-/// Derived rather than counted into a column, so it cannot drift from the
-/// segments it describes.
+/// Derived rather than counted into a column, so they cannot drift from the
+/// segments they describe.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Appearances {
     pub meetings: i64,
@@ -497,34 +497,64 @@ pub struct Appearances {
     pub first_meeting_id: Option<String>,
     pub first_meeting_title: Option<String>,
     pub first_meeting_app: Option<String>,
+    /// The start of the most recent one. Equal to `first_seen_at` for a voice
+    /// heard in a single Meeting.
+    pub last_heard_at: Option<String>,
 }
 
+/// Which Meetings count as an appearance: the machine's attribution, plus the
+/// Operator's. A segment that was only ever a correction still puts the
+/// Speaker in that Meeting, and counting the machine's column alone would
+/// under-report exactly the Speakers the Operator cared enough to fix.
+const HEARD_IN: &str = "FROM meetings meeting
+      JOIN transcript_segments segment ON segment.meeting_id = meeting.id
+     WHERE segment.speaker_id = ?1
+        OR segment.id IN (
+            SELECT hint.segment_id FROM attribution_hints hint WHERE hint.speaker_id = ?1
+        )";
+
 pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearances> {
-    // The id, title and app are bare columns beside a single `MIN()`, which
-    // SQLite documents as taking their values from the row that produced the
-    // minimum — so they describe the first Meeting rather than an arbitrary
-    // one. Adding a second min/max aggregate here would silently void that.
-    let row = connection.query_row(
-        "SELECT COUNT(DISTINCT meeting.id), MIN(meeting.started_at),
-                meeting.id, meeting.title, meeting.detected_app
-           FROM meetings meeting
-           JOIN transcript_segments segment ON segment.meeting_id = meeting.id
-          WHERE segment.speaker_id = ?1
-             OR segment.id IN (
-                 SELECT hint.segment_id FROM attribution_hints hint WHERE hint.speaker_id = ?1
-             )",
+    let (meetings, last_heard_at) = connection.query_row(
+        &format!("SELECT COUNT(DISTINCT meeting.id), MAX(meeting.started_at) {HEARD_IN}"),
         params![speaker_id],
-        |row| {
-            Ok(Appearances {
-                meetings: row.get(0)?,
-                first_seen_at: row.get(1)?,
-                first_meeting_id: row.get(2)?,
-                first_meeting_title: row.get(3)?,
-                first_meeting_app: row.get(4)?,
-            })
-        },
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    Ok(row)
+
+    // The first Meeting is fetched as a row rather than as bare columns
+    // beside a `MIN()`: SQLite only pins those to the extreme row while
+    // exactly one min/max aggregate is in the query, and the `MAX()` above
+    // would have quietly taken that guarantee away.
+    let first = connection
+        .query_row(
+            &format!(
+                "SELECT meeting.started_at, meeting.id, meeting.title, meeting.detected_app \
+                 {HEARD_IN} ORDER BY meeting.started_at LIMIT 1"
+            ),
+            params![speaker_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+
+    let (first_seen_at, first_meeting_id, first_meeting_title, first_meeting_app) = match first {
+        Some((started_at, id, title, app)) => (Some(started_at), Some(id), title, app),
+        None => (None, None, None, None),
+    };
+
+    Ok(Appearances {
+        meetings,
+        first_seen_at,
+        first_meeting_id,
+        first_meeting_title,
+        first_meeting_app,
+        last_heard_at,
+    })
 }
 
 /// Every Speaker with a Voiceprint, as vectors.
@@ -1054,6 +1084,11 @@ mod tests {
         assert_eq!(
             seen.first_meeting_title, None,
             "the earlier one is untitled"
+        );
+        assert_eq!(
+            seen.last_heard_at.as_deref(),
+            Some("2026-02-01T09:00:00+00:00"),
+            "and the last time heard is the later Meeting, not the first"
         );
     }
 

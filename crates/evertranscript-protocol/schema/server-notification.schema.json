@@ -456,6 +456,13 @@
           "description": "The Operator's own Speaker, displayed \"You\" (ADR-0029 as amended).",
           "type": "boolean"
         },
+        "lastHeardAt": {
+          "description": "When this voice was last heard: the start of the most recent Meeting\nit appears in. Equal to `first_seen_at` for a voice heard once.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "meetingsSeenIn": {
           "type": "integer",
           "format": "int64"

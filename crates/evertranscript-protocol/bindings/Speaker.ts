@@ -51,4 +51,9 @@ firstMeetingTitle?: string,
  * most Meetings are auto-detected and never titled, and "Teams, 8 Sep"
  * answers *which meeting* where "Untitled" does not.
  */
-firstMeetingApp?: string, createdAt: string, };
+firstMeetingApp?: string, 
+/**
+ * When this voice was last heard: the start of the most recent Meeting
+ * it appears in. Equal to `first_seen_at` for a voice heard once.
+ */
+lastHeardAt?: string, createdAt: string, };

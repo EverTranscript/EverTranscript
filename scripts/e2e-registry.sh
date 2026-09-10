@@ -94,6 +94,17 @@ grep -q "First heard May 19, 2026, 2:00 PM · Design review" <<<"$rendered" \
 [ "$(grep -o "First heard" <<<"$rendered" | wc -l | tr -d ' ')" = 2 ] \
   || { echo "FAIL: a voice with no Meetings was given a capture anyway"; exit 1; }
 
+last=$(playwright-cli -s="$SESSION" --raw eval \
+  "el => [...el.querySelectorAll('[data-testid=registry-last-heard]')].map(n => n.textContent).join('\n')" \
+  "main")
+echo "$last"
+# Alice alone gets this line: she is the only voice in two Meetings, and for a
+# voice heard once the last time is the first time already on screen.
+[ "$(grep -o "Last heard" <<<"$last" | wc -l | tr -d ' ')" = 1 ] \
+  || { echo "FAIL: Last heard is shown for a voice heard in one Meeting"; exit 1; }
+grep -q "Last heard May 19, 2026, 2:00 PM" <<<"$last" \
+  || { echo "FAIL: Last heard does not name the most recent Meeting"; exit 1; }
+
 # Click through. Alice's capture is the *older* Meeting, and the Client
 # defaults to the newest, so landing on it is only possible if the row
 # actually carried its id — a no-op click would leave "Design review" up.
@@ -104,4 +115,5 @@ grep -q "Microsoft Teams, 2026-03-04" <<<"$opened" \
   || { echo "FAIL: clicking the capture line did not open that Meeting"; exit 1; }
 
 echo
-echo "e2e passed: the Registry names when each voice was captured and where, and opens it"
+echo "e2e passed: the Registry names when each voice was captured, where, when it"
+echo "was last heard, and opens the Meeting it was captured in"
