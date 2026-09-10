@@ -48,6 +48,7 @@ use evertranscript_protocol::Speaker;
 use evertranscript_protocol::SpeakerChangedParams;
 use evertranscript_protocol::SpeakerDetailResponse;
 use evertranscript_protocol::SpeakerListResponse;
+use evertranscript_protocol::SpeakerMeeting;
 use evertranscript_protocol::SpeakerResponse;
 use evertranscript_protocol::StatusResponse;
 use evertranscript_protocol::SummaryBackendOption;
@@ -1146,8 +1147,18 @@ impl Core {
                     .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
                 let speaker = speaker_to_wire(connection, row)?;
                 let name_suggestions = crate::store::speakers::name_suggestions(connection, &id)?;
+                let meetings = crate::store::speakers::meetings_heard_in(connection, &id)?
+                    .into_iter()
+                    .map(|heard| SpeakerMeeting {
+                        id: heard.meeting_id,
+                        started_at: heard.started_at,
+                        title: heard.title,
+                        detected_app: heard.app,
+                    })
+                    .collect();
                 Ok(SpeakerDetailResponse {
                     speaker,
+                    meetings,
                     name_suggestions,
                 })
             })

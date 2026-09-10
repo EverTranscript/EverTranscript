@@ -1358,6 +1358,14 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
             if let Some(model) = &speaker.voiceprint_model {
                 println!("  model       {model}");
             }
+            for meeting in &response.meetings {
+                let name = meeting
+                    .title
+                    .as_deref()
+                    .or(meeting.detected_app.as_deref())
+                    .unwrap_or("untitled");
+                println!("  heard in    {name}  {}", meeting.started_at);
+            }
             if !response.name_suggestions.is_empty() {
                 println!(
                     "\n  The calendar listed these people in meetings this voice was in.\n  \

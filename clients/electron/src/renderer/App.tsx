@@ -7,6 +7,7 @@ import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 import { isMessageKey, t } from "./i18n";
 import { parseSpans, parseSummary } from "./summary-markdown";
 import type { Speaker } from "@protocol/Speaker";
+import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
 import {
   useAudioCheck,
   useCore,
@@ -676,10 +677,26 @@ function RegistryPanel({
   onClose: () => void;
   onOpenMeeting: (meetingId: string) => void;
 }): React.JSX.Element {
-  const { speakers, error, rename, forgetVoice } = useRegistry();
+  const { speakers, error, rename, forgetVoice, meetingsFor } = useRegistry();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<SpeakerMeeting[] | null>(null);
+
+  // One row's list at a time, discarded on collapse. Caching every Speaker's
+  // Meetings would mean deciding when a rename or a deletion staled them, and
+  // the fetch is one indexed query against a database on this machine.
+  const toggleMeetings = async (id: string): Promise<void> => {
+    if (expandedId === id) {
+      setExpandedId(null);
+      setExpanded(null);
+      return;
+    }
+    setExpandedId(id);
+    setExpanded(null);
+    setExpanded(await meetingsFor(id));
+  };
 
   const nameOf = (speaker: Speaker): string => {
     if (speaker.displayName) return speaker.displayName;
@@ -756,8 +773,26 @@ function RegistryPanel({
                   <span className="block truncate text-sm">{nameOf(speaker)}</span>
                 )}
                 <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
-                  {voiceprintLabel(speaker)} · {speaker.meetingsSeenIn}{" "}
-                  {t("registry.meetings")}
+                  {voiceprintLabel(speaker)} ·{" "}
+                  {/* The count answers "how many"; the Operator's next
+                      question is "which ones", and it is the only fact on
+                      this row that still had no way to ask. */}
+                  {speaker.meetingsSeenIn > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => void toggleMeetings(speaker.id)}
+                      title={t("registry.meetings.show")}
+                      aria-expanded={expandedId === speaker.id}
+                      className="underline decoration-dotted underline-offset-2 hover:text-[--color-ink]"
+                      data-testid="registry-meeting-count"
+                    >
+                      {speaker.meetingsSeenIn} {t("registry.meetings")}
+                    </button>
+                  ) : (
+                    <>
+                      {speaker.meetingsSeenIn} {t("registry.meetings")}
+                    </>
+                  )}
                 </span>
                 {/* Where the voice came from, said on the row itself. A
                     biometric inventory the Operator cannot trace back to a
@@ -818,6 +853,38 @@ function RegistryPanel({
                 ) : null}
               </div>
             </div>
+
+            {expandedId === speaker.id ? (
+              <ul className="mt-2 border-l border-[--color-line] pl-3">
+                {expanded === null ? (
+                  <li className="py-1 text-xs text-[--color-ink-muted]">
+                    {t("core.connecting")}
+                  </li>
+                ) : (
+                  expanded.map((meeting) => (
+                    <li key={meeting.id}>
+                      <button
+                        type="button"
+                        onClick={() => onOpenMeeting(meeting.id)}
+                        className="flex w-full items-baseline justify-between gap-3 py-1 text-left text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
+                        data-testid="registry-meeting-entry"
+                      >
+                        <span className="min-w-0 truncate">
+                          {displayTitle({
+                            title: meeting.title,
+                            detectedApp: meeting.detectedApp,
+                            startedAt: meeting.startedAt,
+                          })}
+                        </span>
+                        <span className="shrink-0">
+                          {formatStarted(meeting.startedAt)}
+                        </span>
+                      </button>
+                    </li>
+                  ))
+                )}
+              </ul>
+            ) : null}
 
             {editingId === speaker.id ? (
               <p className="mt-2 text-xs text-[--color-ink-muted]">

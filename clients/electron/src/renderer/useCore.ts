@@ -17,7 +17,9 @@ import type { SettingsResponse } from "@protocol/SettingsResponse";
 import type { SettingsSetParams } from "@protocol/SettingsSetParams";
 import type { BriefingResponse } from "@protocol/BriefingResponse";
 import type { PostureResponse } from "@protocol/PostureResponse";
+import type { SpeakerDetailResponse } from "@protocol/SpeakerDetailResponse";
 import type { SpeakerListResponse } from "@protocol/SpeakerListResponse";
+import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
 import type { SummaryBackendsResponse } from "@protocol/SummaryBackendsResponse";
 import type { SpeakerResponse } from "@protocol/SpeakerResponse";
 import type { WatchlistResponse } from "@protocol/WatchlistResponse";
@@ -289,6 +291,17 @@ export function useRegistry() {
     [refresh],
   );
 
+  // Fetched on demand rather than with the list: `speaker/list` carries every
+  // Speaker at once, and pulling every Meeting behind every one of them to
+  // draw counts nobody expanded is work the Registry does not need.
+  const meetingsFor = useCallback(async (id: string): Promise<SpeakerMeeting[]> => {
+    const detail = await window.evertranscript.request<SpeakerDetailResponse>(
+      "speaker/get",
+      { id },
+    );
+    return detail.meetings;
+  }, []);
+
   const forgetVoice = useCallback(
     async (id: string) => {
       await window.evertranscript.request<SpeakerResponse>(
@@ -300,7 +313,7 @@ export function useRegistry() {
     [refresh],
   );
 
-  return { speakers, error, rename, forgetVoice };
+  return { speakers, error, rename, forgetVoice, meetingsFor };
 }
 
 /**

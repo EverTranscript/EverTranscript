@@ -124,6 +124,24 @@ echo "opened: $opened"
 grep -q "Design review" <<<"$opened" \
   || { echo "FAIL: clicking the last-heard line did not open that Meeting"; exit 1; }
 
+# The count expands to the Meetings it counts, newest first.
+playwright-cli -s="$SESSION" click "getByRole('button', { name: 'Voices' })" >/dev/null
+playwright-cli -s="$SESSION" click "[data-testid=registry-meeting-count] >> nth=0" >/dev/null
+listed=$(playwright-cli -s="$SESSION" --raw eval \
+  "el => [...el.querySelectorAll('[data-testid=registry-meeting-entry]')].map(n => n.textContent).join(' | ')" \
+  "main")
+echo "listed: $listed"
+grep -q "Design review.*Microsoft Teams, 2026-03-04" <<<"$listed" \
+  || { echo "FAIL: the count did not expand to both Meetings, newest first"; exit 1; }
+
+# The older entry, with "Design review" still open — so landing on the Teams
+# call is the list doing the work rather than the Client's default.
+playwright-cli -s="$SESSION" click "[data-testid=registry-meeting-entry] >> nth=1" >/dev/null
+opened=$(playwright-cli -s="$SESSION" --raw eval "el => el.textContent" "main h1")
+echo "opened: $opened"
+grep -q "Microsoft Teams, 2026-03-04" <<<"$opened" \
+  || { echo "FAIL: clicking a listed Meeting did not open it"; exit 1; }
+
 echo
 echo "e2e passed: the Registry names when each voice was captured, where, and when"
-echo "it was last heard — and both dates open the Meeting they name"
+echo "it was last heard; both dates and every Meeting behind the count open it"

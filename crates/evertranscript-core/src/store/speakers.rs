@@ -503,13 +503,27 @@ pub struct Appearances {
     pub last_meeting_id: Option<String>,
 }
 
-/// One end of a voice's history: the earliest or the most recent Meeting it
-/// was heard in.
-struct Edge {
-    started_at: String,
-    meeting_id: String,
-    title: Option<String>,
-    app: Option<String>,
+/// A Meeting a voice was heard in, carrying just enough for a Client to name
+/// it. Deliberately not a whole [`super::meetings::Meeting`]: the Registry
+/// wants a label and a way in, and a Speaker heard in fifty Meetings would
+/// otherwise drag fifty Summaries and fifty sets of Notes across the socket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeardMeeting {
+    pub started_at: String,
+    pub meeting_id: String,
+    pub title: Option<String>,
+    pub app: Option<String>,
+}
+
+const HEARD_COLUMNS: &str = "meeting.started_at, meeting.id, meeting.title, meeting.detected_app";
+
+fn row_to_heard(row: &rusqlite::Row<'_>) -> rusqlite::Result<HeardMeeting> {
+    Ok(HeardMeeting {
+        started_at: row.get(0)?,
+        meeting_id: row.get(1)?,
+        title: row.get(2)?,
+        app: row.get(3)?,
+    })
 }
 
 /// Which Meetings count as an appearance: the machine's attribution, plus the
@@ -529,25 +543,35 @@ const HEARD_IN: &str = "FROM meetings meeting
 /// those to the extreme row while exactly one min/max aggregate is in the
 /// query, and needing both ends would have quietly taken that guarantee away —
 /// leaving a date from one Meeting beside an id from another, with no error.
-fn edge_meeting(connection: &Connection, speaker_id: &str, newest: bool) -> Result<Option<Edge>> {
+fn edge_meeting(
+    connection: &Connection,
+    speaker_id: &str,
+    newest: bool,
+) -> Result<Option<HeardMeeting>> {
     let order = if newest { "DESC" } else { "ASC" };
     Ok(connection
         .query_row(
             &format!(
-                "SELECT meeting.started_at, meeting.id, meeting.title, meeting.detected_app \
-                 {HEARD_IN} ORDER BY meeting.started_at {order} LIMIT 1"
+                "SELECT {HEARD_COLUMNS} {HEARD_IN} ORDER BY meeting.started_at {order} LIMIT 1"
             ),
             params![speaker_id],
-            |row| {
-                Ok(Edge {
-                    started_at: row.get(0)?,
-                    meeting_id: row.get(1)?,
-                    title: row.get(2)?,
-                    app: row.get(3)?,
-                })
-            },
+            row_to_heard,
         )
         .optional()?)
+}
+
+/// Every Meeting a voice was heard in, newest first — the list behind the
+/// Registry's count.
+///
+/// Not derivable on the Client from the Meetings it already holds: it lists
+/// only the most recent few hundred, and the Speaker this exists to serve is
+/// exactly the one heard once, a year ago.
+pub fn meetings_heard_in(connection: &Connection, speaker_id: &str) -> Result<Vec<HeardMeeting>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT DISTINCT {HEARD_COLUMNS} {HEARD_IN} ORDER BY meeting.started_at DESC"
+    ))?;
+    let rows = statement.query_map(params![speaker_id], row_to_heard)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearances> {
@@ -1105,6 +1129,17 @@ mod tests {
             "and the last time heard is the later Meeting, not the first"
         );
         assert_eq!(seen.last_meeting_id.as_deref(), Some(later.id.as_str()));
+
+        // The list behind the count: newest first, each Meeting once however
+        // many times the voice spoke in it.
+        let heard = meetings_heard_in(&connection, &speaker.id).expect("heard in");
+        assert_eq!(
+            heard
+                .iter()
+                .map(|meeting| meeting.meeting_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![later.id.as_str(), earlier.id.as_str()]
+        );
     }
 
     #[test]

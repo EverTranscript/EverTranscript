@@ -1309,11 +1309,35 @@ pub struct SpeakerResponse {
 #[ts(export)]
 pub struct SpeakerDetailResponse {
     pub speaker: Speaker,
+    /// Every Meeting this Speaker was heard in, newest first — what the
+    /// Registry's Meeting count expands to.
+    ///
+    /// Sent here rather than on [`Speaker`] because the list response carries
+    /// every Speaker at once, and a Registry that shows counts should not pay
+    /// for every Meeting behind every one of them to draw itself.
+    pub meetings: Vec<SpeakerMeeting>,
     /// Names the calendar knew about for Meetings this Speaker appears in,
     /// offered as candidates. **Suggestions only** — an invitation is
     /// evidence about who was invited, never about who spoke, and applying
     /// one automatically would invent attribution.
     pub name_suggestions: Vec<String>,
+}
+
+/// A Meeting a Speaker was heard in: enough to name it and to open it, and
+/// nothing else. A whole `Meeting` would carry that Meeting's Notes and
+/// Summary to draw one line of a list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerMeeting {
+    pub id: String,
+    pub started_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detected_app: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
