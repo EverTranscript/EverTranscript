@@ -765,9 +765,17 @@ function RegistryPanel({
                     the storage with legibility, and "which meeting was this
                     taken from" is the first question anyone asks of it. */}
                 {speaker.firstSeenAt ? (
-                  <FirstHeard
-                    speaker={speaker}
-                    startedAt={speaker.firstSeenAt}
+                  <HeardIn
+                    label={`${t("registry.firstSeen")} ${formatStarted(
+                      speaker.firstSeenAt,
+                    )} · ${displayTitle({
+                      title: speaker.firstMeetingTitle,
+                      detectedApp: speaker.firstMeetingApp,
+                      startedAt: speaker.firstSeenAt,
+                    })}`}
+                    meetingId={speaker.firstMeetingId}
+                    tooltip={t("registry.openMeeting")}
+                    testId="registry-first-seen"
                     onOpenMeeting={onOpenMeeting}
                   />
                 ) : null}
@@ -776,12 +784,15 @@ function RegistryPanel({
                     time, and two identical timestamps read as a bug. */}
                 {speaker.lastHeardAt &&
                 speaker.lastHeardAt !== speaker.firstSeenAt ? (
-                  <span
-                    className="mt-0.5 block text-xs text-[--color-ink-muted]"
-                    data-testid="registry-last-heard"
-                  >
-                    {t("registry.lastHeard")} {formatStarted(speaker.lastHeardAt)}
-                  </span>
+                  <HeardIn
+                    label={`${t("registry.lastHeard")} ${formatStarted(
+                      speaker.lastHeardAt,
+                    )}`}
+                    meetingId={speaker.lastMeetingId}
+                    tooltip={t("registry.openLastMeeting")}
+                    testId="registry-last-heard"
+                    onOpenMeeting={onOpenMeeting}
+                  />
                 ) : null}
               </div>
 
@@ -851,7 +862,7 @@ function RegistryPanel({
 }
 
 /**
- * Where a voice was captured, and a way back to it.
+ * One end of a voice's history, and a way back to the recording.
  *
  * A button rather than a label when the Meeting is still here: naming the
  * recording and then making the Operator go find it in the sidebar is the
@@ -859,27 +870,24 @@ function RegistryPanel({
  * gone — Voiceprints outlive the recordings they came from (ADR-0009) — and
  * then this is text, because a control that leads nowhere is worse than none.
  */
-function FirstHeard({
-  speaker,
-  startedAt,
+function HeardIn({
+  label,
+  meetingId,
+  tooltip,
+  testId,
   onOpenMeeting,
 }: {
-  speaker: Speaker;
-  startedAt: string;
+  label: string;
+  meetingId: string | undefined;
+  tooltip: string;
+  testId: string;
   onOpenMeeting: (meetingId: string) => void;
 }): React.JSX.Element {
-  const label = `${t("registry.firstSeen")} ${formatStarted(startedAt)} · ${displayTitle({
-    title: speaker.firstMeetingTitle,
-    detectedApp: speaker.firstMeetingApp,
-    startedAt,
-  })}`;
-  const meetingId = speaker.firstMeetingId;
-
   if (!meetingId) {
     return (
       <span
         className="mt-0.5 block text-xs text-[--color-ink-muted]"
-        data-testid="registry-first-seen"
+        data-testid={testId}
       >
         {label}
       </span>
@@ -890,9 +898,9 @@ function FirstHeard({
     <button
       type="button"
       onClick={() => onOpenMeeting(meetingId)}
-      title={t("registry.openMeeting")}
+      title={tooltip}
       className="mt-0.5 block max-w-full truncate text-left text-xs text-[--color-ink-muted] underline decoration-dotted underline-offset-2 hover:text-[--color-ink]"
-      data-testid="registry-first-seen"
+      data-testid={testId}
     >
       {label}
     </button>

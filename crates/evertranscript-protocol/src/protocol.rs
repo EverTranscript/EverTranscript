@@ -1252,6 +1252,10 @@ pub struct Speaker {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_heard_at: Option<String>,
+    /// That Meeting's id, for the same reason `first_meeting_id` is here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_meeting_id: Option<String>,
     pub created_at: String,
 }
 

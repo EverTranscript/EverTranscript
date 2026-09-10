@@ -56,4 +56,8 @@ firstMeetingApp?: string,
  * When this voice was last heard: the start of the most recent Meeting
  * it appears in. Equal to `first_seen_at` for a voice heard once.
  */
-lastHeardAt?: string, createdAt: string, };
+lastHeardAt?: string, 
+/**
+ * That Meeting's id, for the same reason `first_meeting_id` is here.
+ */
+lastMeetingId?: string, createdAt: string, };

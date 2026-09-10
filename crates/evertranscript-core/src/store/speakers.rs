@@ -500,6 +500,16 @@ pub struct Appearances {
     /// The start of the most recent one. Equal to `first_seen_at` for a voice
     /// heard in a single Meeting.
     pub last_heard_at: Option<String>,
+    pub last_meeting_id: Option<String>,
+}
+
+/// One end of a voice's history: the earliest or the most recent Meeting it
+/// was heard in.
+struct Edge {
+    started_at: String,
+    meeting_id: String,
+    title: Option<String>,
+    app: Option<String>,
 }
 
 /// Which Meetings count as an appearance: the machine's attribution, plus the
@@ -513,47 +523,51 @@ const HEARD_IN: &str = "FROM meetings meeting
             SELECT hint.segment_id FROM attribution_hints hint WHERE hint.speaker_id = ?1
         )";
 
-pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearances> {
-    let (meetings, last_heard_at) = connection.query_row(
-        &format!("SELECT COUNT(DISTINCT meeting.id), MAX(meeting.started_at) {HEARD_IN}"),
-        params![speaker_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-
-    // The first Meeting is fetched as a row rather than as bare columns
-    // beside a `MIN()`: SQLite only pins those to the extreme row while
-    // exactly one min/max aggregate is in the query, and the `MAX()` above
-    // would have quietly taken that guarantee away.
-    let first = connection
+/// The earliest (or most recent) Meeting a voice was heard in, as a row.
+///
+/// A row rather than bare columns beside a `MIN()`/`MAX()`: SQLite only pins
+/// those to the extreme row while exactly one min/max aggregate is in the
+/// query, and needing both ends would have quietly taken that guarantee away —
+/// leaving a date from one Meeting beside an id from another, with no error.
+fn edge_meeting(connection: &Connection, speaker_id: &str, newest: bool) -> Result<Option<Edge>> {
+    let order = if newest { "DESC" } else { "ASC" };
+    Ok(connection
         .query_row(
             &format!(
                 "SELECT meeting.started_at, meeting.id, meeting.title, meeting.detected_app \
-                 {HEARD_IN} ORDER BY meeting.started_at LIMIT 1"
+                 {HEARD_IN} ORDER BY meeting.started_at {order} LIMIT 1"
             ),
             params![speaker_id],
             |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
+                Ok(Edge {
+                    started_at: row.get(0)?,
+                    meeting_id: row.get(1)?,
+                    title: row.get(2)?,
+                    app: row.get(3)?,
+                })
             },
         )
-        .optional()?;
+        .optional()?)
+}
 
-    let (first_seen_at, first_meeting_id, first_meeting_title, first_meeting_app) = match first {
-        Some((started_at, id, title, app)) => (Some(started_at), Some(id), title, app),
-        None => (None, None, None, None),
-    };
+pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearances> {
+    let meetings = connection.query_row(
+        &format!("SELECT COUNT(DISTINCT meeting.id) {HEARD_IN}"),
+        params![speaker_id],
+        |row| row.get(0),
+    )?;
+
+    let first = edge_meeting(connection, speaker_id, false)?;
+    let last = edge_meeting(connection, speaker_id, true)?;
 
     Ok(Appearances {
         meetings,
-        first_seen_at,
-        first_meeting_id,
-        first_meeting_title,
-        first_meeting_app,
-        last_heard_at,
+        first_seen_at: first.as_ref().map(|edge| edge.started_at.clone()),
+        first_meeting_id: first.as_ref().map(|edge| edge.meeting_id.clone()),
+        first_meeting_title: first.as_ref().and_then(|edge| edge.title.clone()),
+        first_meeting_app: first.and_then(|edge| edge.app),
+        last_heard_at: last.as_ref().map(|edge| edge.started_at.clone()),
+        last_meeting_id: last.map(|edge| edge.meeting_id),
     })
 }
 
@@ -1090,6 +1104,7 @@ mod tests {
             Some("2026-02-01T09:00:00+00:00"),
             "and the last time heard is the later Meeting, not the first"
         );
+        assert_eq!(seen.last_meeting_id.as_deref(), Some(later.id.as_str()));
     }
 
     #[test]

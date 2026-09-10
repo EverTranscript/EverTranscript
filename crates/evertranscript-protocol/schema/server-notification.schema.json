@@ -463,6 +463,13 @@
             "null"
           ]
         },
+        "lastMeetingId": {
+          "description": "That Meeting's id, for the same reason `first_meeting_id` is here.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "meetingsSeenIn": {
           "type": "integer",
           "format": "int64"

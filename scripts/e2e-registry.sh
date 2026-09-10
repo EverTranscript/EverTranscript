@@ -114,6 +114,16 @@ echo "opened: $opened"
 grep -q "Microsoft Teams, 2026-03-04" <<<"$opened" \
   || { echo "FAIL: clicking the capture line did not open that Meeting"; exit 1; }
 
+# And the other end. Ordered second on purpose: the older Meeting is open now,
+# so arriving at "Design review" is a real move rather than the default the
+# Client would have shown anyway.
+playwright-cli -s="$SESSION" click "getByRole('button', { name: 'Voices' })" >/dev/null
+playwright-cli -s="$SESSION" click "[data-testid=registry-last-heard]" >/dev/null
+opened=$(playwright-cli -s="$SESSION" --raw eval "el => el.textContent" "main h1")
+echo "opened: $opened"
+grep -q "Design review" <<<"$opened" \
+  || { echo "FAIL: clicking the last-heard line did not open that Meeting"; exit 1; }
+
 echo
-echo "e2e passed: the Registry names when each voice was captured, where, when it"
-echo "was last heard, and opens the Meeting it was captured in"
+echo "e2e passed: the Registry names when each voice was captured, where, and when"
+echo "it was last heard — and both dates open the Meeting they name"

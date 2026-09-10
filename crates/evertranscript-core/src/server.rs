@@ -179,6 +179,7 @@ fn speaker_to_wire(
         first_meeting_title: seen.first_meeting_title,
         first_meeting_app: seen.first_meeting_app,
         last_heard_at: seen.last_heard_at,
+        last_meeting_id: seen.last_meeting_id,
         created_at: row.created_at,
     })
 }
