@@ -43,6 +43,10 @@ AGENTS.override.md
 AGENTS.local.md
 .mindfs/
 .serena/
+# Accessibility-tree dumps playwright-cli writes beside every command it runs.
+# Scratch, with refs that mean nothing after the page closes — and check.sh
+# now makes a dozen of them per run.
+.playwright-cli/
 
 # caches
 .cache/

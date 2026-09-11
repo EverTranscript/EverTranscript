@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Everything CI gates, in the order CI runs it, and then the two checks CI
-# cannot run — the Windows cross-compile and the e2e. Run before committing:
-# `cargo fmt` alone has twice let a clippy failure through to a commit.
+# Everything CI gates, in the order CI runs it, plus the e2e, which CI cannot.
+# Run before committing: `cargo fmt` alone has twice let a clippy failure
+# through to a commit.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -14,23 +14,36 @@ cargo clippy --workspace --all-targets -- -D warnings
 echo "== tests =="
 cargo test --workspace
 
-# The Windows half of the parity gate, when this machine can reach it.
+# The Windows half of the parity gate — off, and not for want of a toolchain.
 #
-# ADR-0025 as amended makes Windows a gate rather than a follow-up, and CI
-# builds it — but a failure discovered in CI is a failure discovered after
-# the commit. `cargo-xwin` plus LLVM cross-compiles the real workspace here,
-# and it immediately found two unused imports that only exist on Windows,
-# which is exactly the class of thing a macOS-only loop cannot see.
+# ADR-0025 as amended makes Windows a gate rather than a follow-up, and a
+# failure discovered in CI is a failure discovered after the commit, so
+# `cargo-xwin` plus LLVM used to cross-compile the real workspace here — it
+# found two unused imports that exist only on Windows, exactly the class of
+# thing a macOS-only loop cannot see. It no longer gets that far.
+# `mp3lame-sys` picks its build path on `cfg(windows)` — the *host*, not the
+# target — so a Unix host always takes its autotools route whatever it is
+# building for, and libtool cannot drive `clang-cl`: it mangles the flags
+# until every compile is "clang-cl: error: no input files". The walls before
+# that one do have answers (`MP3LAME_SYS_OVERRIDE_HOST` for the missing
+# `--host`, `CPP`/`CPPFLAGS` for the preprocessor); getting past them is what
+# exposes it. Its own `cfg(windows)` branch is a plain `cc::Build` that would
+# cross fine, so the fix is upstream gating on `target_env = "msvc"` instead.
 #
-# Optional on purpose: not every machine has the toolchain, and a check that
-# refuses to run without a 2 GB dependency is a check people delete.
-if command -v cargo-xwin >/dev/null 2>&1; then
+# Hence a variable rather than `command -v cargo-xwin`: installing the
+# toolchain turned a skip into a hard failure that stopped this script before
+# the Client checks and the e2e ever ran, which is red for a reason that has
+# nothing to do with this code. CI still builds Windows natively, where none
+# of this applies. Set the variable to try again the day mp3lame-sys is
+# fixed — the toolchain is still installed on this machine.
+if [ -n "${EVERTRANSCRIPT_WINDOWS_CROSS:-}" ]; then
   echo "== windows (cross) =="
   PATH="/opt/homebrew/opt/llvm/bin:$PATH" \
     cargo xwin clippy --workspace --all-targets \
       --target x86_64-pc-windows-msvc -- -D warnings
 else
-  echo "== windows (cross) == skipped: cargo-xwin not installed"
+  echo "== windows (cross) == skipped: mp3lame-sys cannot cross-compile from a"
+  echo "                      Unix host (see the comment); CI gates Windows natively"
 fi
 
 echo "== protocol bindings and schemas are committed =="
