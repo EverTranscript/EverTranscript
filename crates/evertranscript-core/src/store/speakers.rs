@@ -15,6 +15,7 @@
 //!   record auditable and re-diarization possible.
 
 use anyhow::Result;
+use evertranscript_protocol::AudioChannel;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use rusqlite::params;
@@ -245,6 +246,27 @@ pub struct Exemplar {
     pub voiced_ms: i64,
     pub from_operator: bool,
     pub is_negative: bool,
+    /// Where in `meeting_id`'s kept audio this voice can be heard alone.
+    /// None for exemplars written before samples were kept.
+    pub sample: Option<Sample>,
+}
+
+/// One stretch of one channel of a Meeting's kept audio: the voice, on its
+/// own, for as long as the clip runs. The coordinates a transcript segment
+/// has, so the Registry can cut it out of the recording by arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sample {
+    pub channel: AudioChannel,
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+/// A Speaker's playable sample: the oldest exemplar that still has a
+/// recording behind it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SampleSource {
+    pub meeting_id: String,
+    pub sample: Sample,
 }
 
 /// One observation of a voice, on its way into the record.
@@ -269,6 +291,8 @@ pub struct NewExemplar<'a> {
     /// keeping only the positive half lets the same wrong match keep
     /// happening.
     pub is_negative: bool,
+    /// Where the voice can be heard, when the source knows.
+    pub sample: Option<Sample>,
 }
 
 /// Records an observation of a voice.
@@ -277,8 +301,8 @@ pub fn add_exemplar(connection: &Connection, exemplar: NewExemplar<'_>) -> Resul
     connection.execute(
         "INSERT INTO speaker_exemplars
             (id, speaker_id, meeting_id, embedding, model, model_version, voiced_ms, source, \
-             is_negative, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             is_negative, created_at, sample_channel, sample_start_ms, sample_end_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             id,
             exemplar.speaker_id,
@@ -294,6 +318,9 @@ pub fn add_exemplar(connection: &Connection, exemplar: NewExemplar<'_>) -> Resul
             },
             i64::from(exemplar.is_negative),
             now_rfc3339(),
+            exemplar.sample.map(|sample| sample.channel.as_str()),
+            exemplar.sample.map(|sample| sample.start_ms),
+            exemplar.sample.map(|sample| sample.end_ms),
         ],
     )?;
     Ok(id)
@@ -302,7 +329,7 @@ pub fn add_exemplar(connection: &Connection, exemplar: NewExemplar<'_>) -> Resul
 pub fn exemplars(connection: &Connection, speaker_id: &str) -> Result<Vec<Exemplar>> {
     let mut statement = connection.prepare(
         "SELECT id, speaker_id, meeting_id, embedding, model, model_version, voiced_ms, source, \
-                is_negative
+                is_negative, sample_channel, sample_start_ms, sample_end_ms
            FROM speaker_exemplars WHERE speaker_id = ?1 ORDER BY id",
     )?;
     let rows = statement.query_map(params![speaker_id], |row| {
@@ -318,9 +345,51 @@ pub fn exemplars(connection: &Connection, speaker_id: &str) -> Result<Vec<Exempl
             voiced_ms: row.get(6)?,
             from_operator: source == "operator",
             is_negative: row.get::<_, i64>(8)? != 0,
+            sample: sample_from_row(row, 9)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The three sample columns starting at `first`, as one value or none.
+fn sample_from_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Option<Sample>> {
+    let channel: Option<String> = row.get(first)?;
+    let (Some(channel), Some(start_ms), Some(end_ms)) = (
+        channel.as_deref().and_then(AudioChannel::parse),
+        row.get::<_, Option<i64>>(first + 1)?,
+        row.get::<_, Option<i64>>(first + 2)?,
+    ) else {
+        return Ok(None);
+    };
+    Ok(Some(Sample {
+        channel,
+        start_ms,
+        end_ms,
+    }))
+}
+
+/// Where a Speaker's voice can be played from, if anywhere.
+///
+/// The *oldest* exemplar with a window — the capture the Registry's "first
+/// heard" line already names — provided its Meeting is still here. An
+/// exemplar whose Meeting was deleted keeps its vector and loses its
+/// `meeting_id` (the recording is gone, the voice is not), so it drops out of
+/// this query on its own and the next capture answers instead.
+pub fn sample_source(connection: &Connection, speaker_id: &str) -> Result<Option<SampleSource>> {
+    let mut statement = connection.prepare(
+        "SELECT meeting_id, sample_channel, sample_start_ms, sample_end_ms
+           FROM speaker_exemplars
+          WHERE speaker_id = ?1 AND is_negative = 0 AND meeting_id IS NOT NULL
+            AND sample_channel IS NOT NULL
+          ORDER BY id LIMIT 1",
+    )?;
+    let found = statement
+        .query_row(params![speaker_id], |row| {
+            Ok((row.get::<_, String>(0)?, sample_from_row(row, 1)?))
+        })
+        .optional()?;
+    Ok(found
+        .and_then(|(meeting_id, sample)| sample.map(|sample| SampleSource { meeting_id, sample })))
 }
 
 /// Re-assigns a segment to a different Speaker (story 29b).
@@ -418,6 +487,9 @@ fn feed_correction(
                 voiced_ms: exemplar.voiced_ms,
                 from_operator: true,
                 is_negative: false,
+                // The same stretch of audio — it is this Speaker's voice
+                // after all, which is what the correction said.
+                sample: exemplar.sample,
             },
         )?;
         // And negative against the Speaker it was not.
@@ -432,6 +504,8 @@ fn feed_correction(
                 voiced_ms: exemplar.voiced_ms,
                 from_operator: true,
                 is_negative: true,
+                // Never played back as this Speaker: it is somebody else.
+                sample: None,
             },
         )?;
     }
@@ -799,6 +873,7 @@ mod tests {
                 voiced_ms: 4_000,
                 from_operator: false,
                 is_negative: false,
+                sample: None,
             },
         )
         .expect("exemplar");
@@ -1017,6 +1092,7 @@ mod tests {
                 voiced_ms: 3_000,
                 from_operator: false,
                 is_negative: false,
+                sample: None,
             },
         )
         .expect("exemplar");
@@ -1051,6 +1127,7 @@ mod tests {
                 voiced_ms: 2_000,
                 from_operator: true,
                 is_negative: false,
+                sample: None,
             },
         )
         .expect("exemplar");
@@ -1165,6 +1242,7 @@ mod tests {
                 voiced_ms: 5_000,
                 from_operator: false,
                 is_negative: false,
+                sample: None,
             },
         )
         .expect("exemplar");
@@ -1216,6 +1294,7 @@ mod tests {
                     voiced_ms: 4_000,
                     from_operator: false,
                     is_negative: false,
+                    sample: None,
                 },
             )
             .expect("exemplar");

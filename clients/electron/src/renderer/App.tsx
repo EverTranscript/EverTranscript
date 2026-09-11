@@ -677,12 +677,41 @@ function RegistryPanel({
   onClose: () => void;
   onOpenMeeting: (meetingId: string) => void;
 }): React.JSX.Element {
-  const { speakers, error, rename, forgetVoice, meetingsFor } = useRegistry();
+  const { speakers, error, rename, forgetVoice, meetingsFor, sampleFor } =
+    useRegistry();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<SpeakerMeeting[] | null>(null);
+  // One clip at a time: the row whose voice is loaded, and the audio once
+  // it arrives. Fetched on the click rather than with the list — a clip is
+  // a decode and an encode on the Core, and a Registry of forty rows should
+  // not do forty of them to draw itself.
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const [clip, setClip] = useState<string | null>(null);
+  const [clipError, setClipError] = useState<string | null>(null);
+
+  const togglePlay = async (id: string): Promise<void> => {
+    if (playingId === id) {
+      setPlayingId(null);
+      setClip(null);
+      return;
+    }
+    setPlayingId(id);
+    setClip(null);
+    setClipError(null);
+    try {
+      const loaded = await sampleFor(id);
+      if (loaded === null) {
+        setClipError(t("registry.sample.gone"));
+        return;
+      }
+      setClip(loaded);
+    } catch (cause) {
+      setClipError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
 
   // One row's list at a time, discarded on collapse. Caching every Speaker's
   // Meetings would mean deciding when a rename or a deletion staled them, and
@@ -834,6 +863,25 @@ function RegistryPanel({
               </div>
 
               <div className="flex shrink-0 gap-2">
+                {/* The voice itself. A biometric inventory that names a
+                    stranger and cannot play them is inspectable only by
+                    trusting the label; this is what lets the Operator check
+                    a row against their own ears before naming or deleting
+                    it. Absent where there is nothing to play, rather than
+                    a button that fails. */}
+                {speaker.hasSample ? (
+                  <button
+                    type="button"
+                    onClick={() => void togglePlay(speaker.id)}
+                    aria-pressed={playingId === speaker.id}
+                    className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                    data-testid="registry-play"
+                  >
+                    {playingId === speaker.id
+                      ? t("registry.sample.hide")
+                      : t("registry.sample.play")}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -855,6 +903,21 @@ function RegistryPanel({
                 ) : null}
               </div>
             </div>
+
+            {playingId === speaker.id ? (
+              <div className="mt-2" data-testid="registry-sample">
+                {clip ? (
+                  // The browser's own control, autoplaying: the Operator
+                  // asked to hear it, so the second click a custom player
+                  // would need is a step with no purpose.
+                  <audio controls autoPlay src={clip} className="h-8 w-full" />
+                ) : (
+                  <p className="text-xs text-[--color-ink-muted]">
+                    {clipError ?? t("registry.sample.loading")}
+                  </p>
+                )}
+              </div>
+            ) : null}
 
             {expandedId === speaker.id ? (
               <ul className="mt-2 border-l border-[--color-line] pl-3">

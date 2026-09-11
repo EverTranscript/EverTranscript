@@ -22,6 +22,7 @@ import type { SpeakerListResponse } from "@protocol/SpeakerListResponse";
 import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
 import type { SummaryBackendsResponse } from "@protocol/SummaryBackendsResponse";
 import type { SpeakerResponse } from "@protocol/SpeakerResponse";
+import type { SpeakerSampleResponse } from "@protocol/SpeakerSampleResponse";
 import type { WatchlistResponse } from "@protocol/WatchlistResponse";
 import type { MeetingDetailResponse } from "@protocol/MeetingDetailResponse";
 import type { MeetingListResponse } from "@protocol/MeetingListResponse";
@@ -313,7 +314,21 @@ export function useRegistry() {
     [refresh],
   );
 
-  return { speakers, error, rename, forgetVoice, meetingsFor };
+  // A few seconds of the voice, as something an <audio> element can play.
+  // Cut by the Core on request and handed over inline: the renderer never
+  // sees the record or a file path (ADR-0026). Null when there is nothing
+  // to play — a Speaker minted before samples were kept, or one whose
+  // recording is gone — which the row already knows from `hasSample`.
+  const sampleFor = useCallback(async (id: string): Promise<string | null> => {
+    const response = await window.evertranscript.request<SpeakerSampleResponse>(
+      "speaker/sample",
+      { id },
+    );
+    if (!response.sample) return null;
+    return `data:${response.sample.mimeType};base64,${response.sample.audioBase64}`;
+  }, []);
+
+  return { speakers, error, rename, forgetVoice, meetingsFor, sampleFor };
 }
 
 /**

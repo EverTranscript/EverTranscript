@@ -170,6 +170,11 @@ const en = {
   "registry.forget.hint":
     "The app stops recognizing this voice. Nothing in the record changes — the Speaker, the name, and every word attributed to them stay exactly as they are.",
   "registry.forget.confirm": "Delete this Voiceprint?",
+  "registry.sample.play": "Play voice",
+  "registry.sample.hide": "Hide",
+  "registry.sample.loading": "Cutting a few seconds from the recording…",
+  "registry.sample.gone":
+    "Nothing to play: this voice was captured before samples were kept, or the recording it came from has been deleted.",
   "registry.suggestions":
     "The calendar listed these people in meetings this voice was in. Suggestions only — being invited is not evidence of having spoken.",
   "watchlist.title": "Watchlist",
@@ -362,6 +367,10 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "registry.forget.hint":
       "本应用将不再识别这个声音。记录本身不受影响——讲话人、名称，以及归属于其名下的每一个字都原样保留。",
     "registry.forget.confirm": "确定删除这条声纹？",
+    "registry.sample.play": "播放声音",
+    "registry.sample.hide": "收起",
+    "registry.sample.loading": "正在从录音中截取几秒钟…",
+    "registry.sample.gone": "无法播放：这个声音是在保留样本之前采集的，或其来源录音已被删除。",
     "registry.suggestions": "日历显示这些人参加了该声音出现过的会议。仅供参考——受邀并不等于发言。",
     "watchlist.title": "监视列表",
     "watchlist.hint": "Meeting Detection 监视的应用。加入列表即表示监视。",

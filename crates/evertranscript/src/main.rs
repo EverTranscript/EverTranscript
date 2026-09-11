@@ -29,6 +29,7 @@ use evertranscript_protocol::SettingsResponse;
 use evertranscript_protocol::SpeakerDetailResponse;
 use evertranscript_protocol::SpeakerListResponse;
 use evertranscript_protocol::SpeakerResponse;
+use evertranscript_protocol::SpeakerSampleResponse;
 use evertranscript_protocol::SummaryBackendsResponse;
 use evertranscript_protocol::TranscriptReassignResponse;
 use evertranscript_protocol::TranscriptSnapshotResponse;
@@ -234,6 +235,14 @@ enum SpeakerCommand {
         /// Skip the confirmation prompt.
         #[arg(long)]
         force: bool,
+    },
+    /// Save a few seconds of a Speaker's voice — cut from the recording its
+    /// Voiceprint was taken from — as an MP3, so you can hear who a row is.
+    Sample {
+        id: String,
+        /// Where to write the clip. Defaults to `<speaker-id>.mp3` here.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
     },
 }
 
@@ -1358,6 +1367,12 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
             if let Some(model) = &speaker.voiceprint_model {
                 println!("  model       {model}");
             }
+            if speaker.has_sample {
+                println!(
+                    "  sample      yes — `speakers sample {}` saves it",
+                    speaker.id
+                );
+            }
             for meeting in &response.meetings {
                 let name = meeting
                     .title
@@ -1418,6 +1433,33 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
             println!(
                 "Forgot the voice of {}. The record is unchanged.",
                 display_name_of(&response.speaker)
+            );
+        }
+        SpeakerCommand::Sample { ref id, ref out } => {
+            let response: SpeakerSampleResponse = client
+                .request("speaker/sample", Some(serde_json::json!({ "id": id })))
+                .await?;
+            let Some(clip) = response.sample else {
+                println!(
+                    "No sample to play for {id}: the voice was captured before samples were \
+                     kept, or the recording it came from has been deleted."
+                );
+                return Ok(());
+            };
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(&clip.audio_base64)?;
+            let out = out
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from(format!("{id}.mp3")));
+            std::fs::write(&out, bytes)?;
+            println!(
+                "Wrote {} — {} on the {} channel of Meeting {}, {:.1}s to {:.1}s.",
+                out.display(),
+                clip.mime_type,
+                clip.channel.as_str(),
+                clip.meeting_id,
+                clip.start_ms as f64 / 1000.0,
+                clip.end_ms as f64 / 1000.0,
             );
         }
     }

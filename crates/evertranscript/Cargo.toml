@@ -15,6 +15,7 @@ evertranscript-core.workspace = true
 evertranscript-protocol.workspace = true
 
 anyhow.workspace = true
+base64.workspace = true
 clap.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

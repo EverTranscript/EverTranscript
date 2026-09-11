@@ -203,7 +203,7 @@ mod tests {
         let operator_vector = d.embeddings[&Cluster(0)].vector.clone();
         d.embeddings.insert(
             Cluster(0),
-            Embedding::new(operator_vector.clone(), "fixture", "1"),
+            Embedding::new(operator_vector.clone(), "fixture", "1", 10_000),
         );
 
         let known = SeedVoice {
@@ -221,9 +221,12 @@ mod tests {
         // recording of them played back — be identified as them.
         let d = Diarization {
             turns: vec![Turn::new(AudioChannel::System, 0, 10_000, 7)],
-            embeddings: [(Cluster(7), Embedding::new(vec![1.0, 0.0], "fixture", "1"))]
-                .into_iter()
-                .collect(),
+            embeddings: [(
+                Cluster(7),
+                Embedding::new(vec![1.0, 0.0], "fixture", "1", 10_000),
+            )]
+            .into_iter()
+            .collect(),
         };
         let known = SeedVoice {
             speaker_id: "me".into(),

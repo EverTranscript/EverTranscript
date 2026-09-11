@@ -282,6 +282,48 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE meetings ADD COLUMN summary_gaps TEXT;
     "#,
+    // 10 — where each voice can be heard, and the Speakers that never were.
+    //
+    // **The sample.** An exemplar has always recorded which Meeting it came
+    // from; it now records *where in it* — one channel, one stretch on the
+    // capture clock — so the Registry can play the voice back rather than
+    // only name it. Kept audio is a constant-bitrate frame stream
+    // (ADR-0032), so a stretch is a byte range and the cut costs no decode
+    // pass over the Meeting. The columns are nullable because every exemplar
+    // written before this migration has no window to give.
+    //
+    // **The prune.** Until now Diarization minted a Speaker for every
+    // cluster it found, before it knew whether the cluster owned a single
+    // transcribed word — and on the first real History this product
+    // accumulated, 378 of 503 Speakers owned none: three-second windows of
+    // echo and crosstalk, each with a Voiceprint, each a stranger in the
+    // Registry. `diarize::cluster::persist` no longer creates those. This
+    // removes the ones already created, under the narrowest predicate that
+    // names them: no segment attributed, no correction hint in either
+    // direction, no name, not the Operator. **Contradicts ADR-0009 as
+    // written ("Speaker records themselves are permanent"), and deliberately
+    // so:** that guarantee exists so nothing in the record ever dangles or
+    // rewrites, and a Speaker that nothing in the record references is not
+    // in the record — deleting it changes no Transcript, no attribution and
+    // no correction. Named Speakers are kept whatever they reference,
+    // because a name is the Operator's act. Once, here, rather than as a
+    // standing rule: a Speaker orphaned by a *Meeting* deletion is the case
+    // "Voiceprints outlive the recordings they came from" protects, and it
+    // matches this predicate too — so the rule must not run again.
+    r#"
+    ALTER TABLE speaker_exemplars ADD COLUMN sample_channel TEXT
+        CHECK (sample_channel IN ('mic', 'system'));
+    ALTER TABLE speaker_exemplars ADD COLUMN sample_start_ms INTEGER;
+    ALTER TABLE speaker_exemplars ADD COLUMN sample_end_ms INTEGER;
+
+    DELETE FROM speakers
+     WHERE is_operator = 0
+       AND display_name IS NULL
+       AND id NOT IN (SELECT speaker_id FROM transcript_segments WHERE speaker_id IS NOT NULL)
+       AND id NOT IN (SELECT speaker_id FROM attribution_hints)
+       AND id NOT IN (SELECT replaced_speaker_id FROM attribution_hints
+                       WHERE replaced_speaker_id IS NOT NULL);
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.
@@ -323,6 +365,73 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("user_version");
         assert_eq!(version as usize, MIGRATIONS.len());
+    }
+
+    #[test]
+    fn the_prune_removes_only_speakers_nothing_references() {
+        // Migration 10 runs once over a History that already holds the
+        // Speakers the old policy minted. Everything the record points at
+        // has to survive it: an attributed voice, a corrected one, a named
+        // one, the Operator. Only the row nobody references goes.
+        let mut connection = Connection::open_in_memory().expect("open");
+        configure(&connection).expect("configure");
+        // Up to the migration before the prune, then seed, then prune.
+        let before_prune = 9;
+        for migration in &MIGRATIONS[..before_prune] {
+            connection.execute_batch(migration).expect("migrate");
+        }
+        connection
+            .pragma_update(None, "user_version", before_prune as i64)
+            .expect("user_version");
+        connection
+            .execute_batch(
+                "INSERT INTO meetings (id, started_at, created_at, updated_at)
+                 VALUES ('m', 'now', 'now', 'now');
+                 INSERT INTO speakers (id, is_operator, created_at) VALUES
+                     ('attributed', 0, 'now'), ('corrected-to', 0, 'now'),
+                     ('corrected-from', 0, 'now'), ('junk', 0, 'now'), ('you', 1, 'now');
+                 INSERT INTO speakers (id, display_name, is_operator, created_at)
+                 VALUES ('named', 'Alice', 0, 'now');
+                 INSERT INTO transcript_segments
+                     (id, meeting_id, sequence, channel, start_ms, end_ms, text, speaker_id)
+                 VALUES ('s1', 'm', 0, 'mic', 0, 1, 'hi', 'attributed'),
+                        ('s2', 'm', 1, 'mic', 1, 2, 'hi', NULL);
+                 INSERT INTO attribution_hints
+                     (id, segment_id, speaker_id, replaced_speaker_id, created_at)
+                 VALUES ('h', 's2', 'corrected-to', 'corrected-from', 'now');
+                 INSERT INTO speaker_exemplars
+                     (id, speaker_id, embedding, model, model_version, voiced_ms, source, created_at)
+                 VALUES ('e', 'junk', x'00', 'm', '1', 1, 'machine', 'now');",
+            )
+            .expect("seed");
+
+        migrate(&mut connection).expect("migrate the rest");
+
+        let mut statement = connection
+            .prepare("SELECT id FROM speakers ORDER BY id")
+            .expect("prepare");
+        let kept: Vec<String> = statement
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(
+            kept,
+            [
+                "attributed",
+                "corrected-from",
+                "corrected-to",
+                "named",
+                "you"
+            ],
+            "everything the record references survives; only the junk goes"
+        );
+        let exemplars: i64 = connection
+            .query_row("SELECT count(*) FROM speaker_exemplars", [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(exemplars, 0, "and its Voiceprint evidence with it");
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub mod joiner;
 pub mod leg;
 pub mod live;
 pub mod recorder;
+pub mod sample;
 pub mod sink;
 pub mod supervisor;
 pub mod system;

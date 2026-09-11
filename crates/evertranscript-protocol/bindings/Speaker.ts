@@ -60,4 +60,10 @@ lastHeardAt?: string,
 /**
  * That Meeting's id, for the same reason `first_meeting_id` is here.
  */
-lastMeetingId?: string, createdAt: string, };
+lastMeetingId?: string, 
+/**
+ * Whether `speaker/sample` has something to play: the voice was
+ * captured since samples were kept, and the Meeting it came from is
+ * still here. False for every Speaker minted before then.
+ */
+hasSample: boolean, createdAt: string, };

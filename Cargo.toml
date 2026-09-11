@@ -23,6 +23,9 @@ evertranscript-core = { path = "crates/evertranscript-core" }
 evertranscript-protocol = { path = "crates/evertranscript-protocol" }
 
 anyhow = "1"
+# Voice samples cross the socket inline, as JSON has no bytes. Already in
+# the tree under reqwest; this only names it.
+base64 = "0.22"
 # The OS credential store: macOS Keychain, Windows Credential Manager.
 # Story 41 says API keys live there and nowhere else, so this is the only
 # thing in the workspace that ever holds a secret.

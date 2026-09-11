@@ -50,6 +50,8 @@ use evertranscript_protocol::SpeakerDetailResponse;
 use evertranscript_protocol::SpeakerListResponse;
 use evertranscript_protocol::SpeakerMeeting;
 use evertranscript_protocol::SpeakerResponse;
+use evertranscript_protocol::SpeakerSampleClip;
+use evertranscript_protocol::SpeakerSampleResponse;
 use evertranscript_protocol::StatusResponse;
 use evertranscript_protocol::SummaryBackendOption;
 use evertranscript_protocol::SummaryBackendsResponse;
@@ -167,6 +169,7 @@ fn speaker_to_wire(
     row: crate::store::speakers::Speaker,
 ) -> Result<Speaker> {
     let seen = crate::store::speakers::appearances(connection, &row.id)?;
+    let has_sample = crate::store::speakers::sample_source(connection, &row.id)?.is_some();
     Ok(Speaker {
         id: row.id,
         display_name: row.display_name,
@@ -181,6 +184,7 @@ fn speaker_to_wire(
         first_meeting_app: seen.first_meeting_app,
         last_heard_at: seen.last_heard_at,
         last_meeting_id: seen.last_meeting_id,
+        has_sample,
         created_at: row.created_at,
     })
 }
@@ -1213,6 +1217,61 @@ impl Core {
         Ok(SpeakerResponse { speaker })
     }
 
+    /// A few seconds of a Speaker's voice, cut from the recording their
+    /// Voiceprint was taken from.
+    ///
+    /// The other half of the Registry's legibility: a row can name the
+    /// Meeting a voice came from, and now it can play it. `None` rather
+    /// than an error when there is nothing to play — a Speaker minted
+    /// before samples were kept, or one whose recording has been deleted —
+    /// because both are ordinary states of a Registry, not faults.
+    pub async fn speaker_sample(&self, id: &str) -> Result<SpeakerSampleResponse> {
+        let id = self
+            .resolve_speaker(id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
+        let source = self
+            .store
+            .read(move |connection| {
+                let Some(source) = crate::store::speakers::sample_source(connection, &id)? else {
+                    return Ok(None);
+                };
+                let audio_path = crate::store::meetings::get(connection, &source.meeting_id)?
+                    .and_then(|meeting| meeting.audio_path);
+                Ok(audio_path.map(|path| (source, path)))
+            })
+            .await?;
+        let Some((source, audio_path)) = source else {
+            return Ok(SpeakerSampleResponse { sample: None });
+        };
+        let path = self.history_dir.join(audio_path);
+        if !path.exists() {
+            return Ok(SpeakerSampleResponse { sample: None });
+        }
+
+        let sample = source.sample;
+        let clip = tokio::task::spawn_blocking(move || {
+            audio::sample::cut(
+                &path,
+                sample.channel,
+                sample.start_ms.max(0) as u64,
+                sample.end_ms.max(0) as u64,
+            )
+        })
+        .await??;
+        use base64::Engine;
+        Ok(SpeakerSampleResponse {
+            sample: Some(SpeakerSampleClip {
+                audio_base64: base64::engine::general_purpose::STANDARD.encode(&clip.bytes),
+                mime_type: clip.mime_type.to_string(),
+                meeting_id: source.meeting_id,
+                channel: sample.channel,
+                start_ms: sample.start_ms,
+                end_ms: sample.end_ms,
+            }),
+        })
+    }
+
     /// Re-assigns a segment to a different Speaker (story 29b).
     pub async fn reassign_segment(
         &self,
@@ -1292,7 +1351,17 @@ impl Core {
         let outcome = tokio::task::spawn_blocking(move || -> Result<_> {
             let _slot = diarize::runner::Slot::claim(&id_for_progress)
                 .map_err(|busy| anyhow::anyhow!("{busy}"))?;
-            let decoded = diarize::runner::decode(&audio_path)?;
+            let mut decoded = diarize::runner::decode(&audio_path)?;
+            // The far end comes back through the speakers into the
+            // microphone, and diarization heard it there as strangers: on
+            // the first real History this product kept, nearly every mic
+            // voice that was not the Operator coincided with far-end speech.
+            // Cancelled here on the way to the models, exactly as the
+            // transcription path does — the kept audio stays raw (ADR-0029
+            // as amended), so a filter that is wrong costs one run, which
+            // can be repeated, and never the record.
+            audio::aec::EchoCanceller::new(diarize::fbank::SAMPLE_RATE)
+                .process(&mut decoded.mic, &decoded.system);
             let mut diarizer = diarize::live::LiveDiarizer::load(&segmentation, &embedding)
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
 
@@ -1342,8 +1411,18 @@ impl Core {
         let written = self
             .store
             .write(move |connection| {
-                let assigned =
-                    diarize::cluster::persist(connection, &meeting_id, &diarization.embeddings)?;
+                // The join first, then the Speakers. Persistence used to run
+                // before reconciliation and minted a Speaker for every
+                // cluster, words or none; now it is told which voices the
+                // Transcript actually contains and mints only those.
+                let segments = crate::store::meetings::segments(connection, &meeting_id)?;
+                let reconciliation = diarize::reconcile::reconcile(&diarization, &segments);
+                let assigned = diarize::cluster::persist(
+                    connection,
+                    &meeting_id,
+                    &diarization.embeddings,
+                    &reconciliation.voices(),
+                )?;
 
                 // The Operator's own Speaker, where the evidence supports one
                 // (ADR-0029 as amended).
@@ -1357,11 +1436,11 @@ impl Core {
                     )?;
                 }
 
-                let segments = crate::store::meetings::segments(connection, &meeting_id)?;
-                let reconciliation = diarize::reconcile::reconcile(&diarization, &segments);
                 tracing::info!(
                     boundary_flips = reconciliation.boundary_flips,
                     attributed = reconciliation.attributed(),
+                    voices = reconciliation.voices().len(),
+                    speakers = assigned.len(),
                     "diarization reconciled"
                 );
                 diarize::reconcile::apply(
@@ -2747,6 +2826,10 @@ impl Server {
 
             ClientRequest::SpeakerDeleteVoiceprint(params) => Ok(serde_json::to_value(
                 self.core.speaker_delete_voiceprint(&params.id).await?,
+            )?),
+
+            ClientRequest::SpeakerSample(params) => Ok(serde_json::to_value(
+                self.core.speaker_sample(&params.id).await?,
             )?),
 
             ClientRequest::TranscriptReassign(params) => Ok(serde_json::to_value(

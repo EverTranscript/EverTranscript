@@ -445,6 +445,11 @@
             "null"
           ]
         },
+        "hasSample": {
+          "description": "Whether `speaker/sample` has something to play: the voice was\ncaptured since samples were kept, and the Meeting it came from is\nstill here. False for every Speaker minted before then.",
+          "type": "boolean",
+          "default": false
+        },
         "hasVoiceprint": {
           "description": "Whether the app can still recognize this voice. False after a\nVoiceprint deletion, with the Speaker and the record intact.",
           "type": "boolean"

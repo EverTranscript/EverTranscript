@@ -344,6 +344,14 @@ client_request_definitions! {
         params: SpeakerGetParams,
         response: SpeakerResponse,
     },
+    /// The voice itself: a few seconds of the recording a Speaker's
+    /// Voiceprint was taken from, cut from the kept audio on request. A
+    /// Registry row that names a stranger and cannot play them is a
+    /// biometric the Operator can inspect only by trusting the label.
+    SpeakerSample => "speaker/sample" {
+        params: SpeakerGetParams,
+        response: SpeakerSampleResponse,
+    },
     /// Re-assigns a segment to a different Speaker (story 29b). Appends a
     /// hint; the machine's attribution is preserved beneath it.
     TranscriptReassign => "transcript/reassign" {
@@ -1256,6 +1264,11 @@ pub struct Speaker {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_meeting_id: Option<String>,
+    /// Whether `speaker/sample` has something to play: the voice was
+    /// captured since samples were kept, and the Meeting it came from is
+    /// still here. False for every Speaker minted before then.
+    #[serde(default)]
+    pub has_sample: bool,
     pub created_at: String,
 }
 
@@ -1338,6 +1351,38 @@ pub struct SpeakerMeeting {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub detected_app: Option<String>,
+}
+
+/// A few seconds of one voice, ready to play.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerSampleResponse {
+    /// Absent when nothing can be played: the Speaker predates kept
+    /// samples, or the recording it was cut from is gone. Not an error —
+    /// Voiceprints outlive the audio they came from (ADR-0009), and a Client
+    /// shows the row either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sample: Option<SpeakerSampleClip>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerSampleClip {
+    /// The clip, base64 of the bytes `mime_type` names. Inline rather than
+    /// a path because the renderer never sees the record or a file path
+    /// (ADR-0026), and a clip is a few tens of kilobytes.
+    pub audio_base64: String,
+    pub mime_type: String,
+    /// Where it was cut from, so a Client can open that Meeting.
+    pub meeting_id: String,
+    pub channel: AudioChannel,
+    #[ts(type = "number")]
+    pub start_ms: i64,
+    #[ts(type = "number")]
+    pub end_ms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

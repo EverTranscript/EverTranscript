@@ -531,6 +531,23 @@
       ]
     },
     {
+      "description": "The voice itself: a few seconds of the recording a Speaker's\nVoiceprint was taken from, cut from the kept audio on request. A\nRegistry row that names a stranger and cannot play them is a\nbiometric the Operator can inspect only by trusting the label.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "speaker/sample"
+        },
+        "params": {
+          "$ref": "#/$defs/SpeakerGetParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Re-assigns a segment to a different Speaker (story 29b). Appends a\nhint; the machine's attribution is preserved beneath it.",
       "type": "object",
       "properties": {

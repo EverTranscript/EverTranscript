@@ -106,16 +106,46 @@ pub struct Embedding {
     pub vector: Vec<f32>,
     pub model: String,
     pub model_version: String,
+    /// How much of this voice the vector summarises, in milliseconds of
+    /// its own turns. Part of the embedding rather than beside it because a
+    /// vector that does not say how much voice it came from is the thing
+    /// that let a three-second window become a permanent Speaker: the
+    /// record weighted every observation equally and the Registry filled
+    /// with voices nobody had heard.
+    pub voiced_ms: u64,
+    /// The one stretch of the recording to play this voice back from. None
+    /// when the source cannot say (a test vector); the live pipeline always
+    /// has one, because every embedding was cut from somewhere.
+    pub sample: Option<SampleWindow>,
 }
 
 impl Embedding {
-    pub fn new(vector: Vec<f32>, model: &str, model_version: &str) -> Self {
+    pub fn new(vector: Vec<f32>, model: &str, model_version: &str, voiced_ms: u64) -> Self {
         Self {
             vector,
             model: model.to_string(),
             model_version: model_version.to_string(),
+            voiced_ms,
+            sample: None,
         }
     }
+
+    pub fn with_sample(mut self, sample: SampleWindow) -> Self {
+        self.sample = Some(sample);
+        self
+    }
+}
+
+/// Where in the kept audio one voice can be heard on its own.
+///
+/// A range on the capture clock, on one channel — the same coordinates a
+/// transcript segment has, so cutting it out of the recording later is the
+/// arithmetic `audio::sink` already does for duration, not a search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SampleWindow {
+    pub channel: AudioChannel,
+    pub start: CaptureOffset,
+    pub end: CaptureOffset,
 }
 
 /// What a [`Diarizer`] concluded about one Meeting.

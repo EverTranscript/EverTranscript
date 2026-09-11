@@ -39,6 +39,7 @@ use super::Diarizer;
 use super::Embedding;
 use super::MeetingAudio;
 use super::Progress;
+use super::SampleWindow;
 use super::Turn;
 use super::fbank::MelBank;
 use super::fbank::SAMPLE_RATE;
@@ -219,7 +220,7 @@ pub fn spans(counts: &[usize], frame_ms: f64) -> Vec<(u64, u64)> {
     merged
 }
 
-/// The sub-span of a turn to build a Voiceprint from.
+/// The sub-span of a turn to hold a voice up by: its middle, at most 10 s.
 ///
 /// **Separate from the turn on purpose, and that separation was a
 /// measurement finding.** The first version used these rules — the
@@ -229,10 +230,12 @@ pub fn spans(counts: &[usize], frame_ms: f64) -> Vec<(u64, u64)> {
 /// third of it, which is exactly right for choosing what to embed and
 /// exactly wrong for saying who was talking.
 ///
-/// So a turn now covers all of its speech, and only the embedding is
-/// clipped. Returns `None` when there is too little clean voiced audio to
-/// embed honestly — the turn still exists, it just does not get to define a
-/// voice.
+/// So a turn covers all of its speech, and only the clip is taken from its
+/// middle. Embedding has since moved to sub-windows, and this now picks the
+/// stretch a voice is *played back* from — the same rule, for the same
+/// reason: the ends of a long turn are where a neighbour's words bleed in.
+/// Returns `None` when there is too little clean voiced audio to stand for
+/// a voice — the turn still exists, it just does not get to define one.
 pub fn embeddable(start_ms: u64, end_ms: u64) -> Option<(u64, u64)> {
     let length = end_ms.saturating_sub(start_ms);
     if length < MIN_SPAN_MS {
@@ -361,9 +364,15 @@ impl Diarizer for LiveDiarizer {
         let provisional: BTreeMap<Cluster, Embedding> = vectors
             .iter()
             .map(|(index, vector)| {
+                let turn = turns[*index];
                 (
-                    turns[*index].cluster,
-                    Embedding::new(vector.clone(), &self.model_name, &self.model_version),
+                    turn.cluster,
+                    Embedding::new(
+                        vector.clone(),
+                        &self.model_name,
+                        &self.model_version,
+                        turn.duration_ms(),
+                    ),
                 )
             })
             .collect();
@@ -397,15 +406,41 @@ impl Diarizer for LiveDiarizer {
         // transcript would be attributed correctly and read as a stutter,
         // the same speaker restarting every three seconds.
         turns = merge_adjacent(turns);
+
+        // How much of each voice there was, and where best to hear it.
+        // Measured on the merged turns rather than summed over windows:
+        // windows overlap by half, so their total counts every second
+        // twice. The sample is the middle of the longest turn — the stretch
+        // least likely to carry a neighbour's words at either end.
+        let mut voiced: BTreeMap<Cluster, u64> = BTreeMap::new();
+        let mut longest: BTreeMap<Cluster, Turn> = BTreeMap::new();
+        for turn in &turns {
+            *voiced.entry(turn.cluster).or_default() += turn.duration_ms();
+            let best = longest.entry(turn.cluster).or_insert(*turn);
+            if turn.duration_ms() > best.duration_ms() {
+                *best = *turn;
+            }
+        }
         let embeddings = grouped
             .into_iter()
             .filter_map(|(cluster, observations)| {
-                super::cluster::centroid(&observations).map(|vector| {
-                    (
-                        cluster,
-                        Embedding::new(vector, &self.model_name, &self.model_version),
-                    )
-                })
+                let vector = super::cluster::centroid(&observations)?;
+                let mut embedding = Embedding::new(
+                    vector,
+                    &self.model_name,
+                    &self.model_version,
+                    voiced.get(&cluster).copied().unwrap_or(0),
+                );
+                if let Some(turn) = longest.get(&cluster)
+                    && let Some((start, end)) = embeddable(turn.start.millis(), turn.end.millis())
+                {
+                    embedding = embedding.with_sample(SampleWindow {
+                        channel: turn.channel,
+                        start: crate::audio::CaptureOffset(start),
+                        end: crate::audio::CaptureOffset(end),
+                    });
+                }
+                Some((cluster, embedding))
             })
             .collect();
 
@@ -714,6 +749,28 @@ mod tests {
                         .filter(|t| t.cluster == cluster)
                         .all(|t| t.duration_ms() < MIN_SPAN_MS),
                 "cluster {cluster:?} has turns but no voice and is not short"
+            );
+        }
+        for (cluster, embedding) in &result.embeddings {
+            let spoken: u64 = result
+                .turns
+                .iter()
+                .filter(|t| t.cluster == *cluster)
+                .map(|t| t.duration_ms())
+                .sum();
+            assert_eq!(
+                embedding.voiced_ms, spoken,
+                "the voice knows its own length"
+            );
+            let sample = embedding
+                .sample
+                .expect("a real voice has somewhere to be heard");
+            assert!(
+                result.turns.iter().any(|t| t.cluster == *cluster
+                    && t.channel == sample.channel
+                    && t.start <= sample.start
+                    && sample.end <= t.end),
+                "the sample lies inside one of the voice's own turns"
             );
         }
     }

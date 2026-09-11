@@ -61,6 +61,19 @@ impl Reconciliation {
             .filter(|assignment| assignment.cluster.is_some())
             .count()
     }
+
+    /// Every voice that owns at least one segment.
+    ///
+    /// The set persistence mints Speakers from — which is why the join runs
+    /// *before* Speakers exist now, not after. A cluster with turns and no
+    /// words is real audio and nobody's transcript, and it used to become a
+    /// permanent Speaker anyway.
+    pub fn voices(&self) -> std::collections::BTreeSet<Cluster> {
+        self.assignments
+            .iter()
+            .filter_map(|assignment| assignment.cluster)
+            .collect()
+    }
 }
 
 /// Midpoint of a segment on the capture clock.
@@ -238,6 +251,20 @@ mod tests {
                 "boundary at {boundary} should not move this segment"
             );
         }
+    }
+
+    #[test]
+    fn only_voices_that_own_words_are_offered_for_persistence() {
+        // Two turns, one segment. The voice that spoke the words is a
+        // candidate Speaker; the one that made sound and no transcript is
+        // not, whatever the clusterer thought of it.
+        let d = diarization(vec![
+            Turn::new(AudioChannel::System, 0, 5_000, 0),
+            Turn::new(AudioChannel::Mic, 0, 5_000, 1),
+        ]);
+        let segments = vec![segment("a", AudioChannel::System, 1_000, 2_000)];
+        let voices = reconcile(&d, &segments).voices();
+        assert_eq!(voices.into_iter().collect::<Vec<_>>(), vec![Cluster(0)]);
     }
 
     #[test]

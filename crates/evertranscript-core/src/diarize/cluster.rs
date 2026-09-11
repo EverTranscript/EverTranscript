@@ -20,6 +20,7 @@
 //! before they can correct it, and a plausible one does not get noticed.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use super::Cluster;
 use super::Embedding;
@@ -40,6 +41,20 @@ pub const MATCH_MARGIN: f32 = 0.08;
 
 /// Agglomerative merge threshold on L2-normalized embeddings (catalog M3).
 pub const MERGE_THRESHOLD: f32 = 0.6;
+
+/// Least voice a cluster must hold before it is minted as a Speaker.
+///
+/// **Measured into existence**, like the sub-window above. Without a floor
+/// every group the clusterer left standing became a permanent Speaker with
+/// a Voiceprint, and the first real History this product kept showed what
+/// that means: 503 Speakers across six Meetings of three to five people,
+/// 378 of them owning no transcribed word — three-second windows of echo
+/// and crosstalk, each a stranger in the Registry. Ten seconds is about
+/// three sub-windows: enough for the centroid to be an average rather than
+/// one window's noise, and more than a cough or a fragment of echo ever
+/// gets. A voice under it still exists as turns and still reaches the
+/// Transcript, honestly "Unattributed"; it just does not get to be somebody.
+pub const MIN_SPEAKER_MS: u64 = 10_000;
 
 /// Most exemplars kept per Speaker.
 ///
@@ -316,10 +331,20 @@ pub fn seeds(connection: &rusqlite::Connection) -> anyhow::Result<Vec<SeedVoice>
 /// observation is folded back in as an exemplar and the Voiceprint is
 /// recomputed, so the next Meeting's clusterer is seeded with a slightly
 /// better picture than this one was — the improvement ADR-0008 promises.
+///
+/// **Two gates before a cluster is anybody**, and they are where "every
+/// voice" stops meaning "every group of windows". `heard` is the set of
+/// clusters that own at least one transcript segment: a cluster that owns
+/// none has nothing to be attributed to and nothing to be recognized in,
+/// so it leaves no Speaker and no evidence. And a cluster nobody in History
+/// recognizes must hold [`MIN_SPEAKER_MS`] of voice before it is minted.
+/// Recognition itself has no floor — the conservative match rule is the
+/// guard there, and "what did Alice say" should work for one sentence.
 pub fn persist(
     connection: &rusqlite::Connection,
     meeting_id: &str,
     embeddings: &BTreeMap<Cluster, Embedding>,
+    heard: &BTreeSet<Cluster>,
 ) -> anyhow::Result<BTreeMap<Cluster, String>> {
     use crate::store::speakers;
 
@@ -331,8 +356,12 @@ pub fn persist(
         let Some(embedding) = embeddings.get(&cluster) else {
             continue;
         };
+        if !heard.contains(&cluster) {
+            continue;
+        }
         let speaker_id = match outcome {
             Resolved::Existing(id) => id,
+            Resolved::New if embedding.voiced_ms < MIN_SPEAKER_MS => continue,
             Resolved::New => speakers::create(connection, false)?.id,
         };
 
@@ -344,13 +373,14 @@ pub fn persist(
                 vector: &embedding.vector,
                 model: &embedding.model,
                 model_version: &embedding.model_version,
-                // The seam does not carry voiced duration per cluster yet;
-                // an equal weight is the honest placeholder rather than a
-                // fabricated one, and ticket 03 supplies the real figure
-                // when the pipeline that measures it exists.
-                voiced_ms: 1,
+                voiced_ms: embedding.voiced_ms as i64,
                 from_operator: false,
                 is_negative: false,
+                sample: embedding.sample.map(|window| speakers::Sample {
+                    channel: window.channel,
+                    start_ms: window.start.millis() as i64,
+                    end_ms: window.end.millis() as i64,
+                }),
             },
         )?;
 
@@ -376,8 +406,9 @@ pub fn persist(
 mod tests {
     use super::*;
 
+    /// Long enough to be minted: the floor is a separate test's subject.
     fn embedding(vector: &[f32]) -> Embedding {
-        Embedding::new(vector.to_vec(), "test", "1")
+        Embedding::new(vector.to_vec(), "test", "1", 30_000)
     }
 
     fn clusters(entries: &[(u32, &[f32])]) -> BTreeMap<Cluster, Embedding> {
@@ -385,6 +416,12 @@ mod tests {
             .iter()
             .map(|(index, vector)| (Cluster(*index), embedding(vector)))
             .collect()
+    }
+
+    /// Every cluster owns words, which is the ordinary case the persistence
+    /// tests below are about.
+    fn heard(clusters: &BTreeMap<Cluster, Embedding>) -> BTreeSet<Cluster> {
+        clusters.keys().copied().collect()
     }
 
     fn seed(id: &str, vector: &[f32], confirmed: bool) -> SeedVoice {
@@ -603,14 +640,15 @@ mod tests {
 
         let monday = meetings::start(&connection, Some("Monday"), None).expect("m1");
         let first = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
-        let monday_map = persist(&connection, &monday.id, &first).expect("persist");
+        let monday_map = persist(&connection, &monday.id, &first, &heard(&first)).expect("persist");
         assert_eq!(monday_map.len(), 2, "two new voices");
 
         let friday = meetings::start(&connection, Some("Friday"), None).expect("m2");
         // The same first voice, heard slightly differently — a different
         // microphone, a different room.
         let second = clusters(&[(0, &[0.97, 0.05, 0.0])]);
-        let friday_map = persist(&connection, &friday.id, &second).expect("persist");
+        let friday_map =
+            persist(&connection, &friday.id, &second, &heard(&second)).expect("persist");
 
         assert_eq!(
             friday_map[&Cluster(0)],
@@ -632,10 +670,12 @@ mod tests {
         let connection = db();
 
         let monday = meetings::start(&connection, None, None).expect("m1");
-        persist(&connection, &monday.id, &clusters(&[(0, &[1.0, 0.0, 0.0])])).expect("persist");
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        persist(&connection, &monday.id, &first, &heard(&first)).expect("persist");
 
         let friday = meetings::start(&connection, None, None).expect("m2");
-        persist(&connection, &friday.id, &clusters(&[(0, &[0.0, 0.0, 1.0])])).expect("persist");
+        let second = clusters(&[(0, &[0.0, 0.0, 1.0])]);
+        persist(&connection, &friday.id, &second, &heard(&second)).expect("persist");
 
         assert_eq!(
             crate::store::speakers::list(&connection)
@@ -655,8 +695,8 @@ mod tests {
         let connection = db();
 
         let monday = meetings::start(&connection, None, None).expect("m1");
-        let map =
-            persist(&connection, &monday.id, &clusters(&[(0, &[1.0, 0.0, 0.0])])).expect("persist");
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let map = persist(&connection, &monday.id, &first, &heard(&first)).expect("persist");
         let speaker_id = map[&Cluster(0)].clone();
         assert_eq!(
             crate::store::speakers::exemplars(&connection, &speaker_id)
@@ -666,12 +706,8 @@ mod tests {
         );
 
         let friday = meetings::start(&connection, None, None).expect("m2");
-        persist(
-            &connection,
-            &friday.id,
-            &clusters(&[(0, &[0.97, 0.05, 0.0])]),
-        )
-        .expect("persist");
+        let second = clusters(&[(0, &[0.97, 0.05, 0.0])]);
+        persist(&connection, &friday.id, &second, &heard(&second)).expect("persist");
 
         assert_eq!(
             crate::store::speakers::exemplars(&connection, &speaker_id)
@@ -697,20 +733,141 @@ mod tests {
         let connection = db();
 
         let monday = meetings::start(&connection, None, None).expect("m1");
-        let map =
-            persist(&connection, &monday.id, &clusters(&[(0, &[1.0, 0.0, 0.0])])).expect("persist");
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let map = persist(&connection, &monday.id, &first, &heard(&first)).expect("persist");
         let speaker_id = map[&Cluster(0)].clone();
 
         crate::store::speakers::delete_voiceprint(&connection, &speaker_id).expect("delete");
         assert!(seeds(&connection).expect("seeds").is_empty());
 
         let friday = meetings::start(&connection, None, None).expect("m2");
-        let after =
-            persist(&connection, &friday.id, &clusters(&[(0, &[1.0, 0.0, 0.0])])).expect("persist");
+        let again = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let after = persist(&connection, &friday.id, &again, &heard(&again)).expect("persist");
         assert_ne!(
             after[&Cluster(0)],
             speaker_id,
             "the same voice is now a stranger, which is what deletion means"
+        );
+    }
+
+    #[test]
+    fn a_voice_that_owns_no_words_does_not_become_a_speaker() {
+        // The Registry's 378 strangers, reproduced. A cluster the clusterer
+        // left standing but no transcript segment landed in — echo, a
+        // cough, the far end leaking through the speakers — used to be
+        // minted with a Voiceprint like anybody else.
+        use crate::store::meetings;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("m");
+        let voices = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
+
+        let only_first: BTreeSet<Cluster> = [Cluster(0)].into_iter().collect();
+        let assigned = persist(&connection, &meeting.id, &voices, &only_first).expect("persist");
+
+        assert_eq!(assigned.len(), 1, "the voice with words is somebody");
+        assert!(!assigned.contains_key(&Cluster(1)));
+        assert_eq!(
+            crate::store::speakers::list(&connection)
+                .expect("list")
+                .len(),
+            1,
+            "and the wordless one was not minted"
+        );
+    }
+
+    #[test]
+    fn a_voice_too_brief_to_trust_is_left_unattributed_rather_than_minted() {
+        // The other half of the same failure: a stranger heard for three
+        // seconds is not enough evidence to store a biometric on. Its
+        // segments stay honestly unattributed, and it can earn a Speaker
+        // in a Meeting where it actually talks.
+        use crate::store::meetings;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("m");
+        let brief: BTreeMap<Cluster, Embedding> = [(
+            Cluster(0),
+            Embedding::new(vec![1.0, 0.0, 0.0], "test", "1", MIN_SPEAKER_MS - 1),
+        )]
+        .into_iter()
+        .collect();
+
+        let assigned = persist(&connection, &meeting.id, &brief, &heard(&brief)).expect("persist");
+
+        assert!(assigned.is_empty());
+        assert!(
+            crate::store::speakers::list(&connection)
+                .expect("list")
+                .is_empty(),
+            "no Speaker, no Voiceprint"
+        );
+    }
+
+    #[test]
+    fn a_known_voice_is_recognized_however_briefly_it_spoke() {
+        // The floor gates minting, not recognition. Alice saying one
+        // sentence is still Alice — "what did Alice say" has to find it —
+        // and the conservative match rule is what guards against a wrong
+        // name, not a duration.
+        use crate::store::meetings;
+        let connection = db();
+
+        let monday = meetings::start(&connection, None, None).expect("m1");
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let map = persist(&connection, &monday.id, &first, &heard(&first)).expect("persist");
+        let alice = map[&Cluster(0)].clone();
+
+        let friday = meetings::start(&connection, None, None).expect("m2");
+        let brief: BTreeMap<Cluster, Embedding> = [(
+            Cluster(0),
+            Embedding::new(vec![0.98, 0.1, 0.0], "test", "1", 2_500),
+        )]
+        .into_iter()
+        .collect();
+        let again = persist(&connection, &friday.id, &brief, &heard(&brief)).expect("persist");
+
+        assert_eq!(again[&Cluster(0)], alice, "recognized");
+        let evidence = crate::store::speakers::exemplars(&connection, &alice).expect("exemplars");
+        assert_eq!(
+            evidence.len(),
+            2,
+            "and the brief hearing is kept as evidence"
+        );
+        assert_eq!(
+            evidence[1].voiced_ms, 2_500,
+            "at its real weight, so it cannot pull the Voiceprint around"
+        );
+    }
+
+    #[test]
+    fn an_exemplar_remembers_where_the_voice_can_be_heard() {
+        // What the Registry plays back. The window travels from the seam
+        // to the row unchanged, and the row's Meeting is where to cut it
+        // from.
+        use crate::audio::CaptureOffset;
+        use crate::store::meetings;
+        use evertranscript_protocol::AudioChannel;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("m");
+
+        let window = super::super::SampleWindow {
+            channel: AudioChannel::System,
+            start: CaptureOffset(61_000),
+            end: CaptureOffset(71_000),
+        };
+        let voices: BTreeMap<Cluster, Embedding> =
+            [(Cluster(0), embedding(&[1.0, 0.0, 0.0]).with_sample(window))]
+                .into_iter()
+                .collect();
+        let map = persist(&connection, &meeting.id, &voices, &heard(&voices)).expect("persist");
+
+        let source = crate::store::speakers::sample_source(&connection, &map[&Cluster(0)])
+            .expect("query")
+            .expect("a sample");
+        assert_eq!(source.meeting_id, meeting.id);
+        assert_eq!(source.sample.channel, AudioChannel::System);
+        assert_eq!(
+            (source.sample.start_ms, source.sample.end_ms),
+            (61_000, 71_000)
         );
     }
 

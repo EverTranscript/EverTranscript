@@ -169,6 +169,10 @@ impl FixtureDiarizer {
 /// "these two are the same voice" without also testing whether a cosine
 /// threshold is well chosen. Anything that needs to reason about vectors that are genuinely close
 /// belongs in the real pipeline's tests.
+///
+/// Each vector reports the voice's real length — the sum of its turns — so
+/// a policy that keys on how much of a voice there was sees the timeline's
+/// shape rather than a placeholder.
 fn synthetic_embeddings(turns: &[Turn]) -> BTreeMap<super::Cluster, Embedding> {
     let mut clusters: Vec<u32> = turns.iter().map(|turn| turn.cluster.index()).collect();
     clusters.sort_unstable();
@@ -180,9 +184,14 @@ fn synthetic_embeddings(turns: &[Turn]) -> BTreeMap<super::Cluster, Embedding> {
         .map(|cluster| {
             let mut vector = vec![0.0_f32; width.max(2)];
             vector[cluster as usize] = 1.0;
+            let voiced_ms = turns
+                .iter()
+                .filter(|turn| turn.cluster.index() == cluster)
+                .map(|turn| turn.duration_ms())
+                .sum();
             (
                 super::Cluster(cluster),
-                Embedding::new(vector, FIXTURE_MODEL, FIXTURE_MODEL_VERSION),
+                Embedding::new(vector, FIXTURE_MODEL, FIXTURE_MODEL_VERSION, voiced_ms),
             )
         })
         .collect()
