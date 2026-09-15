@@ -75,7 +75,9 @@ JSON
 "$CORE" daemon > "$ROOT/daemon.log" 2>&1 &
 DAEMON_PID=$!
 until "$CORE" status >/dev/null 2>&1; do sleep 0.3; done
-"$CORE" settings | grep -q "auto-record            off" \
+# Not `grep -q`: it exits at the first match, and under pipefail the Core's
+# next write to the closed pipe fails the check it just passed.
+"$CORE" settings | grep "auto-record            off" >/dev/null \
   || { echo "REFUSING: auto-record is on in the test instance"; exit 1; }
 
 echo "== seed =="
