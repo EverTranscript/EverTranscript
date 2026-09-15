@@ -229,6 +229,11 @@ mod tests {
             "the same directory must always produce the same pipe"
         );
         assert!(!a.contains('/'), "a path cannot appear in a pipe name: {a}");
+        // The literal, not just the properties: the Electron Client derives
+        // the same name independently (`coreAddress` in core-client.ts) and
+        // pins the same string, so a change to either side fails that side's
+        // own test instead of leaving a Client that can't find its Core.
+        assert_eq!(a, r"\\.\pipe\evertranscript-frank-1bf83e71b8d8b200");
     }
 
     #[test]

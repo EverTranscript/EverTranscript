@@ -20,13 +20,39 @@ import type { StatusResponse } from "@protocol/StatusResponse";
 export function coreAddress(): string {
   const override = process.env.EVERTRANSCRIPT_RUNTIME_DIR;
   if (process.platform === "win32") {
-    const user = process.env.USERNAME ?? "default";
-    return `\\\\.\\pipe\\evertranscript-${user}`;
+    return pipeNameFor(override, process.env.USERNAME ?? "default");
   }
   const runtimeDir =
     override ??
     join(homedir(), "Library", "Application Support", "EverTranscript", "run");
   return join(runtimeDir, "evertranscript.sock");
+}
+
+/**
+ * The Windows pipe name, derived exactly as `paths::pipe_name_for` does.
+ *
+ * A named runtime directory gets a pipe of its own, which is what lets an
+ * isolated Core coexist with the Operator's real one. The Core has done that
+ * since it stopped sharing one global pipe; this side kept deriving the old
+ * name, so on Windows every Client pointed at an isolated Core went looking
+ * for the global pipe instead — "no Core is listening" at best, and the real
+ * Core's History at worst.
+ *
+ * The digest is copied as written, including a multiplier with one more zero
+ * than textbook FNV's. Matching the Core is the point, so both sides' tests
+ * pin the same literal and neither can be "corrected" alone.
+ */
+export function pipeNameFor(runtimeDir: string | undefined, user: string): string {
+  if (runtimeDir === undefined) return `\\\\.\\pipe\\evertranscript-${user}`;
+  let hash = 0xcbf29ce484222325n;
+  // Rust hashes the WTF-8 encoding; for any path that is valid Unicode —
+  // every path Windows will actually hand an environment variable — that is
+  // byte-for-byte the UTF-8 below.
+  for (const byte of Buffer.from(runtimeDir, "utf8")) {
+    hash ^= BigInt(byte);
+    hash = (hash * 0x1000000001b3n) & 0xffffffffffffffffn;
+  }
+  return `\\\\.\\pipe\\evertranscript-${user}-${hash.toString(16).padStart(16, "0")}`;
 }
 
 type Pending = {
