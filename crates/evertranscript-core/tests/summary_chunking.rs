@@ -16,7 +16,11 @@ use std::sync::Arc;
 
 use evertranscript_core::Core;
 use evertranscript_core::store::meetings;
+use evertranscript_core::summary::Backend;
+use evertranscript_core::summary::BackendError;
 use evertranscript_core::summary::BackendIdentity;
+use evertranscript_core::summary::Cancel;
+use evertranscript_core::summary::Request;
 use evertranscript_core::summary::fake::Failure;
 use evertranscript_core::summary::fake::FakeBackend;
 use evertranscript_core::summary::fake::Response;
@@ -152,6 +156,113 @@ async fn the_first_chunk_chooses_the_backend_for_the_whole_run() {
     assert!(
         local_prompts.lock().unwrap().len() > 2,
         "local should have served every chunk, not just the first"
+    );
+}
+
+/// A Backend that holds its first answer until the test lets it go, so the
+/// test can act while a Summary is being generated.
+struct Held {
+    inner: FakeBackend,
+    started: Option<std::sync::mpsc::Sender<()>>,
+    release: Option<std::sync::mpsc::Receiver<()>>,
+}
+
+impl Backend for Held {
+    fn generate(&mut self, request: &Request, cancel: &Cancel) -> Result<String, BackendError> {
+        if let (Some(started), Some(release)) = (self.started.take(), self.release.take()) {
+            let _ = started.send(());
+            let _ = release.recv();
+        }
+        self.inner.generate(request, cancel)
+    }
+
+    fn identity(&self) -> BackendIdentity {
+        self.inner.identity()
+    }
+}
+
+#[tokio::test]
+async fn switching_the_knob_mid_generation_leaves_the_run_alone() {
+    // Ticket 07: switching the Knob mid-generation does not corrupt the
+    // Meeting being summarized. Cloud to local is the direction where a
+    // corrupt record is within reach, because the local Backend is already
+    // in the run as the fallback: a Knob read per chunk would hand it the
+    // remaining chunks under the cloud's label. The run finishes where it
+    // started, and the switch is what the next run uses (Q109).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core_in(dir.path(), "openai").await;
+    let (started, reached) = std::sync::mpsc::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let cloud = FakeBackend::cloud(
+        "OpenAI",
+        vec![Response::Text("# Cloud answered\n\nBody.".into())],
+    );
+    let cloud_prompts = cloud.prompts();
+    let local = FakeBackend::returning("# Local answered\n\nBody.");
+    let local_prompts = local.prompts();
+    let cloud = Held {
+        inner: cloud,
+        started: Some(started),
+        release: Some(held),
+    };
+    let parts = Arc::new(std::sync::Mutex::new(Some((cloud, local))));
+    let built = Arc::new(std::sync::Mutex::new(0usize));
+    let counter = Arc::clone(&built);
+    core.set_summary_backend_factory(Arc::new(move || {
+        *counter.lock().unwrap() += 1;
+        let (cloud, local) = parts.lock().unwrap().take().expect("built once");
+        (Box::new(cloud), Some(Box::new(local)))
+    }));
+
+    let id = meeting_of(&core, 400).await;
+    let run = tokio::spawn({
+        let core = Arc::clone(&core);
+        let id = id.clone();
+        async move { core.summarize_meeting(&id).await }
+    });
+    tokio::task::spawn_blocking(move || reached.recv_timeout(std::time::Duration::from_secs(30)))
+        .await
+        .expect("join")
+        .expect("the run should have reached its Backend");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        core.update_settings(SettingsSetParams {
+            summary_backend: Some("local".to_string()),
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect("switching the Knob must not wait for the run")
+    .expect("switch");
+    release.send(()).expect("release");
+
+    let markdown = run.await.expect("join").expect("summarize");
+    assert!(markdown.contains("Cloud answered") && !markdown.contains("Local answered"));
+    assert!(
+        cloud_prompts.lock().unwrap().len() > 2,
+        "the Backend the run started on should have served every chunk and the reduce"
+    );
+    assert!(
+        local_prompts.lock().unwrap().is_empty(),
+        "the switch reached the run in progress"
+    );
+    assert_eq!(
+        *built.lock().unwrap(),
+        1,
+        "the Backends were built again mid-run"
+    );
+    let meeting = core
+        .get_meeting(&id)
+        .await
+        .expect("get")
+        .expect("the Meeting")
+        .0;
+    let label = meeting.summary_backend.expect("a Backend label");
+    assert!(label.starts_with("OpenAI"), "labelled {label}");
+    assert_eq!(
+        core.settings().await.summary_backend.as_deref(),
+        Some("local"),
+        "the switch itself should hold for the next run"
     );
 }
 
