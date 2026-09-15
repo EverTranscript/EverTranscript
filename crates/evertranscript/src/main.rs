@@ -254,7 +254,9 @@ enum DiarizeCommand {
         json: bool,
     },
     /// Diarize a finished Meeting, or re-diarize one after a model upgrade.
-    /// Your corrections survive a re-run.
+    /// A re-run replaces what the machine concluded the first time — its
+    /// attributions, its Voiceprint evidence, the unnamed Speakers only it
+    /// had heard. Your names and corrections survive it.
     Run { meeting: String },
     /// Stop a running Diarization. Whatever attribution finished is kept.
     Cancel { meeting: String },

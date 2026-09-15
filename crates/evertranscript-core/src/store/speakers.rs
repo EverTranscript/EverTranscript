@@ -2,10 +2,12 @@
 //!
 //! Three ADR commitments are executable here rather than aspirational:
 //!
-//! - **Speaker records are permanent; only Voiceprints are deletable**
-//!   (ADR-0009). There is no `delete_speaker`, and its absence is the
-//!   feature: deleting a Speaker would either orphan every segment that
-//!   references it or rewrite the record, and the record does not rewrite.
+//! - **Speaker records are permanent while the record refers to them; only
+//!   Voiceprints are deletable** (ADR-0009 as amended). There is no
+//!   `delete_speaker`, and its absence is the feature: deleting a Speaker
+//!   somebody's words point at would either orphan those segments or
+//!   rewrite the record, and the record does not rewrite. The one deletion
+//!   here, [`sweep_unreferenced`], takes only rows nothing points at.
 //! - **Naming is confirmation** (ADR-0008 as amended). [`rename`] sets
 //!   `confirmed`, because the Operator putting a name to a voice is the
 //!   strongest signal the system will ever get about it.
@@ -218,6 +220,41 @@ pub fn delete_voiceprint(connection: &Connection, id: &str) -> Result<bool> {
     Ok(changed > 0)
 }
 
+/// Speakers nobody has vouched for: unnamed, unconfirmed, not the Operator.
+///
+/// The whole of what a re-run may replace and a sweep may remove. A name
+/// and a confirmation are the Operator's acts (naming *is* confirmation,
+/// ADR-0008 as amended), and the Operator's own row is theirs by
+/// definition; everything the Operator touched is outside this set by
+/// construction rather than by a list of exceptions.
+const ANONYMOUS: &str = "is_operator = 0 AND display_name IS NULL AND confirmed = 0";
+
+/// Deletes every anonymous Speaker the record does not refer to: no
+/// segment attributed, no correction in either direction, and no exemplar.
+///
+/// The exemplar clause is what migration 10's one-time prune lacked and why
+/// this can stand as a rule where that could not: a Speaker heard only in a
+/// Meeting since deleted keeps its exemplars (with no `meeting_id`, see
+/// [`super::meetings::delete`]), so "Voiceprints outlive the recordings they
+/// came from" holds here untouched. What is left to match is a row with no
+/// evidence, no words and no name — the Speakers a re-run withdrew and did
+/// not re-attribute — and deleting one changes nothing anything displays.
+pub fn sweep_unreferenced(connection: &Connection) -> Result<usize> {
+    Ok(connection.execute(
+        &format!(
+            "DELETE FROM speakers
+              WHERE {ANONYMOUS}
+                AND id NOT IN (SELECT speaker_id FROM transcript_segments
+                                WHERE speaker_id IS NOT NULL)
+                AND id NOT IN (SELECT speaker_id FROM attribution_hints)
+                AND id NOT IN (SELECT replaced_speaker_id FROM attribution_hints
+                                WHERE replaced_speaker_id IS NOT NULL)
+                AND id NOT IN (SELECT speaker_id FROM speaker_exemplars)"
+        ),
+        [],
+    )?)
+}
+
 /// Sets the current best identity vector for a Speaker.
 pub fn set_voiceprint(
     connection: &Connection,
@@ -324,6 +361,40 @@ pub fn add_exemplar(connection: &Connection, exemplar: NewExemplar<'_>) -> Resul
         ],
     )?;
     Ok(id)
+}
+
+/// The anonymous Speakers a Meeting's previous Diarization run taught
+/// History about — the ones whose evidence from it a re-run withdraws.
+pub fn anonymous_speakers_heard_in(
+    connection: &Connection,
+    meeting_id: &str,
+) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(&format!(
+        "SELECT DISTINCT speaker_id FROM speaker_exemplars
+          WHERE meeting_id = ?1 AND source = 'machine'
+            AND speaker_id IN (SELECT id FROM speakers WHERE {ANONYMOUS})
+          ORDER BY speaker_id"
+    ))?;
+    let rows = statement.query_map(params![meeting_id], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Removes what the machine recorded about one Speaker from one Meeting.
+///
+/// Only the machine's rows: an exemplar a correction produced is the
+/// Operator's evidence and is not the machine's to withdraw. The caller
+/// recomputes the Voiceprint afterwards — `seeds` reads the column, and a
+/// withdrawal that left the column alone would withdraw nothing.
+pub fn delete_machine_exemplars(
+    connection: &Connection,
+    speaker_id: &str,
+    meeting_id: &str,
+) -> Result<usize> {
+    Ok(connection.execute(
+        "DELETE FROM speaker_exemplars
+          WHERE speaker_id = ?1 AND meeting_id = ?2 AND source = 'machine'",
+        params![speaker_id, meeting_id],
+    )?)
 }
 
 pub fn exemplars(connection: &Connection, speaker_id: &str) -> Result<Vec<Exemplar>> {
@@ -1105,6 +1176,147 @@ mod tests {
         assert_eq!(
             kept[0].meeting_id, None,
             "but it no longer claims to come from a Meeting that is gone"
+        );
+
+        // And the standing sweep, which runs after every Diarization, must
+        // read that surviving exemplar as the reason to leave the row alone.
+        assert_eq!(sweep_unreferenced(&connection).expect("sweep"), 0);
+        assert!(get(&connection, &speaker.id).expect("get").is_some());
+    }
+
+    #[test]
+    fn the_sweep_takes_only_what_nothing_refers_to() {
+        // The record's every way of pointing at a Speaker, each one enough
+        // to keep it: a segment, a correction to it, a correction away from
+        // it, an exemplar, a name, being the Operator. Only the row with
+        // none of them goes.
+        let connection = db();
+        let meeting = meetings::start(&connection, Some("One"), None).expect("meeting");
+
+        let attributed = create(&connection, false).expect("attributed");
+        let first = segment(&connection, &meeting.id, 1);
+        attribute_segment(
+            &connection,
+            &first,
+            Some(&attributed.id),
+            Attribution::Clustered,
+        )
+        .expect("attribute");
+
+        let corrected_to = create(&connection, false).expect("to");
+        let corrected_from = create(&connection, false).expect("from");
+        let second = segment(&connection, &meeting.id, 2);
+        attribute_segment(
+            &connection,
+            &second,
+            Some(&corrected_from.id),
+            Attribution::Clustered,
+        )
+        .expect("attribute");
+        correct_attribution(&connection, &second, &corrected_to.id).expect("correct");
+        // The machine's conclusion withdrawn afterwards, as a re-run would;
+        // the correction still names both of them.
+        attribute_segment(&connection, &second, None, Attribution::Clustered).expect("clear");
+
+        let evidenced = create(&connection, false).expect("evidenced");
+        add_exemplar(
+            &connection,
+            NewExemplar {
+                speaker_id: &evidenced.id,
+                meeting_id: Some(&meeting.id),
+                vector: &[1.0, 0.0],
+                model: "m",
+                model_version: "1",
+                voiced_ms: 3_000,
+                from_operator: false,
+                is_negative: false,
+                sample: None,
+            },
+        )
+        .expect("exemplar");
+
+        let named = create(&connection, false).expect("named");
+        rename(&connection, &named.id, "Alice").expect("rename");
+        let operator = create(&connection, true).expect("operator");
+        let nothing = create(&connection, false).expect("nothing");
+
+        assert_eq!(sweep_unreferenced(&connection).expect("sweep"), 1);
+
+        let mut left: Vec<String> = list(&connection)
+            .expect("list")
+            .into_iter()
+            .map(|speaker| speaker.id)
+            .collect();
+        left.sort();
+        let mut expected = vec![
+            attributed.id,
+            corrected_to.id,
+            corrected_from.id,
+            evidenced.id,
+            named.id,
+            operator.id,
+        ];
+        expected.sort();
+        assert_eq!(left, expected, "everything referenced survives");
+        assert!(get(&connection, &nothing.id).expect("get").is_none());
+    }
+
+    #[test]
+    fn a_withdrawal_takes_the_machines_rows_and_leaves_the_operators() {
+        let connection = db();
+        let meeting = meetings::start(&connection, Some("One"), None).expect("meeting");
+        let elsewhere = meetings::start(&connection, Some("Two"), None).expect("meeting");
+        let speaker = create(&connection, false).expect("speaker");
+        for (meeting_id, from_operator) in [
+            (&meeting.id, false),
+            (&meeting.id, true),
+            (&elsewhere.id, false),
+        ] {
+            add_exemplar(
+                &connection,
+                NewExemplar {
+                    speaker_id: &speaker.id,
+                    meeting_id: Some(meeting_id),
+                    vector: &[1.0, 0.0],
+                    model: "m",
+                    model_version: "1",
+                    voiced_ms: 3_000,
+                    from_operator,
+                    is_negative: false,
+                    sample: None,
+                },
+            )
+            .expect("exemplar");
+        }
+        assert_eq!(
+            anonymous_speakers_heard_in(&connection, &meeting.id).expect("heard"),
+            vec![speaker.id.clone()]
+        );
+
+        assert_eq!(
+            delete_machine_exemplars(&connection, &speaker.id, &meeting.id).expect("delete"),
+            1
+        );
+
+        let kept = exemplars(&connection, &speaker.id).expect("exemplars");
+        assert_eq!(kept.len(), 2);
+        assert!(
+            kept.iter()
+                .any(|e| e.meeting_id.as_deref() == Some(meeting.id.as_str()) && e.from_operator),
+            "the correction's evidence from this Meeting stays"
+        );
+        assert!(
+            kept.iter()
+                .any(|e| e.meeting_id.as_deref() == Some(elsewhere.id.as_str())),
+            "and so does what another Meeting taught"
+        );
+
+        rename(&connection, &speaker.id, "Alice").expect("rename");
+        assert!(
+            anonymous_speakers_heard_in(&connection, &meeting.id)
+                .expect("heard")
+                .is_empty(),
+            "a named Speaker is not anonymous, whatever it was heard in"
         );
     }
 

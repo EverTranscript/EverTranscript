@@ -1411,14 +1411,19 @@ impl Core {
         let written = self
             .store
             .write(move |connection| {
+                // One transaction: a re-run withdraws the previous run's
+                // evidence before it writes its own, and a Core that died
+                // between the two would leave History knowing less than
+                // either run had taught it.
+                let transaction = connection.transaction()?;
                 // The join first, then the Speakers. Persistence used to run
                 // before reconciliation and minted a Speaker for every
                 // cluster, words or none; now it is told which voices the
                 // Transcript actually contains and mints only those.
-                let segments = crate::store::meetings::segments(connection, &meeting_id)?;
+                let segments = crate::store::meetings::segments(&transaction, &meeting_id)?;
                 let reconciliation = diarize::reconcile::reconcile(&diarization, &segments);
                 let assigned = diarize::cluster::persist(
-                    connection,
+                    &transaction,
                     &meeting_id,
                     &diarization.embeddings,
                     &reconciliation.voices(),
@@ -1426,29 +1431,38 @@ impl Core {
 
                 // The Operator's own Speaker, where the evidence supports one
                 // (ADR-0029 as amended).
-                let known = diarize::operator::known_operator(connection)?;
+                let known = diarize::operator::known_operator(&transaction)?;
                 if let Some(mine) = diarize::operator::identify(&diarization, known.as_ref())
                     && let Some(speaker_id) = assigned.get(&mine)
                 {
-                    connection.execute(
+                    transaction.execute(
                         "UPDATE speakers SET is_operator = 1 WHERE id = ?1",
                         rusqlite::params![speaker_id],
                     )?;
                 }
 
+                let written = diarize::reconcile::apply(
+                    &transaction,
+                    &reconciliation,
+                    &assigned,
+                    crate::store::speakers::Attribution::Clustered,
+                )?;
+                // The other half of "a re-run replaces the run" (`persist`
+                // did the first): the Speakers the previous run of this
+                // Meeting minted and this one did not re-attribute now own
+                // nothing, and go. Only here, after the segments moved —
+                // before that they still owned this Meeting's words.
+                let swept = crate::store::speakers::sweep_unreferenced(&transaction)?;
+                transaction.commit()?;
                 tracing::info!(
                     boundary_flips = reconciliation.boundary_flips,
                     attributed = reconciliation.attributed(),
                     voices = reconciliation.voices().len(),
                     speakers = assigned.len(),
+                    swept,
                     "diarization reconciled"
                 );
-                diarize::reconcile::apply(
-                    connection,
-                    &reconciliation,
-                    &assigned,
-                    crate::store::speakers::Attribution::Clustered,
-                )
+                Ok(written)
             })
             .await?;
 

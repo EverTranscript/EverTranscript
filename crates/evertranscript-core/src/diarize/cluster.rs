@@ -323,6 +323,41 @@ pub fn seeds(connection: &rusqlite::Connection) -> anyhow::Result<Vec<SeedVoice>
         .collect())
 }
 
+/// Recomputes a Speaker's Voiceprint from the evidence it still holds, or
+/// clears it when none is left.
+///
+/// The clearing is what makes a withdrawn exemplar actually withdrawn:
+/// [`seeds`] reads the column, not the rows, and a Speaker whose every
+/// exemplar is gone but whose vector stayed would go on recognizing itself.
+fn refresh_voiceprint(connection: &rusqlite::Connection, speaker_id: &str) -> anyhow::Result<()> {
+    use crate::store::speakers;
+
+    let evidence = speakers::exemplars(connection, speaker_id)?;
+    let history: Vec<(Vec<f32>, i64, bool)> = evidence
+        .iter()
+        .map(|exemplar| {
+            (
+                exemplar.vector.clone(),
+                exemplar.voiced_ms,
+                exemplar.is_negative,
+            )
+        })
+        .collect();
+    match (centroid(&history), evidence.last()) {
+        (Some(vector), Some(latest)) => speakers::set_voiceprint(
+            connection,
+            speaker_id,
+            &vector,
+            &latest.model,
+            &latest.model_version,
+        ),
+        (None, None) => speakers::delete_voiceprint(connection, speaker_id).map(|_| ()),
+        // Evidence that yields no centroid — every exemplar negative — leaves
+        // the Voiceprint as it was, as it always has.
+        _ => Ok(()),
+    }
+}
+
 /// Resolves a Meeting's clusters to persistent Speakers.
 ///
 /// Recognized clusters return their existing Speaker; unrecognized ones get
@@ -340,6 +375,14 @@ pub fn seeds(connection: &rusqlite::Connection) -> anyhow::Result<Vec<SeedVoice>
 /// recognizes must hold [`MIN_SPEAKER_MS`] of voice before it is minted.
 /// Recognition itself has no floor — the conservative match rule is the
 /// guard there, and "what did Alice say" should work for one sentence.
+///
+/// **A re-run replaces the run.** What the previous run of this Meeting
+/// taught History about anonymous Speakers is withdrawn before the seeds
+/// are read, and each Speaker this run recognizes has its earlier hearing
+/// from this Meeting replaced rather than doubled. The other half — the
+/// Speakers the previous run minted that this one did not re-attribute —
+/// can only go once the segments have moved, so the caller runs
+/// [`crate::store::speakers::sweep_unreferenced`] after `apply`.
 pub fn persist(
     connection: &rusqlite::Connection,
     meeting_id: &str,
@@ -347,6 +390,17 @@ pub fn persist(
     heard: &BTreeSet<Cluster>,
 ) -> anyhow::Result<BTreeMap<Cluster, String>> {
     use crate::store::speakers;
+
+    // The first real re-runs showed why this comes first: the previous
+    // run's Voiceprints were cut from the very audio being re-diarized,
+    // so every one of them was recognized from it — twenty-four of
+    // twenty-four in one Meeting — and the floor below never got a say.
+    // A Speaker the Operator named or confirmed keeps its evidence: that
+    // is the Operator's word about the voice, not the machine's guess.
+    for speaker_id in speakers::anonymous_speakers_heard_in(connection, meeting_id)? {
+        speakers::delete_machine_exemplars(connection, &speaker_id, meeting_id)?;
+        refresh_voiceprint(connection, &speaker_id)?;
+    }
 
     let known = seeds(connection)?;
     let resolved = resolve(embeddings, &known);
@@ -365,6 +419,10 @@ pub fn persist(
             Resolved::New => speakers::create(connection, false)?.id,
         };
 
+        // This run's hearing replaces the previous run's, never sits beside
+        // it: a named Speaker recognized from its own audio would otherwise
+        // weigh that audio twice in its Voiceprint.
+        speakers::delete_machine_exemplars(connection, &speaker_id, meeting_id)?;
         speakers::add_exemplar(
             connection,
             speakers::NewExemplar {
@@ -383,20 +441,7 @@ pub fn persist(
                 }),
             },
         )?;
-
-        let history: Vec<(Vec<f32>, i64, bool)> = speakers::exemplars(connection, &speaker_id)?
-            .into_iter()
-            .map(|exemplar| (exemplar.vector, exemplar.voiced_ms, exemplar.is_negative))
-            .collect();
-        if let Some(vector) = centroid(&history) {
-            speakers::set_voiceprint(
-                connection,
-                &speaker_id,
-                &vector,
-                &embedding.model,
-                &embedding.model_version,
-            )?;
-        }
+        refresh_voiceprint(connection, &speaker_id)?;
         assigned.insert(cluster, speaker_id);
     }
     Ok(assigned)
@@ -868,6 +913,137 @@ mod tests {
         assert_eq!(
             (source.sample.start_ms, source.sample.end_ms),
             (61_000, 71_000)
+        );
+    }
+
+    #[test]
+    fn a_re_run_replaces_the_speakers_the_first_run_minted() {
+        // What the first real re-runs showed. The previous run's
+        // Voiceprints were cut from this very audio, so the second run
+        // recognized every one of them from it and the floor never got a
+        // say. Now the first run's evidence is withdrawn before the seeds
+        // are read, and what it minted goes once the segments have moved.
+        use crate::store::meetings;
+        use crate::store::speakers;
+        use evertranscript_protocol::AudioChannel;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("m");
+        let segment = meetings::append_segment(
+            &connection,
+            &meeting.id,
+            AudioChannel::System,
+            0,
+            5_000,
+            "hi",
+        )
+        .expect("segment");
+
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let stale = persist(&connection, &meeting.id, &first, &heard(&first)).expect("persist")
+            [&Cluster(0)]
+            .clone();
+        speakers::attribute_segment(
+            &connection,
+            &segment.id,
+            Some(&stale),
+            speakers::Attribution::Clustered,
+        )
+        .expect("attribute");
+
+        // The same voice, exactly, as the re-run clusters it.
+        let again = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let fresh = persist(&connection, &meeting.id, &again, &heard(&again)).expect("persist")
+            [&Cluster(0)]
+            .clone();
+        assert_ne!(
+            fresh, stale,
+            "the first run's Speaker did not seed the second"
+        );
+        // What `reconcile::apply` does next.
+        speakers::attribute_segment(
+            &connection,
+            &segment.id,
+            Some(&fresh),
+            speakers::Attribution::Clustered,
+        )
+        .expect("re-attribute");
+
+        assert_eq!(speakers::sweep_unreferenced(&connection).expect("sweep"), 1);
+        let left = speakers::list(&connection).expect("list");
+        assert_eq!(left.len(), 1, "one voice, one Speaker");
+        assert_eq!(left[0].id, fresh);
+        assert_eq!(
+            speakers::exemplars(&connection, &fresh)
+                .expect("exemplars")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_re_run_keeps_the_speaker_the_operator_named() {
+        // The other half. Alice was named from this Meeting, so her
+        // evidence from it is the Operator's word rather than the machine's
+        // guess: it stays as a seed, she is recognized, and this run's
+        // hearing replaces the old one instead of doubling it.
+        use crate::store::meetings;
+        use crate::store::speakers;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("m");
+
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let alice = persist(&connection, &meeting.id, &first, &heard(&first)).expect("persist")
+            [&Cluster(0)]
+            .clone();
+        speakers::rename(&connection, &alice, "Alice").expect("rename");
+
+        let again = clusters(&[(0, &[0.98, 0.1, 0.0])]);
+        let recognized = persist(&connection, &meeting.id, &again, &heard(&again))
+            .expect("persist")[&Cluster(0)]
+            .clone();
+
+        assert_eq!(recognized, alice, "still Alice");
+        let evidence = speakers::exemplars(&connection, &alice).expect("exemplars");
+        assert_eq!(evidence.len(), 1, "replaced, not doubled");
+        assert_eq!(
+            evidence[0].vector,
+            again[&Cluster(0)].vector,
+            "with this run's hearing"
+        );
+        assert_eq!(speakers::list(&connection).expect("list").len(), 1);
+    }
+
+    #[test]
+    fn a_re_run_withdraws_one_meetings_evidence_and_leaves_the_rest() {
+        // A voice heard in two Meetings is still recognized when one of
+        // them is re-run: the other Meeting's evidence carries it, and the
+        // re-run adds its own beside that rather than beside itself.
+        use crate::store::meetings;
+        use crate::store::speakers;
+        let connection = db();
+
+        let monday = meetings::start(&connection, None, None).expect("m1");
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let voice = persist(&connection, &monday.id, &first, &heard(&first)).expect("persist")
+            [&Cluster(0)]
+            .clone();
+        let friday = meetings::start(&connection, None, None).expect("m2");
+        let second = clusters(&[(0, &[0.97, 0.05, 0.0])]);
+        persist(&connection, &friday.id, &second, &heard(&second)).expect("persist");
+
+        let again = clusters(&[(0, &[0.99, 0.02, 0.0])]);
+        let recognized = persist(&connection, &monday.id, &again, &heard(&again)).expect("persist")
+            [&Cluster(0)]
+            .clone();
+
+        assert_eq!(recognized, voice);
+        let evidence = speakers::exemplars(&connection, &voice).expect("exemplars");
+        assert_eq!(evidence.len(), 2, "Friday's, and the new Monday");
+        assert!(
+            !evidence
+                .iter()
+                .any(|exemplar| exemplar.vector == first[&Cluster(0)].vector),
+            "the old Monday hearing is gone"
         );
     }
 
