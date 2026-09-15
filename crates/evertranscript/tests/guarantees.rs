@@ -10,8 +10,9 @@
 //! - **Sanctioned Traffic** (ADR-0034): with models present, a full record →
 //!   stop → Mirror cycle opens no network connections at all.
 //! - **The permission set** (ADR-0027/0030/0036): microphone and
-//!   system-audio only. Screen Recording and Calendars appear solely behind
-//!   opt-in features that do not exist yet in M1.
+//!   system-audio, plus Calendars behind a grant the Operator may decline —
+//!   the entitlement lets the prompt appear; only their answer lets a read
+//!   succeed. Screen Recording is absent.
 //! - **No secrets in the record** (story 41): nothing key-shaped in the
 //!   database, the Mirrors, or the logs.
 

@@ -13,6 +13,7 @@ use clap::Subcommand;
 use evertranscript_core::client::CoreClient;
 use evertranscript_core::paths;
 use evertranscript_protocol::BriefingResponse;
+use evertranscript_protocol::CalendarAccessResponse;
 use evertranscript_protocol::ChineseScript;
 use evertranscript_protocol::DiarizeState;
 use evertranscript_protocol::DiarizeStatusResponse;
@@ -152,6 +153,14 @@ enum Command {
     /// Run Diarization over a Meeting, see what it is doing, or stop it.
     #[command(subcommand)]
     Diarize(DiarizeCommand),
+    /// Ask macOS for calendar access, so scheduled meetings arm and name
+    /// their Meeting in advance. Shows the system prompt; the answer is
+    /// yours, and System Settings › Privacy & Security › Calendars is where
+    /// to change it later. Never a cloud calendar account.
+    Calendar {
+        #[arg(value_parser = ["request"])]
+        action: String,
+    },
     /// Turn launch-at-login on or off. Registration only: a running Core is
     /// left alone, and Quit is what stops it.
     Autostart {
@@ -435,6 +444,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Speakers(speakers) => run_speakers(speakers).await,
         Command::Reassign { segment, speaker } => run_reassign(&segment, &speaker).await,
         Command::Diarize(diarize) => run_diarize(diarize).await,
+        Command::Calendar { .. } => run_calendar_request().await,
         Command::Autostart { state } => run_autostart(&state).await,
     }
 }
@@ -632,6 +642,24 @@ async fn run_acknowledge() -> Result<()> {
             "not saved"
         }
     );
+    Ok(())
+}
+
+/// Asks the Core to ask the OS. The Core asks rather than this process
+/// because the Core is what reads the calendar, and macOS grants access to
+/// the app that launched the asking process — the Client, usually.
+async fn run_calendar_request() -> Result<()> {
+    let mut client = client().await?;
+    println!("Asking for calendar access. Answer the system prompt.");
+    let answer: CalendarAccessResponse = client.request("calendar/requestAccess", None).await?;
+    if answer.granted {
+        println!("Calendar access granted. Scheduled meetings will arm and name their Meeting.");
+    } else {
+        println!(
+            "Calendar access not granted. Meetings are named after the app that was running.\n\
+             To allow it later: System Settings › Privacy & Security › Calendars."
+        );
+    }
     Ok(())
 }
 

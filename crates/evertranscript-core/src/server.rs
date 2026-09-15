@@ -13,6 +13,7 @@ use std::time::Instant;
 use anyhow::Result;
 use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::BriefingResponse;
+use evertranscript_protocol::CalendarAccessResponse;
 use evertranscript_protocol::ClientNotification;
 use evertranscript_protocol::ClientRequest;
 use evertranscript_protocol::CoreState;
@@ -591,6 +592,19 @@ impl Core {
         // transcript.
         self.mirror_wake.notify_one();
         Ok(meeting)
+    }
+
+    /// Asks the OS for calendar access (ADR-0036). The calendar poll sees a
+    /// grant on its own, so nothing else has to be told.
+    ///
+    /// On a blocking thread: the request waits for the Operator's answer,
+    /// which takes as long as they like, and the server loop must keep
+    /// serving everyone else meanwhile.
+    pub async fn request_calendar_access(&self) -> Result<CalendarAccessResponse> {
+        let answer = tokio::task::spawn_blocking(crate::detect::calendar::request).await?;
+        let granted = answer == crate::detect::calendar::Access::Granted;
+        info!(granted, "calendar access was asked for");
+        Ok(CalendarAccessResponse { granted })
     }
 
     /// What this installation holds and may say (stories 46, 47).
@@ -2825,6 +2839,10 @@ impl Server {
             }
 
             ClientRequest::PostureGet(_) => Ok(serde_json::to_value(self.core.posture().await?)?),
+
+            ClientRequest::CalendarRequestAccess(_) => Ok(serde_json::to_value(
+                self.core.request_calendar_access().await?,
+            )?),
 
             ClientRequest::SpeakerList(_) => Ok(serde_json::to_value(self.core.speakers().await?)?),
 

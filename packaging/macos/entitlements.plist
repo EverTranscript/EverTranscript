@@ -39,5 +39,15 @@
          entitlement here and its absence is the point. -->
     <key>com.apple.security.network.client</key>
     <true/>
+
+    <!-- Calendar arming (ADR-0036): the local calendar store, behind a grant
+         the Operator may decline. Under the hardened runtime this entitlement
+         is what lets the Calendars prompt appear at all — without it the
+         request is refused silently and the app never reaches the Privacy
+         list, so there is no way to say yes. The entitlement grants nothing
+         by itself: reading still needs the Operator's answer, and the
+         Info.plist usage string is what the prompt shows them. -->
+    <key>com.apple.security.personal-information.calendars</key>
+    <true/>
 </dict>
 </plist>

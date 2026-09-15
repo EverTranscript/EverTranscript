@@ -10,6 +10,7 @@ import type { Speaker } from "@protocol/Speaker";
 import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
 import {
   useAudioCheck,
+  useCalendarAccess,
   useCore,
   useMeetingWriting,
   useRegistry,
@@ -1455,7 +1456,7 @@ function BackendPanel(): React.JSX.Element {
  * one, and this is the surface an evaluator uses to decide.
  */
 function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const { posture, error } = usePosture();
+  const { posture, error, refresh } = usePosture();
 
   return (
     <div className="flex h-full flex-col overflow-y-auto p-6">
@@ -1498,6 +1499,7 @@ function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
                 ? t("posture.calendar.granted")
                 : t("posture.calendar.withheld")}
             </p>
+            {posture.calendarGranted ? null : <CalendarAccessPanel onChange={refresh} />}
           </section>
 
           <section className="mb-6">
@@ -1682,6 +1684,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
             <p className="mt-2 text-sm text-ink-muted">
               {t("onboarding.calendar.body")}
             </p>
+            <CalendarAccessPanel />
             <p className="mt-2 text-xs text-ink-muted">
               {t("onboarding.calendar.skipCost")}
             </p>
@@ -1734,6 +1737,45 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
  * past a truthful "no" would be worse than the silence it replaces. The
  * verdict is information, not a gate.
  */
+/**
+ * The one button that makes the Calendars prompt appear (ADR-0036).
+ *
+ * Until the app has asked, macOS does not list it under Privacy &
+ * Security, so there is nowhere else an Operator could say yes. Asking is
+ * the whole job; the answer is theirs, and a refusal is changed in System
+ * Settings rather than by asking again — a second ask returns the refusal
+ * silently.
+ */
+function CalendarAccessPanel({ onChange }: { onChange?: () => void } = {}): React.ReactElement {
+  const { granted, refused, asking, error, request } = useCalendarAccess();
+
+  useEffect(() => {
+    if (granted) onChange?.();
+  }, [granted, onChange]);
+
+  if (granted) {
+    return (
+      <p className="mt-3 text-xs text-ink-muted">{t("onboarding.calendar.granted")}</p>
+    );
+  }
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        disabled={asking}
+        onClick={request}
+        className="push"
+      >
+        {asking ? t("onboarding.calendar.asking") : t("onboarding.calendar.allow")}
+      </button>
+      {refused && !asking ? (
+        <p className="mt-2 text-xs text-ink-muted">{t("onboarding.calendar.withheld")}</p>
+      ) : null}
+      {error ? <p className="mt-2 text-xs text-recording">{error}</p> : null}
+    </div>
+  );
+}
+
 function AudioCheckPanel(): React.ReactElement {
   const { report, checking, error, check } = useAudioCheck();
 

@@ -52,6 +52,10 @@
       "entitlementsInherit": "../../packaging/macos/entitlements.plist",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
+      "extendInfo": {
+        "NSCalendarsFullAccessUsageDescription": "EverTranscript reads the calendar already on this Mac to name meetings and know when they are scheduled. Never a cloud calendar account, and nothing is recorded because of it.",
+        "NSCalendarsUsageDescription": "EverTranscript reads the calendar already on this Mac to name meetings and know when they are scheduled. Never a cloud calendar account, and nothing is recorded because of it."
+      },
       "target": [
         {
           "target": "zip",

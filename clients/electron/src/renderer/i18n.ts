@@ -140,6 +140,11 @@ const en = {
   "onboarding.calendar.body":
     "If you allow it, EverTranscript reads the calendar already on this machine — never a cloud calendar account — to name meetings and know when they are scheduled. Skipping costs those niceties and nothing else.",
   "onboarding.calendar.skipCost": "Skip: meetings are named after the app that was running.",
+  "onboarding.calendar.allow": "Allow calendar access",
+  "onboarding.calendar.asking": "Waiting for your answer…",
+  "onboarding.calendar.granted": "Calendar access granted. Scheduled meetings will arm and name their Meeting.",
+  "onboarding.calendar.withheld":
+    "Not granted. To allow it later: System Settings › Privacy & Security › Calendars.",
   "posture.title": "What it knows",
   "posture.open": "What it knows",
   "posture.holds": "What it holds",
@@ -374,6 +379,10 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "onboarding.calendar.body":
       "如果你允许，EverTranscript 会读取本机上已有的日历——绝不访问云端日历账户——用于为会议命名并了解日程。跳过只会失去这些便利，不影响其他功能。",
     "onboarding.calendar.skipCost": "跳过后：会议将以当时运行的应用命名。",
+    "onboarding.calendar.allow": "允许访问日历",
+    "onboarding.calendar.asking": "等待你的回答…",
+    "onboarding.calendar.granted": "已授权访问日历。日程中的会议将提前准备并命名对应的会议记录。",
+    "onboarding.calendar.withheld": "未授权。以后可在 系统设置 › 隐私与安全性 › 日历 中允许。",
     "posture.title": "它知道什么",
     "posture.open": "它知道什么",
     "posture.holds": "它保存了什么",

@@ -317,6 +317,19 @@ client_request_definitions! {
         params: PostureGetParams,
         response: PostureResponse,
     },
+    /// Asks the OS for calendar access (ADR-0036) and answers with what it
+    /// holds afterwards. This is the only way the Calendars prompt appears:
+    /// macOS lists an app under Privacy & Security only once it has asked,
+    /// so an Operator who wants to say yes needs somewhere to press. The Core
+    /// asks rather than the Client because the Core is the process that
+    /// reads; a grant is attributed to the app that launched it. Blocks
+    /// until the Operator answers. Already granted, or already refused,
+    /// answers at once without a prompt — the way back from a refusal is
+    /// System Settings.
+    CalendarRequestAccess => "calendar/requestAccess" {
+        params: CalendarRequestAccessParams,
+        response: CalendarAccessResponse,
+    },
     /// Every Speaker the app holds — the Voice Registry's inventory
     /// (story 30). ADR-0008 makes this surface mandatory rather than
     /// optional: it is half of what was traded for storing Voiceprints
@@ -1591,6 +1604,20 @@ pub struct BriefingResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct PostureGetParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CalendarRequestAccessParams {}
+
+/// What the calendar grant is after asking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CalendarAccessResponse {
+    /// True when the Core can read the local calendar store from now on.
+    pub granted: bool,
+}
 
 /// One thing this product may say on the network (ADR-0034). Three, closed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

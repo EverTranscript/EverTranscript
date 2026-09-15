@@ -4,7 +4,7 @@
 
 **Blocked by:** 03.
 
-Status: blocked — the Windows reader works under a signed test package (2026-09-15). Still open: the Mac reader has never read a real calendar, and whether Windows keeps a local-store reader at all is escalated (`DECISIONS.md` Q104)
+Status: blocked — the Windows reader works under a signed test package and the Mac reader arms from a real calendar (2026-09-15, Q108 made the app able to ask). Still open: a Meeting named by an armed event has not been observed under capture, the login-item Core cannot be granted separately, and whether Windows keeps a local-store reader at all is escalated (`DECISIONS.md` Q104)
 
 - [x] EventKit local-store read on macOS — written, and it compiles and links correctly.
 - [x] **The WinRT appointment store is read** — `AppointmentManager` with read-only access to all calendars. Run on Windows 11 Pro 26200 on 2026-09-15 under a signed sparse test package; see *Run on Windows* below
@@ -87,16 +87,28 @@ a current Windows 11 machine the reader works but will probably find
 nothing. Whether ADR-0036's Windows half stays a local-store reader is
 escalated as `DECISIONS.md` Q104.
 
-## Not verified on the Mac
+## Run on the Mac (2026-09-15)
 
-The macOS reader compiles and links, and asking for the authorization status
-works — but this machine has **no Calendars grant**, so no event has ever
-been read and no Meeting has ever been armed by a real calendar. Arming
-after a meeting's start rather than an hour before it is covered by
-`changes`' tests, and the policy side end to end by fixtures
-(`auto_record.rs`). Both are weaker claims than a real calendar. Granting
-access and watching a scheduled meeting arm and name a Meeting is what
-closes this.
+Verified against a real calendar on macOS 26.6.2. A release Core with
+scratch History, runtime and support dirs, `autoRecord: true` and an
+**emptied Watchlist** (so it could arm but never record) was started from a
+terminal that holds the Calendars grant. An event created in Calendar.app
+two minutes into its ten-minute slot was announced on the next poll:
+`a scheduled meeting has started` and `armed by the calendar … title="…"`
+within 30 s; deleting it ended the arming; no Meeting row was created. Same
+result on `b4af2f7` and `5a980f9`.
+
+The installed app could not be granted at all until Q108: nothing asked,
+the Client had no usage string and the hardened runtime no Calendars
+entitlement, so macOS never listed it under Privacy & Security. Now
+`calendar/requestAccess` asks from the Core, the onboarding step and the
+trust surface carry the button, and `evertranscript calendar request` does
+it from a terminal. Still open: a Core the login item starts is its own
+responsible process, so a grant to the Client does not cover it; the
+prompt it would show names the bare binary.
+
+Still never observed: a Meeting *named* by an appointment, which needs a
+real capture during an armed event.
 
 ## A Windows constraint worth knowing before anyone relies on this
 

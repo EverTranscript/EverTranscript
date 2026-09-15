@@ -16,6 +16,7 @@ import type { ModelProgressParams } from "@protocol/ModelProgressParams";
 import type { SettingsResponse } from "@protocol/SettingsResponse";
 import type { SettingsSetParams } from "@protocol/SettingsSetParams";
 import type { BriefingResponse } from "@protocol/BriefingResponse";
+import type { CalendarAccessResponse } from "@protocol/CalendarAccessResponse";
 import type { PostureResponse } from "@protocol/PostureResponse";
 import type { SpeakerDetailResponse } from "@protocol/SpeakerDetailResponse";
 import type { SpeakerListResponse } from "@protocol/SpeakerListResponse";
@@ -497,20 +498,80 @@ export function usePosture() {
   const [posture, setPosture] = useState<PostureResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const refresh = useCallback(async () => {
+    try {
+      setPosture(
+        await window.evertranscript.request<PostureResponse>("posture/get", {}),
+      );
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { posture, error, refresh };
+}
+
+/**
+ * The calendar grant, and the one way to ask for it (ADR-0036).
+ *
+ * The Core asks the OS, not this window: the Core is the process that reads
+ * the calendar, and macOS attributes the answer to the app that launched
+ * it. The request blocks until the Operator answers the system prompt, so
+ * `asking` stays true for as long as the sheet is up.
+ */
+export function useCalendarAccess(): {
+  granted: boolean | null;
+  /** True once a request came back refused — the hint to System Settings. */
+  refused: boolean;
+  asking: boolean;
+  error: string | null;
+  request: () => void;
+} {
+  const [granted, setGranted] = useState<boolean | null>(null);
+  const [refused, setRefused] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
     void (async () => {
       try {
-        setPosture(
-          await window.evertranscript.request<PostureResponse>("posture/get", {}),
+        const posture = await window.evertranscript.request<PostureResponse>(
+          "posture/get",
+          {},
         );
-        setError(null);
+        setGranted(posture.calendarGranted);
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       }
     })();
   }, []);
 
-  return { posture, error };
+  const request = useCallback(() => {
+    if (asking) return;
+    setAsking(true);
+    setError(null);
+    void (async () => {
+      try {
+        const answer = await window.evertranscript.request<CalendarAccessResponse>(
+          "calendar/requestAccess",
+          {},
+        );
+        setGranted(answer.granted);
+        setRefused(!answer.granted);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      } finally {
+        setAsking(false);
+      }
+    })();
+  }, [asking]);
+
+  return { granted, refused, asking, error, request };
 }
 
 /**

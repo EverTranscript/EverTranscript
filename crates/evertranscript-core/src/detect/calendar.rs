@@ -38,6 +38,9 @@ use super::DetectionSource;
 /// milliseconds: this arms a meeting, it does not decide anything.
 const POLL_MS: u64 = 30_000;
 
+/// How often a sleeping poll looks for the stop flag.
+const STOP_CHECK_MS: u64 = 250;
+
 /// How far back a reading reaches. Longer than any meeting, so one that
 /// began before the Core did still arms, and a store that matches a range
 /// by start time rather than by overlap cannot end a meeting early.
@@ -163,6 +166,55 @@ mod eventkit {
         match status {
             EKAuthorizationStatus::FullAccess => Access::Granted,
             _ => Access::Withheld,
+        }
+    }
+
+    /// Asks macOS for full access — the one call that shows the Calendars
+    /// prompt and lists the app under Privacy & Security, where the Operator
+    /// can change their answer later. Blocks until they answer. An app
+    /// already refused, or one that cannot prompt (no calendars entitlement
+    /// under the hardened runtime), gets `Withheld` at once with no dialog;
+    /// so does one nobody answers within the wait, and a later poll picks
+    /// up whatever they eventually chose.
+    ///
+    /// The prompt names the process's *responsible* app: the Client when it
+    /// spawned this Core, the Core itself when the login item did. A grant
+    /// to one does not cover the other.
+    pub fn request() -> Access {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        use block2::RcBlock;
+        use objc2::runtime::Bool;
+        use objc2_foundation::NSError;
+
+        /// Long enough to read the dialog; short enough that a Client
+        /// waiting on the answer is not waiting forever.
+        const ANSWER_WAIT: Duration = Duration::from_secs(300);
+
+        if access() == Access::Granted {
+            return Access::Granted;
+        }
+        let (tx, rx) = mpsc::channel::<bool>();
+        let completion = RcBlock::new(move |granted: Bool, _error: *mut NSError| {
+            let _ = tx.send(granted.as_bool());
+        });
+        // Its own store: this runs on whichever thread carried the request,
+        // not the polling thread, and the grant is process-wide anyway.
+        let store = unsafe { EKEventStore::new() };
+        let asked = objc2::exception::catch(AssertUnwindSafe(|| unsafe {
+            store.requestFullAccessToEventsWithCompletion(RcBlock::as_ptr(&completion));
+        }));
+        if let Err(exception) = asked {
+            warn!(?exception, "the calendar access request could not be made");
+            return Access::Withheld;
+        }
+        // The completion arrives on a system queue, never on this thread,
+        // so waiting here cannot deadlock.
+        match rx.recv_timeout(ANSWER_WAIT) {
+            Ok(true) => Access::Granted,
+            Ok(false) => Access::Withheld,
+            Err(_) => access(),
         }
     }
 
@@ -323,6 +375,13 @@ mod eventkit {
         }
     }
 
+    /// Asking for the store *is* the request on Windows: the capability is
+    /// the package's, and the first `RequestStoreAsync` is what the system
+    /// prompts on, when it prompts at all.
+    pub fn request() -> Access {
+        access()
+    }
+
     /// Appointments that began within the lookback, or `None` when the
     /// store could not be read this time.
     pub fn read() -> Option<Vec<Reading>> {
@@ -407,12 +466,17 @@ mod eventkit {
         Access::Withheld
     }
 
+    pub fn request() -> Access {
+        Access::Withheld
+    }
+
     pub fn read() -> Option<Vec<Reading>> {
         Some(Vec::new())
     }
 }
 
 pub use eventkit::access;
+pub use eventkit::request;
 
 /// Emits calendar events as they start and end.
 pub struct CalendarSource {
@@ -437,9 +501,13 @@ impl CalendarSource {
 
 impl DetectionSource for CalendarSource {
     fn start(&mut self, events: mpsc::Sender<DetectionEvent>) -> Result<()> {
+        // Polling begins whether or not access has been granted: the grant
+        // can arrive while the Core runs — from onboarding, from the trust
+        // surface, from System Settings — and each poll asks again, so it
+        // takes effect within a poll rather than at the next launch. Until
+        // then a read is empty and costs one status check.
         if access() != Access::Granted {
             info!("no calendar access; meetings will not be armed or named in advance");
-            return Ok(());
         }
         let stop = Arc::clone(&self.stop);
         self.handle = Some(
@@ -460,7 +528,14 @@ impl DetectionSource for CalendarSource {
                                 let _ = events.blocking_send(change);
                             }
                         }
-                        std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+                        // In slices, so a stop — the Core shutting down — is
+                        // honoured within a moment rather than at the next
+                        // poll.
+                        let mut waited = 0;
+                        while waited < POLL_MS && !stop.load(Ordering::Relaxed) {
+                            std::thread::sleep(std::time::Duration::from_millis(STOP_CHECK_MS));
+                            waited += STOP_CHECK_MS;
+                        }
                     }
                 })?,
         );
@@ -503,7 +578,14 @@ mod tests {
         source
             .start(tx)
             .expect("starting without access is not an error");
+        // It polls anyway, so a grant given later is seen; stopping must not
+        // wait out the poll interval.
+        let stopping = Instant::now();
         source.stop();
+        assert!(
+            stopping.elapsed() < std::time::Duration::from_millis(POLL_MS),
+            "stop waited for the whole poll interval"
+        );
         assert!(rx.try_recv().is_err(), "nothing should have been emitted");
     }
 

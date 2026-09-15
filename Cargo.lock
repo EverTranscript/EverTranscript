@@ -657,6 +657,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "block2",
  "chrono",
  "cpal",
  "crc32fast",
@@ -1818,6 +1819,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51bc9ad7325642172110196bacd6af64027ec5549ded7fc6589ea03e0f792bf8"
 dependencies = [
  "bitflags 2.13.1",
+ "block2",
  "objc2",
  "objc2-foundation",
 ]
