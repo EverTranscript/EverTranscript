@@ -14,15 +14,16 @@
 //! — and recovers identity from embeddings afterwards:
 //!
 //!   1. Segmentation gives per-frame speaker counts over the whole channel.
-//!   2. Contiguous speech becomes candidate spans, split at overlap edges.
-//!   3. Each span is embedded.
-//!   4. [`super::cluster::agglomerate`] groups spans into voices.
+//!   2. Single-speaker frames become spans; a frame with two voices ends one.
+//!   3. Each span is cut into 3 s sub-windows, and each window is embedded.
+//!   4. [`super::cluster::agglomerate`] groups the windows into voices.
 //!
 //! That is a weaker treatment of overlapped speech than full stitching, and
-//! it is written down here rather than discovered later: where two people
-//! talk at once, this produces one turn attributed to whoever the embedding
-//! resembles, not two. The close-out's DER is what says whether that trade
-//! is acceptable, which is the point of owing a measurement.
+//! weaker than this note first claimed. Where two people talk at once for
+//! longer than [`MERGE_GAP_MS`], this produces no turn at all, and a stretch
+//! shorter than [`MIN_SPAN_MS`] gets none either. On real meetings (AMI, M3
+//! ticket 09) these windows score 32.6% DER even with perfect clustering;
+//! what to do about it is `DECISIONS.md` Q112.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -252,9 +253,9 @@ pub fn embeddable(start_ms: u64, end_ms: u64) -> Option<(u64, u64)> {
 
 /// Cuts a stretch of speech into overlapping windows to embed.
 ///
-/// A span shorter than [`MIN_SPAN_MS`] yields nothing: the turn is still
-/// real speech and still reaches the transcript, it simply has too little
-/// audio to say whose voice it is.
+/// A span shorter than [`MIN_SPAN_MS`] yields nothing, so it gets no turn.
+/// Its words still reach the transcript, and a segment centred in it is left
+/// unattributed: there is too little audio to say whose voice it is.
 pub fn subwindows(start_ms: u64, end_ms: u64) -> Vec<(u64, u64)> {
     let length = end_ms.saturating_sub(start_ms);
     if length < MIN_SPAN_MS {
