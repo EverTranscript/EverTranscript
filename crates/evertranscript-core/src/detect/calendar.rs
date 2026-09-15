@@ -18,6 +18,7 @@
 //! any — under a grant the Operator may decline, which ADR-0036 made the
 //! honest wording of Nothing Ambient.
 
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -63,9 +64,10 @@ struct Reading {
 ///
 /// A reading holds more than the meetings in progress — meetings already
 /// over, and whatever a store's range returns — so this is the one place
-/// that decides a meeting has started.
+/// that decides a meeting has started. `announced` keeps each one's latest
+/// scheduled end, for [`overdue`].
 fn changes(
-    announced: &mut BTreeSet<String>,
+    announced: &mut BTreeMap<String, DetectionInstant>,
     readings: Vec<Reading>,
     now: DetectionInstant,
 ) -> Vec<DetectionEvent> {
@@ -79,7 +81,10 @@ fn changes(
             continue;
         }
         live.insert(reading.id.clone());
-        if announced.insert(reading.id.clone()) {
+        // On the detection clock rather than as a wall time: it is the clock
+        // the continuity window counts on.
+        let end = now.plus_millis((reading.ends_in * 1000.0) as u64);
+        if announced.insert(reading.id.clone(), end).is_none() {
             debug!(event = reading.id, "a scheduled meeting has started");
             changed.push(DetectionEvent::CalendarEventStarted {
                 at: now,
@@ -93,15 +98,36 @@ fn changes(
                         reading.title
                     },
                     attendees: reading.attendees,
-                    // On the detection clock rather than as a wall time:
-                    // it is the clock the continuity window counts on.
-                    scheduled_end: Some(now.plus_millis((reading.ends_in * 1000.0) as u64)),
+                    scheduled_end: Some(end),
                 },
             });
         }
     }
-    announced.retain(|id| {
+    announced.retain(|id, _| {
         let over = !live.contains(id);
+        if over {
+            changed.push(DetectionEvent::CalendarEventEnded {
+                at: now,
+                id: id.clone(),
+            });
+        }
+        !over
+    });
+    changed
+}
+
+/// What a store that could not be read still settles: a meeting is over
+/// once its last known scheduled end has passed.
+///
+/// Without it, a store that stays unreadable never ends a meeting, and the
+/// armed meeting names whatever Auto-Record starts next, hours later.
+fn overdue(
+    announced: &mut BTreeMap<String, DetectionInstant>,
+    now: DetectionInstant,
+) -> Vec<DetectionEvent> {
+    let mut changed = Vec::new();
+    announced.retain(|id, end| {
+        let over = *end <= now;
         if over {
             changed.push(DetectionEvent::CalendarEventEnded {
                 at: now,
@@ -515,18 +541,22 @@ impl DetectionSource for CalendarSource {
                 .name("evertranscript-calendar".to_string())
                 .spawn(move || {
                     let started = Instant::now();
-                    let mut announced: BTreeSet<String> = BTreeSet::new();
+                    let mut announced = BTreeMap::new();
 
                     while !stop.load(Ordering::Relaxed) {
                         let now = DetectionInstant(started.elapsed().as_millis() as u64);
-                        // A store that could not be read says nothing about
-                        // which meetings are on. Reading it as empty would
-                        // end every one and arm them all again at the next
-                        // poll, so they stay armed until it can be read.
-                        if let Some(readings) = eventkit::read() {
-                            for change in changes(&mut announced, readings, now) {
-                                let _ = events.blocking_send(change);
-                            }
+                        let changed = match eventkit::read() {
+                            Some(readings) => changes(&mut announced, readings, now),
+                            // A store that could not be read says nothing
+                            // about which meetings are on. Reading it as
+                            // empty would end every one and arm them all
+                            // again at the next poll, so they stay armed
+                            // until it can be read or they are scheduled to
+                            // end.
+                            None => overdue(&mut announced, now),
+                        };
+                        for change in changed {
+                            let _ = events.blocking_send(change);
                         }
                         // In slices, so a stop — the Core shutting down — is
                         // honoured within a moment rather than at the next
@@ -602,7 +632,7 @@ mod tests {
 
     #[test]
     fn a_meeting_arms_when_it_starts_not_when_it_is_first_seen() {
-        let mut announced = BTreeSet::new();
+        let mut announced = BTreeMap::new();
         let at = DetectionInstant;
 
         // Fifty-five minutes out. Arming now would name the next hour's
@@ -650,7 +680,31 @@ mod tests {
             all_day: true,
             ..reading("holiday", -3600.0, 72_000.0)
         };
-        assert!(changes(&mut BTreeSet::new(), vec![holiday], DetectionInstant(0)).is_empty());
+        assert!(changes(&mut BTreeMap::new(), vec![holiday], DetectionInstant(0)).is_empty());
+    }
+
+    #[test]
+    fn a_store_that_stops_answering_still_ends_a_meeting_on_schedule() {
+        let mut announced = BTreeMap::new();
+        let at = DetectionInstant;
+        changes(&mut announced, vec![reading("e", -10.0, 1790.0)], at(0));
+        // Moved half an hour later while the store could still say so.
+        changes(
+            &mut announced,
+            vec![reading("e", -40.0, 3560.0)],
+            at(30_000),
+        );
+
+        assert!(
+            overdue(&mut announced, at(1_800_000)).is_empty(),
+            "still on by its latest end, not the one it armed with"
+        );
+        let ended = overdue(&mut announced, at(3_590_000));
+        assert!(
+            matches!(&ended[..], [DetectionEvent::CalendarEventEnded { id, .. }] if id == "e"),
+            "{ended:?}"
+        );
+        assert!(announced.is_empty(), "ended once");
     }
 
     #[test]

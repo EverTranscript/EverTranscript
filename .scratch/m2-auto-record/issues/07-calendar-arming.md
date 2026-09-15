@@ -73,7 +73,9 @@ snapshot taken before the run (`DECISIONS.md` Q103).
 
 Since the run, a query that fails skips that poll instead of reading as an
 empty store (`DECISIONS.md` Q107). Only those failure branches changed. They
-typecheck for Windows but have not run there.
+typecheck for Windows but have not run there. While the store stays
+unreadable, a meeting already armed still ends at its latest known scheduled
+end (Q110), so it cannot name a recording hours later.
 
 ## What the store holds on Windows 11
 

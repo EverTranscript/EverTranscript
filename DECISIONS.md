@@ -1454,3 +1454,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Match the existing rule. `summarize_meeting` already lets the first chunk choose the Backend for the whole run, so that a fallback cannot stitch one record out of two models, and a switch is the same shape. It is also consistent with story 38, which asks the Client to show the Backend running now rather than the one configured, and so expects the two to differ. The cost is the Cloud to Local case: an Operator who switches in order to stop sending the meeting still sends the rest of that run. Cancelling on that switch is the alternative if it matters, and it is cheap, because a run already has a `Cancel`. Checked by `switching_the_knob_mid_generation_leaves_the_run_alone`, which fails when later chunks go to the fallback or when the switch waits for the run.
 **Outcome:** assumed
 **Ref:** (pending)
+
+## Q110 — m2-auto-record/07 — deviation
+
+**Question:** Q107 left one case unhandled: a calendar store that stays unreadable keeps its meetings armed, so a recording started hours later could take a stale title. How should such a meeting end?
+**Options considered:** the calendar source ends each announced meeting at its latest known scheduled end while polls fail (chosen) / the policy drops an armed meeting at the scheduled end it armed with, whatever the source says / leave it armed until the store reads again
+**Chosen:** The source keeps, for each meeting it announced, the scheduled end from the latest reading that listed it. A poll that cannot read the store announces the end of every meeting whose end has passed. A readable store behaves as before.
+**Decided-by:** agent
+**Justification:** The policy option is a smaller change, and would also cover a calendar thread that died. But the policy only ever sees the end a meeting armed with. A meeting moved later in the calendar would stop being armed at its old end, so a recording starting after that would lose the title it gets today: a change to the path that works. The source sees every reading. A meeting moved later during the outage itself still ends at the end known before it. Checked by `a_store_that_stops_answering_still_ends_a_meeting_on_schedule`, which fails when a moved end is not remembered. The code is shared by both platforms; it typechecks for Windows and has run only on the Mac.
+**Outcome:** applied
+**Ref:** (pending)
