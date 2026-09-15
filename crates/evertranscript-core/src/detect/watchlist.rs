@@ -380,6 +380,11 @@ impl Watchlist {
         self
     }
 
+    /// Whether this app is a browser, watched or not.
+    pub fn is_browser(&self, app: &AppIdentity) -> bool {
+        self.browsers.contains(&normalized(&app.id))
+    }
+
     pub fn watches(&self, app: &AppIdentity) -> bool {
         let id = normalized(&app.id);
         if self.blocked.contains(&id) {

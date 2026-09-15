@@ -30,6 +30,15 @@ use std::collections::BTreeSet;
 /// continue the *same* Meeting rather than ending one and starting another.
 pub const CONTINUITY_WINDOW_MS: u64 = 15_000;
 
+/// How long before its scheduled end a meeting can go quiet and still count
+/// as going quiet early. anarlog's `AUTO_STOP_CALENDAR_EARLY_END_THRESHOLD_MS`.
+pub const EARLY_END_THRESHOLD_MS: u64 = 3 * 60_000;
+
+/// What going quiet early adds to the window for a browser meeting: the
+/// time anarlog's "Did your meeting end?" prompt waited before it stopped
+/// (`AUTO_STOP_CONFIRM_TIMEOUT_SECONDS`).
+pub const EARLY_END_EXTENSION_MS: u64 = 30_000;
+
 /// How long after a scheduled start a calendar-armed meeting waits for a
 /// real trigger before the Operator is asked about it once (ADR-0036).
 pub const ARMED_FOLLOW_UP_MS: u64 = 120_000;
@@ -64,8 +73,7 @@ pub enum Action {
     StopRecording,
     /// A scheduled meeting has started; pre-arm and say so (ADR-0036).
     ArmForCalendarEvent { event: CalendarEvent },
-    /// A scheduled meeting never produced a trigger. Asked once, then the
-    /// pre-created Meeting is discarded.
+    /// A scheduled meeting never produced a trigger. Asked once.
     ArmedMeetingNeverStarted { event: CalendarEvent },
 }
 
@@ -104,6 +112,9 @@ pub struct AutoRecord {
     state: State,
     /// Who currently holds the microphone, by responsible app.
     mic_holders: BTreeSet<String>,
+    /// When the Meeting being recorded is scheduled to end, if the calendar
+    /// named it.
+    scheduled_end: Option<DetectionInstant>,
     /// Calendar events that have started and not yet been resolved.
     armed: BTreeMap<String, ArmedEvent>,
 }
@@ -129,6 +140,7 @@ impl AutoRecord {
             acknowledged: true,
             state: State::Idle,
             mic_holders: BTreeSet::new(),
+            scheduled_end: None,
             armed: BTreeMap::new(),
         }
     }
@@ -241,8 +253,8 @@ impl AutoRecord {
         // thirty-minute hole in it. Deciding at the deadline rather than at
         // the next interruption makes the outcome independent of how often
         // the source happens to speak.
-        if let State::Closing { since, .. } = self.state.clone()
-            && now.since(since) >= self.config.continuity_window_ms
+        if let State::Closing { app, since } = self.state.clone()
+            && now.since(since) >= self.continuity_window(&app, since)
         {
             self.state = State::Idle;
             actions.push(Action::StopRecording);
@@ -253,6 +265,7 @@ impl AutoRecord {
             // Nothing happening, and something started.
             (State::Idle | State::Released, Some(app)) => {
                 let armed = self.claim_armed_event();
+                self.scheduled_end = armed.as_ref().and_then(|event| event.scheduled_end);
                 self.state = State::Recording { app: app.clone() };
                 vec![Action::StartRecording { app, armed }]
             }
@@ -293,6 +306,31 @@ impl AutoRecord {
             (State::Idle | State::Released, None) => Vec::new(),
         });
         actions
+    }
+
+    /// How long the microphone may stay quiet, having gone quiet at `since`.
+    ///
+    /// The scheduled end feeds it (ADR-0036), by anarlog's rule: a browser
+    /// meeting that goes quiet well before its scheduled end is more often a
+    /// tab reloading or a rejoin than the end, so anarlog asked before
+    /// stopping one, and stopped if nobody answered. Nobody is asked here;
+    /// the wait is added to the window instead.
+    ///
+    /// Nothing is held until the scheduled end itself. A meeting that ends
+    /// early would leave the room recorded for the rest of its slot, the
+    /// shape ADR-0024 exists to prevent, and anarlog, which once held browser
+    /// meetings that way for up to ten minutes, replaced it with the
+    /// question. anarlog's ten-minute end grace is for a network outage,
+    /// which nothing here can see.
+    fn continuity_window(&self, app: &AppIdentity, since: DetectionInstant) -> u64 {
+        let early = self
+            .scheduled_end
+            .is_some_and(|end| since.plus_millis(EARLY_END_THRESHOLD_MS) < end);
+        if early && self.watchlist.is_browser(app) {
+            self.config.continuity_window_ms + EARLY_END_EXTENSION_MS
+        } else {
+            self.config.continuity_window_ms
+        }
     }
 
     fn calendar_actions(&mut self, event: &DetectionEvent, now: DetectionInstant) -> Vec<Action> {
@@ -566,6 +604,43 @@ mod tests {
             Timeline::new().wait(1_000).tick().into_events(),
         );
         assert_eq!(starts(&actions), 1, "the meeting in progress should record");
+    }
+
+    #[test]
+    fn a_browser_meeting_that_goes_quiet_early_has_longer_to_come_back() {
+        // ADR-0036's scheduled end, by anarlog's rule. Twenty-five seconds
+        // without the microphone ten minutes into a half-hour slot is a tab
+        // reloading, and stays one Meeting. The same gap with the slot nearly
+        // over is the meeting ending, and so is it in an app that is not a
+        // browser, which anarlog never gave the longer wait.
+        let quiet_for_25s = |app: &str, into_slot_ms: u64| {
+            Timeline::new()
+                .calendar_started("evt-1", "Design review", 1_800_000)
+                .mic_held(app)
+                .wait(into_slot_ms)
+                .mic_released(app)
+                .wait(25_000)
+                .mic_held(app)
+                .wait(60_000)
+                .mic_released(app)
+                .wait(60_000)
+                .tick()
+        };
+        let [early, _] = both_ways(quiet_for_25s("com.google.Chrome", 600_000));
+        assert_eq!(
+            starts(&early),
+            1,
+            "a reload ten minutes in split the Meeting"
+        );
+        assert_eq!(stops(&early), 1);
+        let [late, _] = both_ways(quiet_for_25s("com.google.Chrome", 1_700_000));
+        assert_eq!(
+            starts(&late),
+            2,
+            "the slot was nearly over, so that was the end"
+        );
+        let [native, _] = both_ways(quiet_for_25s("us.zoom.xos", 600_000));
+        assert_eq!(starts(&native), 2, "only a browser meeting waits longer");
     }
 
     #[test]

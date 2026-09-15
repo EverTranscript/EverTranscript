@@ -8,8 +8,9 @@
 //!
 //! What it may do is bounded on purpose. At a scheduled start it emits
 //! [`DetectionEvent::CalendarEventStarted`], which arms detection and names
-//! the Meeting. The event carries its scheduled end as well, which nothing
-//! reads yet: the auto-stop window does not use it. Capture still begins
+//! the Meeting. The event carries its scheduled end as well, which lengthens
+//! the continuity window when a browser meeting goes quiet early (the policy
+//! says by how much, and why no more). Capture still begins
 //! only on the Watchlist-and-microphone trigger: the calendar knows *when*,
 //! only the microphone knows *that*.
 //!

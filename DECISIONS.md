@@ -1400,3 +1400,19 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Justification:** Match the existing rule rather than add a latch. ADR-0024 asks for membership and microphone use together, and a policy that keeps recording an app the Operator has just taken off the list records something they excluded. For contrast, anarlog filters an ignored app's microphone events out entirely (`plugins/detect/src/policy.rs`, `filter_apps`), so a session started from that app stops ending by itself; this avoids that. It differs from the Auto-Record switch, which turned off leaves a running recording alone until the Operator stops it. Checked by `a_watchlist_edit_takes_effect_without_a_restart`, which removes one app and adds another between two meetings.
 **Outcome:** assumed
 **Ref:** (pending)
+
+## Q106 — m2-auto-record/07 — gate-resolution
+
+**Question:** ADR-0036 says a meeting's scheduled end feeds the auto-stop continuity window, and ticket 07 asks for anarlog's early-end and end-grace constants. How should the scheduled end change the 15 s window?
+**Options considered:** hold a meeting that goes quiet before its scheduled end until that end plus anarlog's 10-minute grace / anarlog's early-end rule: longer for a browser meeting that goes quiet more than 3 minutes before its end, 15 s otherwise (chosen) / the same longer wait for every app, not only browsers / leave the window alone, as Granola does
+**Chosen:** The window is 45 s when three things hold: the Meeting being recorded was named by a calendar event, its app is a browser, and the microphone went quiet more than 3 minutes before the event's scheduled end. That is the 15 s window plus the 30 s anarlog's "Did your meeting end?" prompt waited before stopping. Every other quiet keeps 15 s. The 10-minute end grace is not used.
+**Decided-by:** agent
+**Justification:** anarlog's history, read in its repo:
+- Until 2026-05-23 it held a browser meeting until its scheduled end plus 2 minutes, capped at 10 minutes.
+- #5301 replaced that hold. A browser meeting that went quiet more than 3 minutes before its end got a 5 s confirmation and then a prompt, which stopped the recording after 30 s unanswered (`apps/desktop/src/stt/auto-stop.ts` and `detect-events.ts` at `77c32931d7^`).
+- `AUTO_STOP_EVENT_END_GRACE_MS` only ever held a meeting through a network outage, which nothing here can sense.
+- Since 77c32931d7 (2026-09-01) anarlog asks on every browser drop, calendar or not.
+
+Granola 7.515.1 never waits longer after a release; within 5 minutes of the scheduled end it skips its LLM check and stops. Nobody can answer a prompt here, so the prompt's wait becomes window. A hold until the end would record the room after every meeting that ends early, the reason ADR-0036 turned down capture at the scheduled time. The longer wait is for browsers only because no anarlog version gave native apps more than the short wait. Checked by `a_browser_meeting_that_goes_quiet_early_has_longer_to_come_back`, which fails if the extension is missing, applies near the end, or applies to a native app.
+**Outcome:** assumed
+**Ref:** (pending)
