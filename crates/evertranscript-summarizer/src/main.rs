@@ -26,6 +26,7 @@ use evertranscript_core::summary::sidecar::Driving;
 use evertranscript_core::summary::sidecar::Sampling;
 use evertranscript_core::summary::sidecar::SidecarRequest;
 use evertranscript_core::summary::sidecar::SidecarResponse;
+use llama_cpp_2::TokenToStringError;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -34,6 +35,7 @@ use llama_cpp_2::model::LlamaChatMessage;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::LlamaToken;
 
 /// Text that means the model has stopped summarizing and started inventing.
 ///
@@ -338,10 +340,7 @@ fn generate(
         // 会 into replacement characters, permanently, in a record that is
         // immutable by design. This product has already paid for Chinese
         // handling once.
-        // 64 bytes is generous for one piece; the longest single token in
-        // these vocabularies is well under it, and a piece that did not fit
-        // would error rather than truncate.
-        out.push_str(&decoder.push(&model.token_to_piece_bytes(token, 64, false, None)?));
+        out.push_str(&decoder.push(&piece(model, token)?));
 
         if let Some(cut) = STOP_SEQUENCES
             .iter()
@@ -358,4 +357,72 @@ fn generate(
     }
     out.push_str(&decoder.finish());
     Ok(out)
+}
+
+/// One token's bytes, in a buffer that is always big enough.
+///
+/// **A vocabulary decides how long a piece is, not this file.** The size used
+/// to be a constant 64 with a comment saying the longest token in these
+/// vocabularies was well under it. Qwen3's has 121 tokens longer than that and
+/// the longest is 128 bytes — runs of `*` and `-`, which is to say exactly the
+/// separator row of the markdown table the system prompt asks for. Generating
+/// one returned `InsufficientBufferSpace(-70)` and the whole Summary was lost
+/// after thirty-eight seconds of work, on an eighty-five minute meeting.
+///
+/// llama.cpp answers a too-small buffer with the negative of the size it
+/// needs, so the retry is exact and no number here can be wrong again. 64 stays
+/// as the first guess because nearly every piece fits in it.
+fn piece(model: &LlamaModel, token: LlamaToken) -> Result<Vec<u8>, TokenToStringError> {
+    match model.token_to_piece_bytes(token, 64, false, None) {
+        Err(TokenToStringError::InsufficientBufferSpace(needed)) => {
+            model.token_to_piece_bytes(token, needed.unsigned_abs() as usize, false, None)
+        }
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every piece the registered model can emit survives being decoded.
+    ///
+    /// Gated on `EVERTRANSCRIPT_SUMMARY_MODEL` like the sidecar's inference
+    /// test, and cheap despite the model's size: a vocab-only load reads the
+    /// metadata without the weights. A model swap that reintroduces a fixed
+    /// buffer fails here rather than in an Operator's Summary.
+    #[test]
+    fn every_piece_in_the_vocabulary_decodes() {
+        let Some(path) =
+            std::env::var_os("EVERTRANSCRIPT_SUMMARY_MODEL").filter(|value| !value.is_empty())
+        else {
+            eprintln!("skipped: set EVERTRANSCRIPT_SUMMARY_MODEL to run this");
+            return;
+        };
+        let backend = LlamaBackend::init().expect("backend");
+        let model = LlamaModel::load_from_file(
+            &backend,
+            std::path::PathBuf::from(&path),
+            &LlamaModelParams::default().with_vocab_only(true),
+        )
+        .expect("the model named by EVERTRANSCRIPT_SUMMARY_MODEL must load");
+
+        let mut longest = 0;
+        for id in 0..model.n_vocab() {
+            let token = LlamaToken(id);
+            match piece(&model, token) {
+                Ok(bytes) => longest = longest.max(bytes.len()),
+                // Not every id is a piece: control and unused tokens report
+                // their type rather than bytes, and that is not this failure.
+                Err(TokenToStringError::UnknownTokenType) => {}
+                Err(error) => panic!("token {id} could not be decoded: {error}"),
+            }
+        }
+        assert!(
+            longest > 64,
+            "this asserts a buffer wide enough for the longest piece, and the \
+             vocabulary's longest is {longest} bytes — a model whose pieces all \
+             fit in the first guess cannot prove the retry works"
+        );
+    }
 }
