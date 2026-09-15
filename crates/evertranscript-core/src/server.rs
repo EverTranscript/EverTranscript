@@ -597,9 +597,13 @@ impl Core {
     /// Asks the OS for calendar access (ADR-0036). The calendar poll sees a
     /// grant on its own, so nothing else has to be told.
     ///
-    /// On a blocking thread: the request waits for the Operator's answer,
-    /// which takes as long as they like, and the server loop must keep
-    /// serving everyone else meanwhile.
+    /// On a blocking thread so the runtime's workers stay free — but the
+    /// server loop awaits this like any other request, so everything else
+    /// a Client asks queues behind the dialog, for as long as
+    /// `calendar::request` waits. Meeting Detection does not go through the
+    /// loop, so an unanswered prompt never holds up a recording. If the
+    /// stall ever matters, answer this one through the connection's writer
+    /// from a spawned task instead.
     pub async fn request_calendar_access(&self) -> Result<CalendarAccessResponse> {
         let answer = tokio::task::spawn_blocking(crate::detect::calendar::request).await?;
         let granted = answer == crate::detect::calendar::Access::Granted;

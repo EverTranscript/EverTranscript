@@ -204,8 +204,9 @@ mod eventkit {
     /// up whatever they eventually chose.
     ///
     /// The prompt names the process's *responsible* app: the Client when it
-    /// spawned this Core, the Core itself when the login item did. A grant
-    /// to one does not cover the other.
+    /// spawned this Core. The grant is keyed on the app bundle, so it also
+    /// covers this Core when the login item starts it; a copy of the binary
+    /// outside the bundle is a stranger to it (probed 2026-09-15).
     pub fn request() -> Access {
         use std::sync::mpsc;
         use std::time::Duration;

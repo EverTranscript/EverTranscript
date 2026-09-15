@@ -4,7 +4,7 @@
 
 **Blocked by:** 03.
 
-Status: blocked — the Windows reader works under a signed test package and the Mac reader arms from a real calendar (2026-09-15, Q108 made the app able to ask). Still open: a Meeting named by an armed event has not been observed under capture, the login-item Core cannot be granted separately, and whether Windows keeps a local-store reader at all is escalated (`DECISIONS.md` Q104)
+Status: blocked — the Windows reader works under a signed test package and the Mac reader arms from a real calendar (2026-09-15, Q108 made the app able to ask). Still open: a Meeting named by an armed event has not been observed under capture, and whether Windows keeps a local-store reader at all is escalated (`DECISIONS.md` Q104)
 
 - [x] EventKit local-store read on macOS — written, and it compiles and links correctly.
 - [x] **The WinRT appointment store is read** — `AppointmentManager` with read-only access to all calendars. Run on Windows 11 Pro 26200 on 2026-09-15 under a signed sparse test package; see *Run on Windows* below
@@ -105,9 +105,12 @@ the Client had no usage string and the hardened runtime no Calendars
 entitlement, so macOS never listed it under Privacy & Security. Now
 `calendar/requestAccess` asks from the Core, the onboarding step and the
 trust surface carry the button, and `evertranscript calendar request` does
-it from a terminal. Still open: a Core the login item starts is its own
-responsible process, so a grant to the Client does not cover it; the
-prompt it would show names the bare binary.
+it from a terminal. Frank granted it on 2026-09-15, and the grant covers
+the login-item Core too, which an earlier draft of this note denied:
+probed afterwards, the bundle's own Core binary started as a launchd job
+(parent pid 1) read `calendarGranted: true`, and a copy of the same binary
+outside the bundle read `false`. TCC keys the grant on the app bundle, not
+on which process spawned the Core.
 
 Still never observed: a Meeting *named* by an appointment, which needs a
 real capture during an armed event.
