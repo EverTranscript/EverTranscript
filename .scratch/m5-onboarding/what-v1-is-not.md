@@ -89,19 +89,35 @@ from somewhere else, and each is already labelled that way in its ticket.
   manufacturing evidence for ones it did not find. The registered 0.5B is
   "the model that was verified, not the model that should ship", and
   choosing the real default is the most overdue thing on this list.
-- **No Summary measured on a long meeting.** The recording used is 89
-  seconds. Until Q56 this was worse than it read: map-reduce could not engage
-  at all, because the chunking path had no production caller and the server
-  sent whole meetings in one request. Chunking now engages and its behaviour
-  is tested at the summarize path; what is still owed is the *measurement* —
-  a real ninety-minute meeting through a real Backend, which is where the M4
-  failure mode actually lives.
-- **DER 3.9% is on a construction, not a conversation.** The second speaker
-  is the first one resampled. It shows the pipeline separates two
-  acoustically distinct voices; it is not a DER on a real multi-person
-  meeting, and should never be quoted as one.
-- **The embedding bake-off was never run.** One entrant is a preference, not
-  a bake-off.
+- **Measured now, on real meetings, and most of them get no Summary at
+  all.** Three were run through the local Backend on 2026-09-15 — 85, 45 and
+  33 minutes (Q117-Q119). Map-reduce does work: the 45-minute English one
+  summarized in 41 seconds across two chunks and the record says "1 of 2
+  parts of this meeting could not be summarized", which is the honesty
+  mechanism doing its job. But that is 556 characters and one action item for
+  45 minutes, `When` merely repeats `Said at`, and the two code-switching
+  meetings produced nothing at all. `prompt::verify` refused four of the five
+  chunks generated, and the refusals are *true* items: "Evaluate Nango and
+  compare with MedPlum" against "So I will start the evaluation on Nango",
+  refused because `evaluate` is not a substring of `evaluation`. Its
+  half-the-pieces rule is calibrated on near-verbatim paraphrase; a summary of
+  a long meeting is not that, and an English summary of Chinese speech shares
+  no words at all. Two defects were fixed getting this far — a 64-byte token
+  buffer that lost a whole Summary after 38 seconds, and a write that stored
+  under the typed id instead of the resolved one. The `verify` trade is the
+  one still open, and it is a trade: it is the injection defence.
+- **Diarization is measured on real meetings now, and the number is 26.3%.**
+  This entry used to say DER 3.9% on a construction — one speaker and their
+  own resampling. AMI, scored the way pyannote publishes it, said 51.4%
+  instead; Q115 and Q116 took it to 26.3% on test and 29.6% on dev against
+  pyannote's 18.8%, and the harness is committed as `scripts/der/`. The
+  oracle — perfect clustering on the turns placed — is 19.8%, so the
+  remaining 6.5 points are clustering and nothing else.
+- **The embedding bake-off has still never been run honestly.** Q111 compared
+  three models, and Q115 then found the feature front end had never matched
+  what any of them was trained on, so that comparison measured the bug. One
+  entrant remains a preference rather than a bake-off; what has changed is
+  that a rerun would now be worth something.
 
 ## 3. Things deliberately not built, with the reason
 

@@ -257,3 +257,37 @@ async fn a_summary_that_was_never_stored_names_nothing() {
         "a failed Summary must leave the Meeting unnamed"
     );
 }
+
+#[tokio::test]
+async fn a_summary_asked_for_by_short_id_is_stored_against_the_meeting() {
+    // The id an Operator has to hand is the short one: it is what the Mirror's
+    // filename ends with, and what `list` prints. Everything on this path
+    // resolves it — and the write at the end did not, so a Summary was
+    // generated in full and then discarded by an `UPDATE ... WHERE id` that
+    // matched nothing. The Operator paid for it and was told `no Meeting with
+    // id`, quoting an id that had just resolved a moment earlier.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (core, id) =
+        core_with_a_recorded_meeting(dir.path(), "# Short id\n\nThe body of it.").await;
+
+    let short = evertranscript_core::mirror::short_id(&id);
+    assert_ne!(
+        short, id,
+        "the short form must differ, or this proves nothing"
+    );
+
+    core.summarize_meeting(&short)
+        .await
+        .expect("a short id is how an Operator names a Meeting");
+
+    let meeting = core
+        .get_meeting(&id)
+        .await
+        .expect("get")
+        .expect("the Meeting")
+        .0;
+    assert!(
+        meeting.summary.is_some(),
+        "the Summary must reach the Meeting it was generated for"
+    );
+}

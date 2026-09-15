@@ -1058,7 +1058,13 @@ impl Core {
         // outrank it without this call site having to know the rule.
         let suggested_title = summary::prompt::title_from(&markdown);
 
-        let id = meeting_id.to_string();
+        // **The Meeting's own id, not the one that was typed.** `get_meeting`
+        // accepts the short form the Mirror's filename carries, and this used
+        // to write back under whatever the caller passed — so a Summary asked
+        // for by short id was generated in full, cost every token it cost, and
+        // then hit an `UPDATE ... WHERE id` that matched nothing. The Operator
+        // got `no Meeting with id`, naming an id that had just resolved.
+        let id = meeting.id.clone();
         let stored = markdown.clone();
         let label = used.clone();
         self.store

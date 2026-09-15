@@ -269,12 +269,24 @@ impl std::fmt::Display for NotASummary {
 /// and it is recorded as a known gap in
 /// `.scratch/m5-onboarding/what-v1-is-not.md` rather than papered over here.
 ///
-/// **It is a no-op for a language without spaces.** `distinctive_words`
-/// splits on non-alphanumerics, so a Chinese action item yields nothing to
-/// check and is skipped. Stated rather than half-solved: character-bigram
-/// matching would be easy to write and impossible to justify without a
-/// Chinese meeting to measure it against, and this product has paid before
-/// for CJK handling that was assumed rather than measured.
+/// **It is stricter on real meetings than the tests here suggest, and that
+/// is now measured.** The paraphrases below are near-verbatim — "Booked the
+/// compliance review" for "I'll book the compliance review" — and a summary
+/// of a forty-five minute meeting is not. Across three real Meetings this
+/// refused four of the five chunks generated. One of them was "Evaluate Nango and compare
+/// with MedPlum" against "So I will start the evaluation on Nango": true,
+/// refused, because `evaluate` is not a substring of `evaluation` and the
+/// speaker never said `MedPlum` — somebody else did. The Operator lost half
+/// of that meeting's Summary and was told which fraction, not why.
+///
+/// A code-switching meeting loses everything instead: `distinctive_words`
+/// does split Chinese into bigrams, so a Chinese item against Chinese speech
+/// matches (29 of 35 pieces on a real one), but the model summarizes Chinese
+/// speech in *English*, nothing echoes, and every chunk goes. Two real
+/// Meetings produced no Summary at all for exactly that.
+///
+/// Left as it is rather than loosened here: every remedy trades against the
+/// injection defence above, and DECISIONS Q119 is where that trade belongs.
 pub fn verify(summary: &str, transcript: &str) -> Result<(), NotASummary> {
     let said = spoken_by(transcript);
     for (who, what) in table_rows(summary) {
