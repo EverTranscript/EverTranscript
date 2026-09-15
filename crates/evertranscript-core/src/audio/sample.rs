@@ -77,6 +77,24 @@ pub struct Clip {
 /// reversal is AAC and is decoded whole instead — slow, and those Meetings
 /// are few and old, so a second code path for them is not worth its bugs.
 pub fn cut(path: &Path, channel: AudioChannel, start_ms: u64, end_ms: u64) -> Result<Clip> {
+    let (samples, rate) = read(path, channel, start_ms, end_ms)?;
+    Ok(Clip {
+        bytes: encode_mono(&samples, rate)?,
+        mime_type: "audio/mpeg",
+    })
+}
+
+/// The samples of `[start_ms, end_ms)` of one channel, and their rate.
+///
+/// What [`cut`] encodes, and what re-embedding a Voiceprint from kept audio
+/// starts from. The rate is the recording's — the sink's for an MP3, the
+/// model's for an old AAC Meeting decoded whole — and the caller resamples.
+pub fn read(
+    path: &Path,
+    channel: AudioChannel,
+    start_ms: u64,
+    end_ms: u64,
+) -> Result<(Vec<f32>, u32)> {
     let end_ms = end_ms.max(start_ms);
     let is_mp3 = path
         .extension()
@@ -102,11 +120,7 @@ pub fn cut(path: &Path, channel: AudioChannel, start_ms: u64, end_ms: u64) -> Re
         )
     };
     anyhow::ensure!(!samples.is_empty(), "the clip lies outside the recording");
-
-    Ok(Clip {
-        bytes: encode_mono(&samples, rate)?,
-        mime_type: "audio/mpeg",
-    })
+    Ok((samples, rate))
 }
 
 /// The channel's samples for the range, from just the frames that hold it.

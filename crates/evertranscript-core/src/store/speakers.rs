@@ -206,18 +206,25 @@ pub fn rename(connection: &Connection, id: &str, display_name: &str) -> Result<S
 /// set would make a future re-enrolled vector inherit a confirmation nobody
 /// gave it.
 pub fn delete_voiceprint(connection: &Connection, id: &str) -> Result<bool> {
-    let changed = connection.execute(
-        "UPDATE speakers
-            SET voiceprint = NULL, voiceprint_model = NULL,
-                voiceprint_model_version = NULL, confirmed = 0
-          WHERE id = ?1",
-        params![id],
-    )?;
+    let changed = clear_voiceprint(connection, id)?;
     connection.execute(
         "DELETE FROM speaker_exemplars WHERE speaker_id = ?1",
         params![id],
     )?;
     Ok(changed > 0)
+}
+
+/// Blanks the Voiceprint columns and the confirmation that was about them,
+/// leaving the exemplars in place. The half of [`delete_voiceprint`] a
+/// recomputation uses when the evidence that is left yields no vector.
+pub fn clear_voiceprint(connection: &Connection, id: &str) -> Result<usize> {
+    Ok(connection.execute(
+        "UPDATE speakers
+            SET voiceprint = NULL, voiceprint_model = NULL,
+                voiceprint_model_version = NULL, confirmed = 0
+          WHERE id = ?1",
+        params![id],
+    )?)
 }
 
 /// Speakers nobody has vouched for: unnamed, unconfirmed, not the Operator.
@@ -439,6 +446,80 @@ fn sample_from_row(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Op
     }))
 }
 
+/// An exemplar whose vector is not from the embedding space in use, and
+/// where the audio to rebuild it from is, if it is still here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StaleExemplar {
+    pub id: String,
+    pub speaker_id: String,
+    /// The Meeting's kept audio, relative to the History folder, and the
+    /// window in it. None when the row never had a window, or its Meeting
+    /// was deleted: nothing to rebuild from.
+    pub source: Option<(String, Sample)>,
+}
+
+/// Every exemplar not embedded by this model and front end.
+pub fn stale_exemplars(
+    connection: &Connection,
+    model: &str,
+    model_version: &str,
+) -> Result<Vec<StaleExemplar>> {
+    let mut statement = connection.prepare(
+        "SELECT exemplar.id, exemplar.speaker_id, meeting.audio_path,
+                exemplar.sample_channel, exemplar.sample_start_ms, exemplar.sample_end_ms
+           FROM speaker_exemplars exemplar
+           LEFT JOIN meetings meeting ON meeting.id = exemplar.meeting_id
+          WHERE exemplar.model != ?1 OR exemplar.model_version != ?2
+          ORDER BY exemplar.id",
+    )?;
+    let rows = statement.query_map(params![model, model_version], |row| {
+        let audio_path: Option<String> = row.get(2)?;
+        Ok(StaleExemplar {
+            id: row.get(0)?,
+            speaker_id: row.get(1)?,
+            source: audio_path.zip(sample_from_row(row, 3)?),
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Replaces an exemplar's vector with one from the space now in use.
+pub fn replace_exemplar_vector(
+    connection: &Connection,
+    id: &str,
+    vector: &[f32],
+    model: &str,
+    model_version: &str,
+) -> Result<()> {
+    connection.execute(
+        "UPDATE speaker_exemplars SET embedding = ?2, model = ?3, model_version = ?4 WHERE id = ?1",
+        params![id, encode(vector), model, model_version],
+    )?;
+    Ok(())
+}
+
+pub fn delete_exemplar(connection: &Connection, id: &str) -> Result<()> {
+    connection.execute("DELETE FROM speaker_exemplars WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// Speakers whose Voiceprint column is from another space, whatever
+/// evidence they hold.
+pub fn speakers_with_stale_voiceprint(
+    connection: &Connection,
+    model: &str,
+    model_version: &str,
+) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT id FROM speakers
+          WHERE voiceprint IS NOT NULL
+            AND (voiceprint_model IS NOT ?1 OR voiceprint_model_version IS NOT ?2)
+          ORDER BY id",
+    )?;
+    let rows = statement.query_map(params![model, model_version], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Where a Speaker's voice can be played from, if anywhere.
 ///
 /// The *oldest* exemplar with a window — the capture the Registry's "first
@@ -575,8 +656,10 @@ fn feed_correction(
                 voiced_ms: exemplar.voiced_ms,
                 from_operator: true,
                 is_negative: true,
-                // Never played back as this Speaker: it is somebody else.
-                sample: None,
+                // Never played back as this Speaker — `sample_source` skips
+                // negatives — but kept, so that a front-end or model change
+                // can rebuild this evidence from the audio like any other.
+                sample: exemplar.sample,
             },
         )?;
     }
@@ -741,18 +824,33 @@ pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearan
     })
 }
 
-/// Every Speaker with a Voiceprint, as vectors.
+/// Every Speaker with a Voiceprint in one embedding space, as vectors.
 ///
 /// This is what History offers a new Meeting's clusterer as seeds. All of
 /// them rather than a shortlist: the whole promise of ADR-0008 is that a
 /// voice from any past Meeting is recognized, and pre-filtering by recency
 /// would quietly make "seen once, a year ago" unrecognizable — which is
 /// exactly the case retroactive naming exists to serve.
-pub fn voiceprints(connection: &Connection) -> Result<Vec<(String, Vec<f32>, bool)>> {
+///
+/// One space, though: a vector from another model, or from the same model
+/// behind a different front end, scores against these as a plausible
+/// number that means nothing, and the first front-end fix (DECISIONS Q115)
+/// is why this takes the model rather than trusting the column to be
+/// comparable. A stale Voiceprint is not offered; it is rebuilt from its
+/// kept audio by [`crate::diarize::cluster::adopt_rebuilt`] and offered
+/// after.
+pub fn voiceprints(
+    connection: &Connection,
+    model: &str,
+    model_version: &str,
+) -> Result<Vec<(String, Vec<f32>, bool)>> {
     let mut statement = connection.prepare(
-        "SELECT id, voiceprint, confirmed FROM speakers WHERE voiceprint IS NOT NULL ORDER BY id",
+        "SELECT id, voiceprint, confirmed FROM speakers
+          WHERE voiceprint IS NOT NULL AND voiceprint_model = ?1
+            AND voiceprint_model_version = ?2
+          ORDER BY id",
     )?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map(params![model, model_version], |row| {
         let blob: Vec<u8> = row.get(1)?;
         Ok((
             row.get::<_, String>(0)?,
@@ -908,6 +1006,97 @@ mod tests {
             )
             .expect("insert segment");
         id
+    }
+
+    #[test]
+    fn voiceprints_are_offered_only_in_their_own_space() {
+        // A vector from another model, or the same model behind another
+        // front end, scores against these as a plausible number that means
+        // nothing. The first front-end fix is why this is a query
+        // parameter rather than a column to trust.
+        let connection = db();
+        let old = create(&connection, false).expect("old");
+        let new = create(&connection, false).expect("new");
+        set_voiceprint(&connection, &old.id, &[1.0, 0.0], "m", "1").expect("old print");
+        set_voiceprint(&connection, &new.id, &[0.0, 1.0], "m", "2").expect("new print");
+
+        let offered: Vec<String> = voiceprints(&connection, "m", "2")
+            .expect("query")
+            .into_iter()
+            .map(|(id, _, _)| id)
+            .collect();
+        assert_eq!(offered, vec![new.id.clone()]);
+        assert_eq!(
+            speakers_with_stale_voiceprint(&connection, "m", "2").expect("stale"),
+            vec![old.id.clone()]
+        );
+        assert!(
+            voiceprints(&connection, "other", "2")
+                .expect("query")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_correction_keeps_the_sample_on_both_sides_of_the_evidence() {
+        // The negative copy is never played back, but it is evidence like
+        // any other, and evidence with no audio behind it cannot follow a
+        // model or front-end change.
+        use evertranscript_protocol::AudioChannel;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        meetings::set_audio_path(&connection, &meeting.id, ".data/audio/m.mp3").expect("path");
+        let segment_id = segment(&connection, &meeting.id, 1);
+        let machine_said = create(&connection, false).expect("john");
+        let actually = create(&connection, false).expect("alice");
+        let sample = Sample {
+            channel: AudioChannel::System,
+            start_ms: 5_000,
+            end_ms: 9_000,
+        };
+        add_exemplar(
+            &connection,
+            NewExemplar {
+                speaker_id: &machine_said.id,
+                meeting_id: Some(&meeting.id),
+                vector: &[1.0, 0.0],
+                model: "m",
+                model_version: "1",
+                voiced_ms: 4_000,
+                from_operator: false,
+                is_negative: false,
+                sample: Some(sample),
+            },
+        )
+        .expect("exemplar");
+        attribute_segment(
+            &connection,
+            &segment_id,
+            Some(&machine_said.id),
+            Attribution::Voiceprint,
+        )
+        .expect("attribute");
+
+        correct_attribution(&connection, &segment_id, &actually.id).expect("correct");
+
+        let negative = exemplars(&connection, &machine_said.id)
+            .expect("rows")
+            .into_iter()
+            .find(|exemplar| exemplar.is_negative)
+            .expect("a negative");
+        assert_eq!(negative.sample, Some(sample));
+        assert!(
+            sample_source(&connection, &machine_said.id)
+                .expect("query")
+                .is_some_and(|source| source.sample == sample),
+            "the positive original still plays"
+        );
+        let stale = stale_exemplars(&connection, "m", "2").expect("stale");
+        assert_eq!(stale.len(), 3, "the original and both copies");
+        assert!(
+            stale.iter().all(|exemplar| exemplar.source.is_some()),
+            "every one can be rebuilt"
+        );
     }
 
     #[test]

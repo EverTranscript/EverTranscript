@@ -4,26 +4,35 @@
 //! story 33 forbids a cloud form in any shape, so there is no client, no
 //! endpoint, and no fallback path to review.
 //!
-//! **The architecture, and one deliberate simplification.** The catalog
-//! describes pyannote's full pipeline: sliding windows, per-window *local*
-//! speaker labels, and a stitching step that reconciles those labels across
-//! overlapping windows. That stitching is the hardest and least testable
-//! part of the design, and it exists to recover speaker identity *within*
-//! segmentation. This implementation instead uses segmentation for what it
-//! is unambiguously good at — where speech is, and where two people overlap
-//! — and recovers identity from embeddings afterwards:
+//! **The architecture: pyannote's, without its sliding overlap.**
 //!
-//!   1. Segmentation gives per-frame speaker counts over the whole channel.
-//!   2. Single-speaker frames become spans; a frame with two voices ends one.
-//!   3. Each span is cut into 3 s sub-windows, and each window is embedded.
-//!   4. [`super::cluster::agglomerate`] groups the windows into voices.
+//!   1. Segmentation runs on consecutive 10 s chunks and says, per frame,
+//!      which of up to three *local* speakers are talking — local because
+//!      speaker 1 of one chunk has nothing to do with speaker 1 of the next.
+//!   2. Each local speaker of each chunk is embedded from its own frames:
+//!      the frames it holds alone where there are enough of them, and all
+//!      of its frames otherwise ([`chosen_rows`]).
+//!   3. [`super::cluster::agglomerate`] groups those embeddings into voices,
+//!      which is what makes local speakers global.
+//!   4. Every frame a local speaker was active is a turn of its voice
+//!      ([`assemble`]). Two people talking at once are two turns that
+//!      overlap, and a stretch is as short as the model says it is.
 //!
-//! That is a weaker treatment of overlapped speech than full stitching, and
-//! weaker than this note first claimed. Where two people talk at once for
-//! longer than [`MERGE_GAP_MS`], this produces no turn at all, and a stretch
-//! shorter than [`MIN_SPAN_MS`] gets none either. On real meetings (AMI, M3
-//! ticket 09) these windows score 32.6% DER even with perfect clustering;
-//! what to do about it is `DECISIONS.md` Q112.
+//! **What the previous shape cost.** The first pipeline used segmentation
+//! only for *how many* people were talking, kept the frames where that was
+//! one, cut them into 3 s windows and clustered the windows. Overlapped
+//! speech longer than the merge gap got no turn, and neither did a stretch
+//! under 1.5 s; on the AMI test set (M3 ticket 09) that placed 27% of speech
+//! with nobody even when every window was clustered perfectly. This shape
+//! places speech where the segmentation model hears it and asks the
+//! embedding only *whose* it is.
+//!
+//! Chunks do not overlap, where pyannote steps every second and averages
+//! ten opinions of each frame. That is a tenth of the segmentation work
+//! and a fraction of the embeddings for the cubic clusterer, and each voice
+//! is still embedded from up to 10 s of itself. The seam at a chunk boundary
+//! is closed by clustering rather than stitching: both halves of a turn
+//! embed to the same voice, and `merge_adjacent` joins them.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -42,6 +51,9 @@ use super::MeetingAudio;
 use super::Progress;
 use super::SampleWindow;
 use super::Turn;
+use super::fbank::FRAME_LENGTH;
+use super::fbank::FRAME_SHIFT;
+use super::fbank::MEL_BINS;
 use super::fbank::MelBank;
 use super::fbank::SAMPLE_RATE;
 
@@ -51,6 +63,9 @@ pub const SEGMENT_WINDOW: usize = 10 * SAMPLE_RATE as usize;
 /// Powerset classes for three speakers: none, three singles, three pairs.
 pub const POWERSET_CLASSES: usize = 7;
 
+/// How many people one chunk can tell apart.
+pub const LOCAL_SPEAKERS: usize = 3;
+
 /// Which speakers each powerset class means are active.
 ///
 /// Order is the model's, not ours. Getting this wrong produces a pipeline
@@ -58,89 +73,161 @@ pub const POWERSET_CLASSES: usize = 7;
 /// silent error the fbank module is also written to avoid.
 const POWERSET: [&[usize]; POWERSET_CLASSES] = [&[], &[0], &[1], &[2], &[0, 1], &[0, 2], &[1, 2]];
 
-/// Shortest span worth embedding.
+/// Fewest filterbank frames the embedding model accepts.
 ///
-/// The catalog's minimum voiced duration. Below this a Voiceprint is built
-/// from too little evidence to be worth more than no Voiceprint at all.
+/// Eight produce infinities; nine is what pyannote's `min_num_frames` works
+/// out to for this ONNX. About 90 ms: a local speaker holding less than
+/// that in a chunk is a cough or a boundary artefact, and gets no voice and
+/// no turn.
+pub const MIN_EMBED_FRAMES: usize = 9;
+
+/// Shortest stretch of a voice on its own worth playing back.
+///
+/// The catalog's minimum voiced duration. Below this a sample says less
+/// about a voice than no sample at all.
 pub const MIN_SPAN_MS: u64 = 1_500;
 
-/// Longest span fed to the embedding model — the catalog's middle-10s clip.
+/// Longest sample kept — the catalog's middle-10s clip.
 pub const MAX_SPAN_MS: u64 = 10_000;
 
-/// Gaps shorter than this do not end a span (catalog: 400 ms merge gap).
+/// Gaps shorter than this do not end a turn (catalog: 400 ms merge gap).
 pub const MERGE_GAP_MS: u64 = 400;
 
-/// How long a stretch of continuous speech is embedded at a time, and how
-/// far the window moves.
+/// The embedding model, as every vector it produces is labelled.
+pub const EMBEDDING_MODEL: &str = "wespeaker-voxceleb-resnet34-LM";
+
+/// Which front end fed it.
 ///
-/// **Measured into existence.** One embedding per contiguous speech span
-/// gave the close-out a 23.6% confusion rate, because two people talking in
-/// turn without a pause between them is one span, gets one vector, and
-/// therefore gets one speaker. Segmentation knows *how many* voices are
-/// present but this pipeline does not use its per-speaker identity (see the
-/// module note), so the speaker change has to be found where it actually
-/// shows: in the embeddings. Sub-windows are what let clustering see it.
-pub const SUBWINDOW_MS: u64 = 3_000;
-pub const SUBWINDOW_HOP_MS: u64 = 1_500;
+/// "1" was the pipeline that shipped with M3, whose filterbank was not the
+/// one the model was trained on (see `fbank`'s module note); "2" is the
+/// corrected one. A "1" vector and a "2" vector of the same audio agree at
+/// cosine 0.36 on average, so they must never be compared: seeds are read
+/// by version, and a "1" exemplar is rebuilt from its kept sample before
+/// the next Diarization reads seeds at all (`cluster::adopt_rebuilt`).
+pub const EMBEDDING_MODEL_VERSION: &str = "2";
+
+fn failed(error: impl std::fmt::Display) -> DiarizeError {
+    DiarizeError::Failed(anyhow::anyhow!("{error}"))
+}
+
+fn open(path: &Path) -> Result<Session, DiarizeError> {
+    Session::builder()
+        .and_then(|mut builder| builder.commit_from_file(path))
+        .map_err(|error| DiarizeError::Unavailable(format!("{}: {error}", path.display())))
+}
+
+/// The embedding model and its front end.
+///
+/// Its own type because two jobs need it and only one needs segmentation:
+/// diarizing a Meeting, and rebuilding a Speaker's exemplars from kept
+/// audio after the model or its front end changed.
+pub struct Embedder {
+    session: Session,
+    mel: MelBank,
+}
+
+impl Embedder {
+    pub fn load(path: &Path) -> Result<Self, DiarizeError> {
+        Ok(Self {
+            session: open(path)?,
+            mel: MelBank::new(),
+        })
+    }
+
+    /// Log-mel features of a stretch of audio, mean-normalized over it.
+    pub fn features(&self, samples: &[f32]) -> Vec<Vec<f32>> {
+        self.mel.compute(samples)
+    }
+
+    /// Embeds a selection of feature frames — one voice's, not necessarily
+    /// contiguous. `None` when there are too few to run the model on.
+    pub fn embed_frames(&mut self, rows: &[&[f32]]) -> Result<Option<Vec<f32>>, DiarizeError> {
+        if rows.len() < MIN_EMBED_FRAMES {
+            return Ok(None);
+        }
+        let flat: Vec<f32> = rows.iter().flat_map(|row| row.iter().copied()).collect();
+        let input = Value::from_array(([1_usize, rows.len(), MEL_BINS], flat)).map_err(failed)?;
+        let outputs = self
+            .session
+            .run(ort::inputs!["input_features" => input])
+            .map_err(failed)?;
+        let (_, vector) = outputs["last_hidden_state"]
+            .try_extract_tensor::<f32>()
+            .map_err(failed)?;
+
+        let mut vector = vector.to_vec();
+        super::cluster::l2_normalize(&mut vector);
+        Ok(Some(vector))
+    }
+
+    /// Embeds a stretch of audio whole: one voice, on its own.
+    pub fn embed(&mut self, samples: &[f32]) -> Result<Option<Vec<f32>>, DiarizeError> {
+        let features = self.features(samples);
+        let rows: Vec<&[f32]> = features.iter().map(Vec::as_slice).collect();
+        self.embed_frames(&rows)
+    }
+}
 
 /// The live Diarizer.
 pub struct LiveDiarizer {
     segmentation: Session,
-    embedding: Session,
-    mel: MelBank,
-    model_name: String,
-    model_version: String,
+    embedder: Embedder,
+}
+
+/// One local speaker of one chunk: what it said, where, and how it sounds.
+///
+/// The unit clustering works on. `cluster` is provisional — unique to this
+/// observation — until [`super::cluster::agglomerate`] says which
+/// observations are one voice.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Observation {
+    pub channel: AudioChannel,
+    pub cluster: Cluster,
+    pub vector: Vec<f32>,
+    /// Every stretch this speaker was active, on the capture clock.
+    pub runs: Vec<(u64, u64)>,
+    /// The stretches it was the only voice: where to play it back from.
+    pub clean_runs: Vec<(u64, u64)>,
+}
+
+impl Observation {
+    pub fn voiced_ms(&self) -> u64 {
+        self.runs.iter().map(|(start, end)| end - start).sum()
+    }
 }
 
 impl LiveDiarizer {
     /// Loads both models. Failure here is [`DiarizeError::Unavailable`] at
     /// the call site, never a lost Meeting.
     pub fn load(segmentation: &Path, embedding: &Path) -> Result<Self, DiarizeError> {
-        let open = |path: &Path| -> Result<Session, DiarizeError> {
-            Session::builder()
-                .and_then(|mut builder| builder.commit_from_file(path))
-                .map_err(|error| DiarizeError::Unavailable(format!("{}: {error}", path.display())))
-        };
         Ok(Self {
             segmentation: open(segmentation)?,
-            embedding: open(embedding)?,
-            mel: MelBank::new(),
-            model_name: "wespeaker-voxceleb-resnet34-LM".to_string(),
-            model_version: "1".to_string(),
+            embedder: Embedder::load(embedding)?,
         })
     }
 
-    /// Per-frame speaker count for one channel, and the frame duration.
-    fn speech_frames(&mut self, samples: &[f32]) -> Result<(Vec<usize>, f64), DiarizeError> {
-        let mut counts: Vec<usize> = Vec::new();
-        let mut frame_ms = 0.0_f64;
+    pub fn embedder(&mut self) -> &mut Embedder {
+        &mut self.embedder
+    }
 
-        for start in (0..samples.len()).step_by(SEGMENT_WINDOW) {
-            let end = (start + SEGMENT_WINDOW).min(samples.len());
-            let mut window = vec![0.0_f32; SEGMENT_WINDOW];
-            window[..end - start].copy_from_slice(&samples[start..end]);
+    /// Which local speakers are active in each frame of one chunk, as a
+    /// bitmask over the three slots.
+    fn segment(&mut self, chunk: &[f32]) -> Result<Vec<u8>, DiarizeError> {
+        debug_assert_eq!(chunk.len(), SEGMENT_WINDOW);
+        let input =
+            Value::from_array(([1_usize, 1, SEGMENT_WINDOW], chunk.to_vec())).map_err(failed)?;
+        let outputs = self
+            .segmentation
+            .run(ort::inputs!["input_values" => input])
+            .map_err(failed)?;
+        let (shape, logits) = outputs["logits"]
+            .try_extract_tensor::<f32>()
+            .map_err(failed)?;
 
-            let input = Value::from_array(([1_usize, 1, SEGMENT_WINDOW], window))
-                .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
-            let outputs = self
-                .segmentation
-                .run(ort::inputs!["input_values" => input])
-                .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
-            let (shape, logits) = outputs["logits"]
-                .try_extract_tensor::<f32>()
-                .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
-
-            let frames = shape[1] as usize;
-            let classes = shape[2] as usize;
-            if frame_ms == 0.0 {
-                // Derived from the model's own output rather than assumed:
-                // a hard-coded frame duration is how every timestamp in a
-                // pipeline ends up scaled by a constant nobody notices.
-                frame_ms = (SEGMENT_WINDOW as f64 / SAMPLE_RATE as f64) * 1000.0 / frames as f64;
-            }
-
-            let covered = ((end - start) as f64 / SEGMENT_WINDOW as f64 * frames as f64) as usize;
-            for frame in 0..frames.min(covered) {
+        let frames = shape[1] as usize;
+        let classes = shape[2] as usize;
+        Ok((0..frames)
+            .map(|frame| {
                 let row = &logits[frame * classes..(frame + 1) * classes];
                 let best = row
                     .iter()
@@ -148,95 +235,163 @@ impl LiveDiarizer {
                     .max_by(|a, b| a.1.total_cmp(b.1))
                     .map(|(index, _)| index)
                     .unwrap_or(0);
-                counts.push(POWERSET.get(best).map(|set| set.len()).unwrap_or(0));
-            }
-        }
-        Ok((counts, frame_ms))
+                POWERSET
+                    .get(best)
+                    .map(|set| set.iter().fold(0_u8, |mask, speaker| mask | 1 << speaker))
+                    .unwrap_or(0)
+            })
+            .collect())
     }
 
-    /// Embeds one span of audio.
-    fn embed(&mut self, samples: &[f32]) -> Result<Option<Vec<f32>>, DiarizeError> {
-        let features = self.mel.compute(samples);
-        if features.is_empty() {
-            return Ok(None);
+    /// Runs both models over a Meeting: every local speaker of every chunk,
+    /// embedded, before anything is decided about who is who.
+    pub fn observe(
+        &mut self,
+        audio: MeetingAudio<'_>,
+        progress: &mut dyn FnMut(Progress),
+        cancel: &Cancel,
+    ) -> Result<Vec<Observation>, DiarizeError> {
+        if audio.sample_rate != SAMPLE_RATE {
+            return Err(DiarizeError::Unavailable(format!(
+                "diarization needs {SAMPLE_RATE} Hz audio, was given {}",
+                audio.sample_rate
+            )));
         }
-        let frames = features.len();
-        let flat: Vec<f32> = features.into_iter().flatten().collect();
 
-        let input = Value::from_array(([1_usize, frames, super::fbank::MEL_BINS], flat))
-            .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
-        let outputs = self
-            .embedding
-            .run(ort::inputs!["input_features" => input])
-            .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
-        let (_, vector) = outputs["last_hidden_state"]
-            .try_extract_tensor::<f32>()
-            .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
+        let total_ms = audio.duration_ms();
+        let mut observations = Vec::new();
 
-        let mut vector = vector.to_vec();
-        super::cluster::l2_normalize(&mut vector);
-        Ok(Some(vector))
+        for (channel, samples) in [
+            (AudioChannel::Mic, audio.mic),
+            (AudioChannel::System, audio.system),
+        ] {
+            for start in (0..samples.len()).step_by(SEGMENT_WINDOW) {
+                if cancel.is_cancelled() {
+                    return Err(DiarizeError::Cancelled);
+                }
+                let end = (start + SEGMENT_WINDOW).min(samples.len());
+                let mut chunk = vec![0.0_f32; SEGMENT_WINDOW];
+                chunk[..end - start].copy_from_slice(&samples[start..end]);
+
+                let masks = self.segment(&chunk)?;
+                // Derived from the model's own output rather than assumed:
+                // a hard-coded frame duration is how every timestamp in a
+                // pipeline ends up scaled by a constant nobody notices.
+                let samples_per_frame = SEGMENT_WINDOW as f64 / masks.len() as f64;
+                let frame_ms = samples_per_frame * 1000.0 / SAMPLE_RATE as f64;
+                // The padded tail of the last chunk is silence the model
+                // was shown, not audio anyone spoke.
+                let covered = ((end - start) as f64 / samples_per_frame) as usize;
+                let masks = &masks[..covered.min(masks.len())];
+                let chunk_start_ms = start as u64 * 1000 / SAMPLE_RATE as u64;
+                let to_ms = |frame: usize| chunk_start_ms + (frame as f64 * frame_ms) as u64;
+
+                // Features over the audio actually present, so the mean
+                // that is subtracted is the mean of speech, not of speech
+                // and padding.
+                let features = self.embedder.features(&samples[start..end]);
+
+                for local in 0..LOCAL_SPEAKERS {
+                    let bit = 1_u8 << local;
+                    let runs = runs_of(masks, |mask| mask & bit != 0);
+                    if runs.is_empty() {
+                        continue;
+                    }
+                    let rows: Vec<&[f32]> = chosen_rows(masks, bit, samples_per_frame)
+                        .into_iter()
+                        .filter_map(|row| features.get(row).map(Vec::as_slice))
+                        .collect();
+                    let Some(vector) = self.embedder.embed_frames(&rows)? else {
+                        continue;
+                    };
+                    let in_ms = |runs: Vec<(usize, usize)>| -> Vec<(u64, u64)> {
+                        runs.into_iter()
+                            .map(|(from, to)| (to_ms(from), to_ms(to)))
+                            .collect()
+                    };
+                    observations.push(Observation {
+                        channel,
+                        cluster: Cluster(observations.len() as u32),
+                        vector,
+                        runs: in_ms(runs),
+                        clean_runs: in_ms(runs_of(masks, |mask| mask == bit)),
+                    });
+                }
+
+                progress(Progress {
+                    done_ms: to_ms(masks.len()).min(total_ms),
+                    total_ms,
+                });
+            }
+        }
+        Ok(observations)
     }
 }
 
-/// Contiguous speech, as `(start_ms, end_ms)`.
-///
-/// Split out as a free function because it is the part worth testing without
-/// a model: the span rules are the catalog's, and they decide what a
-/// Voiceprint is ever built from.
-pub fn spans(counts: &[usize], frame_ms: f64) -> Vec<(u64, u64)> {
-    let mut spans: Vec<(u64, u64)> = Vec::new();
-    let mut open: Option<u64> = None;
-
-    for (index, count) in counts.iter().enumerate() {
-        let at = (index as f64 * frame_ms) as u64;
-        // Overlapped speech is excluded entirely, not merely marked: a
-        // Voiceprint built from two people talking at once belongs to
-        // neither of them (catalog: subtract overlapped same-channel
-        // speech).
-        let speaking = *count == 1;
-        match (speaking, open) {
-            (true, None) => open = Some(at),
-            (false, Some(start)) => {
-                spans.push((start, at));
+/// Maximal stretches of frames that satisfy `keep`, as `[from, to)`.
+pub fn runs_of(masks: &[u8], keep: impl Fn(u8) -> bool) -> Vec<(usize, usize)> {
+    let mut runs = Vec::new();
+    let mut open: Option<usize> = None;
+    for (index, mask) in masks.iter().enumerate() {
+        match (keep(*mask), open) {
+            (true, None) => open = Some(index),
+            (false, Some(from)) => {
+                runs.push((from, index));
                 open = None;
             }
             _ => {}
         }
     }
-    if let Some(start) = open {
-        spans.push((start, (counts.len() as f64 * frame_ms) as u64));
+    if let Some(from) = open {
+        runs.push((from, masks.len()));
     }
-
-    // Merge across short gaps, then drop what is too short to mean anything.
-    let mut merged: Vec<(u64, u64)> = Vec::new();
-    for (start, end) in spans {
-        match merged.last_mut() {
-            Some(previous) if start.saturating_sub(previous.1) <= MERGE_GAP_MS => {
-                previous.1 = end;
-            }
-            _ => merged.push((start, end)),
-        }
-    }
-    merged
+    runs
 }
 
-/// The sub-span of a turn to hold a voice up by: its middle, at most 10 s.
+/// Which feature frames to embed one local speaker from.
 ///
-/// **Separate from the turn on purpose, and that separation was a
-/// measurement finding.** The first version used these rules — the
-/// catalog's, for *Voiceprint quality* — to define turns as well, and the
-/// close-out's DER came back 38.4% with 28% of speech simply missed. Of
-/// course it did: clipping a 15 s turn to its middle 10 s throws away a
-/// third of it, which is exactly right for choosing what to embed and
-/// exactly wrong for saying who was talking.
+/// pyannote's rule: the frames the speaker holds alone, unless there are
+/// too few of them to embed, in which case all of its frames — overlap
+/// included, because a voice heard only through crosstalk is still better
+/// placed by a smudged vector than by none. Segmentation frames are ~17 ms
+/// and feature frames 10 ms; each feature frame takes the segmentation
+/// frame its centre falls in.
+pub fn chosen_rows(masks: &[u8], bit: u8, samples_per_frame: f64) -> Vec<usize> {
+    let rows = |keep: &dyn Fn(u8) -> bool| -> Vec<usize> {
+        (0..)
+            .map(|row| {
+                (
+                    row,
+                    ((row * FRAME_SHIFT + FRAME_LENGTH / 2) as f64 / samples_per_frame) as usize,
+                )
+            })
+            .take_while(|(_, frame)| *frame < masks.len())
+            .filter(|(_, frame)| keep(masks[*frame]))
+            .map(|(row, _)| row)
+            .collect()
+    };
+    let alone = rows(&|mask| mask == bit);
+    if alone.len() > MIN_EMBED_FRAMES {
+        alone
+    } else {
+        rows(&|mask| mask & bit != 0)
+    }
+}
+
+/// The sub-span of a clean stretch to hold a voice up by: its middle, at
+/// most 10 s.
 ///
-/// So a turn covers all of its speech, and only the clip is taken from its
-/// middle. Embedding has since moved to sub-windows, and this now picks the
-/// stretch a voice is *played back* from — the same rule, for the same
-/// reason: the ends of a long turn are where a neighbour's words bleed in.
-/// Returns `None` when there is too little clean voiced audio to stand for
-/// a voice — the turn still exists, it just does not get to define one.
+/// **A rule about samples, never about turns**, and that separation was a
+/// measurement finding. The first version used these rules — the catalog's,
+/// for *Voiceprint quality* — to define turns as well, and the close-out's
+/// DER came back 38.4% with 28% of speech simply missed. Of course it did:
+/// clipping a 15 s turn to its middle 10 s throws away a third of it, which
+/// is exactly right for choosing what to play and exactly wrong for saying
+/// who was talking.
+///
+/// The ends of a long stretch are where a neighbour's words bleed in, so
+/// the middle. Returns `None` when there is too little to stand for a
+/// voice — the voice still exists, it just has nowhere to be heard from.
 pub fn embeddable(start_ms: u64, end_ms: u64) -> Option<(u64, u64)> {
     let length = end_ms.saturating_sub(start_ms);
     if length < MIN_SPAN_MS {
@@ -245,50 +400,25 @@ pub fn embeddable(start_ms: u64, end_ms: u64) -> Option<(u64, u64)> {
     if length <= MAX_SPAN_MS {
         return Some((start_ms, end_ms));
     }
-    // The beginning and end of a long turn are where a neighbour's words
-    // bleed in, so take the middle.
     let middle = start_ms + length / 2;
     Some((middle - MAX_SPAN_MS / 2, middle + MAX_SPAN_MS / 2))
 }
 
-/// Cuts a stretch of speech into overlapping windows to embed.
-///
-/// A span shorter than [`MIN_SPAN_MS`] yields nothing, so it gets no turn.
-/// Its words still reach the transcript, and a segment centred in it is left
-/// unattributed: there is too little audio to say whose voice it is.
-pub fn subwindows(start_ms: u64, end_ms: u64) -> Vec<(u64, u64)> {
-    let length = end_ms.saturating_sub(start_ms);
-    if length < MIN_SPAN_MS {
-        return Vec::new();
-    }
-    if length <= SUBWINDOW_MS {
-        return vec![(start_ms, end_ms)];
-    }
-
-    let mut windows = Vec::new();
-    let mut at = start_ms;
-    while at + MIN_SPAN_MS <= end_ms {
-        let stop = (at + SUBWINDOW_MS).min(end_ms);
-        windows.push((at, stop));
-        if stop == end_ms {
-            break;
-        }
-        at += SUBWINDOW_HOP_MS;
-    }
-    windows
-}
-
 /// Joins consecutive turns of the same voice on the same channel.
 fn merge_adjacent(mut turns: Vec<Turn>) -> Vec<Turn> {
-    turns.sort_by_key(|turn| (turn.channel == AudioChannel::System, turn.start.millis()));
+    turns.sort_by_key(|turn| {
+        (
+            turn.channel == AudioChannel::System,
+            turn.cluster,
+            turn.start.millis(),
+        )
+    });
     let mut merged: Vec<Turn> = Vec::with_capacity(turns.len());
     for turn in turns {
         match merged.last_mut() {
             Some(previous)
                 if previous.channel == turn.channel
                     && previous.cluster == turn.cluster
-                    // Overlapping or touching, which consecutive sub-windows
-                    // of one voice always are.
                     && turn.start.millis() <= previous.end.millis() + MERGE_GAP_MS =>
             {
                 if turn.end > previous.end {
@@ -301,6 +431,82 @@ fn merge_adjacent(mut turns: Vec<Turn>) -> Vec<Turn> {
     merged
 }
 
+/// Turns observations and a clustering into a Diarization.
+///
+/// `canonical` maps each observation's provisional cluster to its voice;
+/// an observation it does not mention is a voice of its own.
+pub fn assemble(
+    observations: &[Observation],
+    canonical: &BTreeMap<Cluster, Cluster>,
+) -> Diarization {
+    let mut turns = Vec::new();
+    let mut clean = Vec::new();
+    let mut grouped: BTreeMap<Cluster, Vec<(Vec<f32>, i64, bool)>> = BTreeMap::new();
+    for observation in observations {
+        let voice = canonical
+            .get(&observation.cluster)
+            .copied()
+            .unwrap_or(observation.cluster);
+        let turn =
+            |(start, end): &(u64, u64)| Turn::new(observation.channel, *start, *end, voice.index());
+        turns.extend(observation.runs.iter().map(turn));
+        clean.extend(observation.clean_runs.iter().map(turn));
+        grouped.entry(voice).or_default().push((
+            observation.vector.clone(),
+            observation.voiced_ms() as i64,
+            false,
+        ));
+    }
+
+    // Consecutive frames, chunks and local speakers of one voice are one
+    // turn. Without this the transcript would be attributed correctly and
+    // read as a stutter, the same speaker restarting every ten seconds.
+    let mut turns = merge_adjacent(turns);
+    let clean = merge_adjacent(clean);
+
+    // How much of each voice there was, measured on the merged turns so
+    // that two local speakers of one voice in one chunk are not counted
+    // twice; and where best to hear it — the middle of its longest stretch
+    // alone.
+    let mut voiced: BTreeMap<Cluster, u64> = BTreeMap::new();
+    for turn in &turns {
+        *voiced.entry(turn.cluster).or_default() += turn.duration_ms();
+    }
+    let mut longest: BTreeMap<Cluster, Turn> = BTreeMap::new();
+    for turn in &clean {
+        let best = longest.entry(turn.cluster).or_insert(*turn);
+        if turn.duration_ms() > best.duration_ms() {
+            *best = *turn;
+        }
+    }
+
+    let embeddings = grouped
+        .into_iter()
+        .filter_map(|(cluster, observations)| {
+            let vector = super::cluster::centroid(&observations)?;
+            let mut embedding = Embedding::new(
+                vector,
+                EMBEDDING_MODEL,
+                EMBEDDING_MODEL_VERSION,
+                voiced.get(&cluster).copied().unwrap_or(0),
+            );
+            if let Some(turn) = longest.get(&cluster)
+                && let Some((start, end)) = embeddable(turn.start.millis(), turn.end.millis())
+            {
+                embedding = embedding.with_sample(SampleWindow {
+                    channel: turn.channel,
+                    start: crate::audio::CaptureOffset(start),
+                    end: crate::audio::CaptureOffset(end),
+                });
+            }
+            Some((cluster, embedding))
+        })
+        .collect();
+
+    turns.sort_by_key(|turn| (turn.start.millis(), turn.channel == AudioChannel::System));
+    Diarization { turns, embeddings }
+}
+
 impl Diarizer for LiveDiarizer {
     fn diarize(
         &mut self,
@@ -308,159 +514,61 @@ impl Diarizer for LiveDiarizer {
         progress: &mut dyn FnMut(Progress),
         cancel: &Cancel,
     ) -> Result<Diarization, DiarizeError> {
-        if audio.sample_rate != SAMPLE_RATE {
-            return Err(DiarizeError::Unavailable(format!(
-                "diarization needs {SAMPLE_RATE} Hz audio, was given {}",
-                audio.sample_rate
-            )));
-        }
+        let observations = self.observe(audio, progress, cancel)?;
 
-        let total_ms = audio.duration_ms();
-        let mut turns = Vec::new();
-        let mut vectors: Vec<(usize, Vec<f32>)> = Vec::new();
-        let mut next_cluster = 0_u32;
-
-        for (channel, samples) in [
-            (AudioChannel::Mic, audio.mic),
-            (AudioChannel::System, audio.system),
-        ] {
-            if cancel.is_cancelled() {
-                return Err(DiarizeError::Cancelled);
-            }
-            if samples.is_empty() {
-                continue;
-            }
-
-            let (counts, frame_ms) = self.speech_frames(samples)?;
-            for (start_ms, end_ms) in spans(&counts, frame_ms) {
-                if cancel.is_cancelled() {
-                    return Err(DiarizeError::Cancelled);
-                }
-                for (window_start, window_end) in subwindows(start_ms, end_ms) {
-                    let from =
-                        (window_start as usize * SAMPLE_RATE as usize / 1000).min(samples.len());
-                    let to = (window_end as usize * SAMPLE_RATE as usize / 1000).min(samples.len());
-                    if to <= from {
-                        continue;
-                    }
-                    let Some(vector) = self.embed(&samples[from..to])? else {
-                        continue;
-                    };
-
-                    let index = turns.len();
-                    turns.push(Turn::new(channel, window_start, window_end, next_cluster));
-                    vectors.push((index, vector));
-                    next_cluster += 1;
-                }
-
-                progress(Progress {
-                    done_ms: end_ms.min(total_ms),
-                    total_ms,
-                });
-            }
-        }
-
-        // Every sub-window started as its own cluster; grouping them is what
-        // turns windows into voices.
-        let provisional: BTreeMap<Cluster, Embedding> = vectors
+        // Every observation starts as its own cluster; grouping them is
+        // what turns local speakers into voices.
+        let provisional: BTreeMap<Cluster, Embedding> = observations
             .iter()
-            .map(|(index, vector)| {
-                let turn = turns[*index];
+            .map(|observation| {
                 (
-                    turn.cluster,
+                    observation.cluster,
                     Embedding::new(
-                        vector.clone(),
-                        &self.model_name,
-                        &self.model_version,
-                        turn.duration_ms(),
+                        observation.vector.clone(),
+                        EMBEDDING_MODEL,
+                        EMBEDDING_MODEL_VERSION,
+                        observation.voiced_ms(),
                     ),
                 )
             })
             .collect();
         let canonical = super::cluster::agglomerate(&provisional);
+        let result = assemble(&observations, &canonical);
 
-        // Resolve each vector to its canonical voice *before* the turn list
-        // is rewritten. Reading it back off `turns` afterwards is an
-        // index-into-a-shortened-vector bug, and it is one this pipeline
-        // actually had — caught by running the whole thing on real audio,
-        // not by any unit test, because none of them ran `diarize` itself.
-        let mut grouped: BTreeMap<Cluster, Vec<(Vec<f32>, i64, bool)>> = BTreeMap::new();
-        for (index, vector) in &vectors {
-            let turn = turns[*index];
-            let voice = canonical
-                .get(&turn.cluster)
-                .copied()
-                .unwrap_or(turn.cluster);
-            grouped.entry(voice).or_default().push((
-                vector.clone(),
-                turn.duration_ms() as i64,
-                false,
-            ));
-        }
-
-        for turn in turns.iter_mut() {
-            if let Some(target) = canonical.get(&turn.cluster) {
-                turn.cluster = *target;
-            }
-        }
-        // Adjacent sub-windows of one voice are one turn. Without this the
-        // transcript would be attributed correctly and read as a stutter,
-        // the same speaker restarting every three seconds.
-        turns = merge_adjacent(turns);
-
-        // How much of each voice there was, and where best to hear it.
-        // Measured on the merged turns rather than summed over windows:
-        // windows overlap by half, so their total counts every second
-        // twice. The sample is the middle of the longest turn — the stretch
-        // least likely to carry a neighbour's words at either end.
-        let mut voiced: BTreeMap<Cluster, u64> = BTreeMap::new();
-        let mut longest: BTreeMap<Cluster, Turn> = BTreeMap::new();
-        for turn in &turns {
-            *voiced.entry(turn.cluster).or_default() += turn.duration_ms();
-            let best = longest.entry(turn.cluster).or_insert(*turn);
-            if turn.duration_ms() > best.duration_ms() {
-                *best = *turn;
-            }
-        }
-        let embeddings = grouped
-            .into_iter()
-            .filter_map(|(cluster, observations)| {
-                let vector = super::cluster::centroid(&observations)?;
-                let mut embedding = Embedding::new(
-                    vector,
-                    &self.model_name,
-                    &self.model_version,
-                    voiced.get(&cluster).copied().unwrap_or(0),
-                );
-                if let Some(turn) = longest.get(&cluster)
-                    && let Some((start, end)) = embeddable(turn.start.millis(), turn.end.millis())
-                {
-                    embedding = embedding.with_sample(SampleWindow {
-                        channel: turn.channel,
-                        start: crate::audio::CaptureOffset(start),
-                        end: crate::audio::CaptureOffset(end),
-                    });
-                }
-                Some((cluster, embedding))
-            })
-            .collect();
-
-        turns.sort_by_key(|turn| (turn.start.millis(), turn.channel == AudioChannel::System));
+        let total_ms = audio.duration_ms();
         progress(Progress {
             done_ms: total_ms,
             total_ms,
         });
-        Ok(Diarization { turns, embeddings })
+        Ok(result)
     }
 
     fn describe(&self) -> String {
-        format!("onnx diarizer ({})", self.model_name)
+        format!("onnx diarizer ({EMBEDDING_MODEL})")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One 10 s chunk's frame geometry, as the segmentation model has it.
+    const SAMPLES_PER_FRAME: f64 = SEGMENT_WINDOW as f64 / 589.0;
+
+    fn observation(
+        channel: AudioChannel,
+        cluster: u32,
+        runs: &[(u64, u64)],
+        clean: &[(u64, u64)],
+    ) -> Observation {
+        Observation {
+            channel,
+            cluster: Cluster(cluster),
+            vector: vec![1.0, 0.0],
+            runs: runs.to_vec(),
+            clean_runs: clean.to_vec(),
+        }
+    }
 
     #[test]
     fn the_powerset_covers_three_speakers_and_their_pairs() {
@@ -474,79 +582,175 @@ mod tests {
     }
 
     #[test]
-    fn overlapped_speech_is_excluded_from_spans() {
-        // A Voiceprint built from two people talking at once belongs to
-        // neither of them.
-        let frame_ms = 10.0;
-        let mut counts = vec![1_usize; 400];
-        counts[150..250].fill(2);
-        let found = spans(&counts, frame_ms);
+    fn a_run_is_every_frame_a_speaker_holds_overlap_included() {
+        // Speaker 0 alone, then with speaker 1, then speaker 1 alone. Two
+        // people talking at once is two speakers, not nobody.
+        let mut masks = vec![0b01_u8; 100];
+        masks[60..80].fill(0b11);
+        masks[80..100].fill(0b10);
+        assert_eq!(runs_of(&masks, |mask| mask & 0b01 != 0), vec![(0, 80)]);
+        assert_eq!(runs_of(&masks, |mask| mask & 0b10 != 0), vec![(60, 100)]);
+        assert_eq!(runs_of(&masks, |mask| mask == 0b01), vec![(0, 60)], "alone");
+        assert!(runs_of(&[], |_| true).is_empty());
+    }
+
+    #[test]
+    fn a_voice_is_embedded_from_the_frames_it_holds_alone() {
+        // 589 frames: speaker 0 alone for the first half, overlapped with
+        // speaker 1 for the second. The feature rows chosen all land in
+        // the first half.
+        let mut masks = vec![0b01_u8; 589];
+        masks[295..].fill(0b11);
+        let rows = chosen_rows(&masks, 0b01, SAMPLES_PER_FRAME);
         assert!(
-            found
-                .iter()
-                .all(|(start, end)| *end <= 1_500 || *start >= 2_500),
-            "no span crosses the overlap: {found:?}"
+            rows.len() > 400,
+            "about five seconds of 10 ms rows: {}",
+            rows.len()
+        );
+        let last_centre = (rows.last().unwrap() * FRAME_SHIFT + FRAME_LENGTH / 2) as f64;
+        assert!(
+            last_centre < 295.0 * SAMPLES_PER_FRAME,
+            "none from the overlap"
         );
     }
 
     #[test]
-    fn short_gaps_do_not_split_a_turn() {
-        // Someone drawing breath is not the end of their turn.
-        let frame_ms = 10.0;
-        let mut counts = vec![1_usize; 600];
-        counts[300..320].fill(0); // 200 ms, under the merge gap
-        assert_eq!(spans(&counts, frame_ms).len(), 1);
+    fn a_voice_heard_only_in_overlap_is_embedded_from_all_of_its_frames() {
+        // pyannote's fallback. Too few clean frames to embed, so every
+        // frame the speaker holds is used — smudged beats absent.
+        let mut masks = vec![0_u8; 589];
+        masks[100..200].fill(0b11);
+        masks[200..203].fill(0b10); // 3 frames alone: under the minimum
+        let rows = chosen_rows(&masks, 0b10, SAMPLES_PER_FRAME);
+        assert!(
+            rows.len() > 150,
+            "the overlapped stretch is used: {}",
+            rows.len()
+        );
     }
 
     #[test]
-    fn a_long_gap_does_split_a_turn() {
-        let frame_ms = 10.0;
-        let mut counts = vec![1_usize; 800];
-        counts[300..400].fill(0); // 1 s, well over the gap
-        assert_eq!(spans(&counts, frame_ms).len(), 2);
-    }
-
-    #[test]
-    fn a_short_turn_survives_as_a_turn_but_defines_no_voice() {
-        // The distinction the DER measurement forced. A 500 ms turn is real
-        // speech by a real person and belongs in the transcript; it is just
-        // too little audio to build a Voiceprint from.
-        let frame_ms = 10.0;
-        let mut counts = vec![0_usize; 400];
-        counts[0..50].fill(1); // 500 ms
-        let found = spans(&counts, frame_ms);
-        assert_eq!(found.len(), 1, "the turn exists");
+    fn overlapped_speech_is_a_turn_for_each_voice() {
+        let observations = vec![
+            observation(AudioChannel::Mic, 0, &[(0, 5_000)], &[(0, 3_000)]),
+            observation(AudioChannel::Mic, 1, &[(3_000, 8_000)], &[(5_000, 8_000)]),
+        ];
+        let result = assemble(&observations, &BTreeMap::new());
+        assert_eq!(result.turns.len(), 2);
+        assert_eq!(result.turns[0].end.millis(), 5_000);
         assert_eq!(
-            embeddable(found[0].0, found[0].1),
-            None,
-            "but not as a voice"
+            result.turns[1].start.millis(),
+            3_000,
+            "the overlap belongs to both"
         );
+        assert_eq!(result.embeddings[&Cluster(0)].voiced_ms, 5_000);
     }
 
     #[test]
-    fn a_long_turn_keeps_its_length_while_its_embedding_is_clipped() {
-        // The bug this test now guards against cost 28% of speech in the
-        // close-out measurement: clipping the *turn* to the middle 10 s
-        // meant two thirds of a long turn had no speaker at all.
-        let frame_ms = 10.0;
-        let counts = vec![1_usize; 6_000]; // 60 s
-        let found = spans(&counts, frame_ms);
-        assert_eq!(found.len(), 1);
-        let (start, end) = found[0];
+    fn a_short_stretch_is_still_a_turn() {
+        // The defect the AMI measurement found: a 200 ms "yes" used to get
+        // no speaker at all. It is a turn now; whether it also earns a
+        // Speaker is `persist`'s question, not this one's.
+        let observations = vec![observation(
+            AudioChannel::System,
+            0,
+            &[(1_000, 1_200)],
+            &[(1_000, 1_200)],
+        )];
+        let result = assemble(&observations, &BTreeMap::new());
+        assert_eq!(result.turns.len(), 1);
+        assert_eq!(result.turns[0].duration_ms(), 200);
         assert!(
-            end - start > 50_000,
-            "the turn is the whole 60 s: {start}-{end}"
+            result.embeddings[&Cluster(0)].sample.is_none(),
+            "too short to play"
         );
-
-        let (embed_start, embed_end) = embeddable(start, end).expect("embeddable");
-        assert_eq!(embed_end - embed_start, MAX_SPAN_MS);
-        assert!(embed_start > 20_000, "taken from the middle, not the start");
     }
 
     #[test]
-    fn silence_produces_no_spans() {
-        assert!(spans(&vec![0_usize; 1_000], 10.0).is_empty());
-        assert!(spans(&[], 10.0).is_empty());
+    fn two_local_speakers_of_one_voice_are_one_turn() {
+        // The same person in two consecutive chunks — local speaker 1,
+        // then local speaker 0 — clustered together.
+        let observations = vec![
+            observation(AudioChannel::Mic, 0, &[(7_000, 10_000)], &[(7_000, 10_000)]),
+            observation(
+                AudioChannel::Mic,
+                1,
+                &[(10_000, 12_000)],
+                &[(10_000, 12_000)],
+            ),
+        ];
+        let canonical = [(Cluster(0), Cluster(0)), (Cluster(1), Cluster(0))]
+            .into_iter()
+            .collect();
+        let result = assemble(&observations, &canonical);
+        assert_eq!(result.turns.len(), 1);
+        assert_eq!(
+            (result.turns[0].start.millis(), result.turns[0].end.millis()),
+            (7_000, 12_000)
+        );
+        assert_eq!(result.embeddings.len(), 1);
+        assert_eq!(result.embeddings[&Cluster(0)].voiced_ms, 5_000);
+        let sample = result.embeddings[&Cluster(0)].sample.expect("playable");
+        assert_eq!(
+            (sample.start.millis(), sample.end.millis()),
+            (7_000, 12_000),
+            "the clean stretch joined too"
+        );
+    }
+
+    #[test]
+    fn the_sample_is_taken_from_where_the_voice_is_alone() {
+        let observations = vec![observation(
+            AudioChannel::Mic,
+            0,
+            &[(0, 10_000)],
+            &[(0, 1_000), (4_000, 7_000)],
+        )];
+        let result = assemble(&observations, &BTreeMap::new());
+        let sample = result.embeddings[&Cluster(0)].sample.expect("playable");
+        assert_eq!((sample.start.millis(), sample.end.millis()), (4_000, 7_000));
+    }
+
+    #[test]
+    fn a_long_stretch_is_sampled_from_its_middle() {
+        // The bug this guards against cost 28% of speech in the close-out
+        // measurement: clipping the *turn* to the middle 10 s meant two
+        // thirds of a long turn had no speaker at all.
+        let (start, end) = embeddable(0, 60_000).expect("embeddable");
+        assert_eq!(end - start, MAX_SPAN_MS);
+        assert!(start > 20_000, "taken from the middle, not the start");
+        assert_eq!(embeddable(0, 2_000), Some((0, 2_000)));
+        assert_eq!(embeddable(0, 900), None);
+    }
+
+    #[test]
+    fn consecutive_turns_of_one_voice_become_one_turn() {
+        let merged = merge_adjacent(vec![
+            Turn::new(AudioChannel::Mic, 0, 3_000, 0),
+            Turn::new(AudioChannel::Mic, 1_500, 4_500, 0),
+            Turn::new(AudioChannel::Mic, 4_700, 6_000, 0), // a 200 ms breath
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].end.millis(), 6_000);
+    }
+
+    #[test]
+    fn a_speaker_change_is_not_merged_away() {
+        let merged = merge_adjacent(vec![
+            Turn::new(AudioChannel::Mic, 0, 3_000, 0),
+            Turn::new(AudioChannel::Mic, 1_500, 4_500, 1),
+        ]);
+        assert_eq!(merged.len(), 2, "two voices stay two turns");
+    }
+
+    #[test]
+    fn the_two_channels_never_merge_into_each_other() {
+        // The room and the far end are different people by construction.
+        let merged = merge_adjacent(vec![
+            Turn::new(AudioChannel::Mic, 0, 3_000, 0),
+            Turn::new(AudioChannel::System, 1_500, 4_500, 0),
+        ]);
+        assert_eq!(merged.len(), 2);
     }
 
     // ---- The tests that need the real models ----
@@ -561,6 +765,11 @@ mod tests {
         let dir = std::path::PathBuf::from(dir);
         (dir.join("segmentation.onnx").exists() && dir.join("embedding.onnx").exists())
             .then_some(dir)
+    }
+
+    fn load(dir: &Path) -> LiveDiarizer {
+        LiveDiarizer::load(&dir.join("segmentation.onnx"), &dir.join("embedding.onnx"))
+            .expect("both models load")
     }
 
     fn tone(hz: f32, seconds: f32, harmonics: usize) -> Vec<f32> {
@@ -586,15 +795,27 @@ mod tests {
             eprintln!("skipped: set EVERTRANSCRIPT_DIARIZE_MODELS to run this");
             return;
         };
-        let mut diarizer =
-            LiveDiarizer::load(&dir.join("segmentation.onnx"), &dir.join("embedding.onnx"))
-                .expect("both models load");
+        let mut diarizer = load(&dir);
 
         let speech = tone(140.0, 3.0, 6);
-        let vector = diarizer.embed(&speech).expect("embeds").expect("a vector");
+        let vector = diarizer
+            .embedder()
+            .embed(&speech)
+            .expect("embeds")
+            .expect("a vector");
         assert_eq!(vector.len(), 256, "the embedding model's stated width");
         let norm: f32 = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-3, "L2-normalized, got {norm}");
+
+        let too_short: Vec<f32> = speech[..FRAME_LENGTH + 7 * FRAME_SHIFT].to_vec();
+        assert!(
+            diarizer
+                .embedder()
+                .embed(&too_short)
+                .expect("runs")
+                .is_none(),
+            "eight frames is too few"
+        );
     }
 
     #[test]
@@ -603,15 +824,12 @@ mod tests {
             eprintln!("skipped: set EVERTRANSCRIPT_DIARIZE_MODELS to run this");
             return;
         };
-        let mut diarizer =
-            LiveDiarizer::load(&dir.join("segmentation.onnx"), &dir.join("embedding.onnx"))
-                .expect("models load");
-
-        let (silent, _) = diarizer
-            .speech_frames(&vec![0.0_f32; SEGMENT_WINDOW])
+        let mut diarizer = load(&dir);
+        let silent = diarizer
+            .segment(&vec![0.0_f32; SEGMENT_WINDOW])
             .expect("runs on silence");
         assert!(
-            silent.iter().all(|count| *count == 0),
+            silent.iter().all(|mask| *mask == 0),
             "silence must contain no speakers"
         );
     }
@@ -625,13 +843,23 @@ mod tests {
             eprintln!("skipped: set EVERTRANSCRIPT_DIARIZE_MODELS to run this");
             return;
         };
-        let mut diarizer =
-            LiveDiarizer::load(&dir.join("segmentation.onnx"), &dir.join("embedding.onnx"))
-                .expect("models load");
+        let mut diarizer = load(&dir);
 
-        let low = diarizer.embed(&tone(110.0, 3.0, 8)).unwrap().unwrap();
-        let high = diarizer.embed(&tone(230.0, 3.0, 3)).unwrap().unwrap();
-        let same = diarizer.embed(&tone(110.0, 3.0, 8)).unwrap().unwrap();
+        let low = diarizer
+            .embedder()
+            .embed(&tone(110.0, 3.0, 8))
+            .unwrap()
+            .unwrap();
+        let high = diarizer
+            .embedder()
+            .embed(&tone(230.0, 3.0, 3))
+            .unwrap()
+            .unwrap();
+        let same = diarizer
+            .embedder()
+            .embed(&tone(110.0, 3.0, 8))
+            .unwrap()
+            .unwrap();
 
         let across = super::super::cluster::cosine(&low, &high);
         let within = super::super::cluster::cosine(&low, &same);
@@ -643,80 +871,15 @@ mod tests {
     }
 
     #[test]
-    fn a_long_stretch_of_speech_is_embedded_in_pieces() {
-        // The measurement that produced this: one vector for a continuous
-        // span meant two people speaking in turn without a pause were one
-        // speaker. The speaker change has to be visible to clustering, and
-        // it only is if the span is cut up.
-        let windows = subwindows(0, 30_000);
-        assert!(windows.len() > 5, "got {windows:?}");
-        assert!(
-            windows
-                .iter()
-                .all(|(start, end)| end - start <= SUBWINDOW_MS)
-        );
-        assert_eq!(windows.first().map(|w| w.0), Some(0));
-        assert!(
-            windows.last().map(|w| w.1) >= Some(29_000),
-            "covers the end"
-        );
-    }
-
-    #[test]
-    fn a_short_stretch_is_embedded_whole() {
-        assert_eq!(subwindows(0, 2_500), vec![(0, 2_500)]);
-    }
-
-    #[test]
-    fn a_stretch_too_short_to_embed_yields_no_windows() {
-        assert!(subwindows(0, 900).is_empty());
-    }
-
-    #[test]
-    fn consecutive_windows_of_one_voice_become_one_turn() {
-        // Otherwise a correct attribution reads as a stutter — the same
-        // person restarting every three seconds.
-        let merged = merge_adjacent(vec![
-            Turn::new(AudioChannel::Mic, 0, 3_000, 0),
-            Turn::new(AudioChannel::Mic, 1_500, 4_500, 0),
-            Turn::new(AudioChannel::Mic, 3_000, 6_000, 0),
-        ]);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].end.millis(), 6_000);
-    }
-
-    #[test]
-    fn a_speaker_change_is_not_merged_away() {
-        let merged = merge_adjacent(vec![
-            Turn::new(AudioChannel::Mic, 0, 3_000, 0),
-            Turn::new(AudioChannel::Mic, 1_500, 4_500, 1),
-        ]);
-        assert_eq!(merged.len(), 2, "two voices stay two turns");
-    }
-
-    #[test]
-    fn the_two_channels_never_merge_into_each_other() {
-        // The room and the far end are different people by construction.
-        let merged = merge_adjacent(vec![
-            Turn::new(AudioChannel::Mic, 0, 3_000, 0),
-            Turn::new(AudioChannel::System, 1_500, 4_500, 0),
-        ]);
-        assert_eq!(merged.len(), 2);
-    }
-
-    #[test]
     fn a_whole_meeting_diarizes_end_to_end() {
-        // The test that would have caught the index bug above, and the only
-        // one here that exercises `diarize` rather than a piece of it.
-        // Every defect this project has shipped lived in a path nothing
-        // executed.
+        // The only test here that exercises `diarize` rather than a piece
+        // of it. Every defect this project has shipped lived in a path
+        // nothing executed.
         let Some(dir) = model_dir() else {
             eprintln!("skipped: set EVERTRANSCRIPT_DIARIZE_MODELS to run this");
             return;
         };
-        let mut diarizer =
-            LiveDiarizer::load(&dir.join("segmentation.onnx"), &dir.join("embedding.onnx"))
-                .expect("models load");
+        let mut diarizer = load(&dir);
 
         // Two acoustically distinct signals, one after the other.
         let mut audio = tone(120.0, 6.0, 8);
@@ -737,22 +900,22 @@ mod tests {
 
         // Whatever it concludes about how many voices there are, the
         // structure has to be coherent: every turn's cluster has to be a
-        // cluster, and the embeddings have to describe the turns.
+        // voice, and the embeddings have to describe the turns.
         for turn in &result.turns {
             assert!(turn.end > turn.start, "a turn with no duration: {turn:?}");
+            assert!(
+                turn.end.millis() <= 12_000,
+                "inside the recording: {turn:?}"
+            );
         }
         for cluster in result.clusters() {
             assert!(
-                result.embeddings.contains_key(&cluster)
-                    || result
-                        .turns
-                        .iter()
-                        .filter(|t| t.cluster == cluster)
-                        .all(|t| t.duration_ms() < MIN_SPAN_MS),
-                "cluster {cluster:?} has turns but no voice and is not short"
+                result.embeddings.contains_key(&cluster),
+                "cluster {cluster:?} has turns but no voice"
             );
         }
         for (cluster, embedding) in &result.embeddings {
+            assert_eq!(embedding.model_version, EMBEDDING_MODEL_VERSION);
             let spoken: u64 = result
                 .turns
                 .iter()
@@ -763,16 +926,15 @@ mod tests {
                 embedding.voiced_ms, spoken,
                 "the voice knows its own length"
             );
-            let sample = embedding
-                .sample
-                .expect("a real voice has somewhere to be heard");
-            assert!(
-                result.turns.iter().any(|t| t.cluster == *cluster
-                    && t.channel == sample.channel
-                    && t.start <= sample.start
-                    && sample.end <= t.end),
-                "the sample lies inside one of the voice's own turns"
-            );
+            if let Some(sample) = embedding.sample {
+                assert!(
+                    result.turns.iter().any(|t| t.cluster == *cluster
+                        && t.channel == sample.channel
+                        && t.start <= sample.start
+                        && sample.end <= t.end),
+                    "the sample lies inside one of the voice's own turns"
+                );
+            }
         }
     }
 }

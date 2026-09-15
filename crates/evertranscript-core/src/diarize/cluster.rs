@@ -27,16 +27,26 @@ use super::Embedding;
 
 /// How similar two voices must be before they can be the same person.
 ///
-/// From the catalog's reference numbers. Deliberately not tuned here: a
-/// threshold moved without the DER measurement in ticket 09 is a threshold
-/// moved on vibes.
+/// The catalog's reference number, and **measured to hold** once the
+/// front end was fixed (DECISIONS Q115). On AMI, with one Voiceprint per
+/// person built from their other meetings in the series, a returning
+/// person scores their own print at 0.76 or better on the dev set and a
+/// stranger's at 0.57 or worse; 0.62 sits in that gap, so dev gives no
+/// reason to move it. On the test set it lets one thin print (six seconds
+/// of voice) go unrecognized at 0.61 and admits nobody wrongly.
+/// Before the fix the same measurement put the *same* person at 0.58 on
+/// average, which is why recognition never worked in the shipped builds.
 pub const MATCH_FLOOR: f32 = 0.62;
 
 /// How far the best candidate must beat the runner-up.
 ///
 /// The condition that makes two similar voices produce *no* match rather
 /// than a coin-flip between them. Without it, the closer two colleagues
-/// sound, the more confidently the system mislabels them.
+/// sound, the more confidently the system mislabels them. On the same
+/// measurement the smallest margin between a person's own print and the
+/// nearest other person's was 0.34, so this is never the binding rule
+/// there; it is kept for the pair of colleagues that measurement did not
+/// contain.
 pub const MATCH_MARGIN: f32 = 0.08;
 
 /// Agglomerative merge threshold on L2-normalized embeddings (catalog M3).
@@ -311,16 +321,23 @@ pub fn centroid(exemplars: &[(Vec<f32>, i64, bool)]) -> Option<Vec<f32>> {
 
 // ---- Where clustering meets the record ----
 
-/// Every voice History can offer this Meeting's clusterer.
-pub fn seeds(connection: &rusqlite::Connection) -> anyhow::Result<Vec<SeedVoice>> {
-    Ok(crate::store::speakers::voiceprints(connection)?
-        .into_iter()
-        .map(|(speaker_id, vector, confirmed)| SeedVoice {
-            speaker_id,
-            vector,
-            confirmed,
-        })
-        .collect())
+/// Every voice History can offer this Meeting's clusterer, in the space
+/// its embeddings are in.
+pub fn seeds(
+    connection: &rusqlite::Connection,
+    model: &str,
+    model_version: &str,
+) -> anyhow::Result<Vec<SeedVoice>> {
+    Ok(
+        crate::store::speakers::voiceprints(connection, model, model_version)?
+            .into_iter()
+            .map(|(speaker_id, vector, confirmed)| SeedVoice {
+                speaker_id,
+                vector,
+                confirmed,
+            })
+            .collect(),
+    )
 }
 
 /// Recomputes a Speaker's Voiceprint from the evidence it still holds, or
@@ -329,12 +346,24 @@ pub fn seeds(connection: &rusqlite::Connection) -> anyhow::Result<Vec<SeedVoice>
 /// The clearing is what makes a withdrawn exemplar actually withdrawn:
 /// [`seeds`] reads the column, not the rows, and a Speaker whose every
 /// exemplar is gone but whose vector stayed would go on recognizing itself.
+///
+/// Only evidence in the newest exemplar's space enters the average: two
+/// spaces averaged together is a vector in neither, and the column's model
+/// columns would say otherwise.
 fn refresh_voiceprint(connection: &rusqlite::Connection, speaker_id: &str) -> anyhow::Result<()> {
     use crate::store::speakers;
 
     let evidence = speakers::exemplars(connection, speaker_id)?;
+    let space = evidence
+        .last()
+        .map(|latest| (latest.model.clone(), latest.model_version.clone()));
     let history: Vec<(Vec<f32>, i64, bool)> = evidence
         .iter()
+        .filter(|exemplar| {
+            space.as_ref().is_some_and(|(model, version)| {
+                exemplar.model == *model && exemplar.model_version == *version
+            })
+        })
         .map(|exemplar| {
             (
                 exemplar.vector.clone(),
@@ -402,7 +431,12 @@ pub fn persist(
         refresh_voiceprint(connection, &speaker_id)?;
     }
 
-    let known = seeds(connection)?;
+    // Seeds from the space these embeddings are in, and none when there
+    // are no embeddings to resolve.
+    let known = match embeddings.values().next() {
+        Some(embedding) => seeds(connection, &embedding.model, &embedding.model_version)?,
+        None => Vec::new(),
+    };
     let resolved = resolve(embeddings, &known);
     let mut assigned = BTreeMap::new();
 
@@ -445,6 +479,82 @@ pub fn persist(
         assigned.insert(cluster, speaker_id);
     }
     Ok(assigned)
+}
+
+/// What rebuilding stale evidence did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Adopted {
+    /// Exemplars re-embedded from their kept audio.
+    pub rebuilt: usize,
+    /// Exemplars with no audio to rebuild from, removed.
+    pub dropped: usize,
+    /// Speakers whose Voiceprint was recomputed.
+    pub speakers: usize,
+}
+
+/// Moves History into the embedding space now in use.
+///
+/// `rebuilt` pairs each stale exemplar's id with its vector re-embedded
+/// from the kept audio, or `None` where there was none to re-embed from:
+/// a row written before samples were kept, or whose Meeting is gone. Those
+/// rows go, honestly — a Speaker's Voiceprint is recomputed from what can
+/// still be heard, and a Speaker nothing can be heard of loses its
+/// Voiceprint and is a stranger next time, as ADR-0009 says a deleted one
+/// is. Its name and its words stay.
+///
+/// This is what ADR-0035 kept `model`/`model_version` on every row for:
+/// "a model upgrade re-embeds cleanly from kept audio". The alternative —
+/// leaving old vectors in place and letting `cosine` compare them — is
+/// what the first front-end fix would have done silently, and every
+/// existing Speaker would have stopped being recognized without a word.
+pub fn adopt_rebuilt(
+    connection: &rusqlite::Connection,
+    rebuilt: &[(String, Option<Vec<f32>>)],
+    model: &str,
+    model_version: &str,
+) -> anyhow::Result<Adopted> {
+    use crate::store::speakers;
+
+    let mut adopted = Adopted::default();
+    let mut touched = BTreeSet::new();
+    let stale = speakers::stale_exemplars(connection, model, model_version)?;
+    let owner: BTreeMap<&str, &str> = stale
+        .iter()
+        .map(|exemplar| (exemplar.id.as_str(), exemplar.speaker_id.as_str()))
+        .collect();
+    for (id, vector) in rebuilt {
+        let Some(speaker_id) = owner.get(id.as_str()) else {
+            continue;
+        };
+        match vector {
+            Some(vector) => {
+                speakers::replace_exemplar_vector(connection, id, vector, model, model_version)?;
+                adopted.rebuilt += 1;
+            }
+            None => {
+                speakers::delete_exemplar(connection, id)?;
+                adopted.dropped += 1;
+            }
+        }
+        touched.insert(speaker_id.to_string());
+    }
+    // A Voiceprint from the old space with nothing behind it is stale too.
+    touched.extend(speakers::speakers_with_stale_voiceprint(
+        connection,
+        model,
+        model_version,
+    )?);
+    for speaker_id in &touched {
+        refresh_voiceprint(connection, speaker_id)?;
+    }
+    // What the evidence could not recompute — a Speaker left with only
+    // negative exemplars — must not stay as a vector in the old space
+    // either: nothing would offer it, and every run would find it stale.
+    for speaker_id in speakers::speakers_with_stale_voiceprint(connection, model, model_version)? {
+        speakers::clear_voiceprint(connection, &speaker_id)?;
+    }
+    adopted.speakers = touched.len();
+    Ok(adopted)
 }
 
 #[cfg(test)]
@@ -783,7 +893,7 @@ mod tests {
         let speaker_id = map[&Cluster(0)].clone();
 
         crate::store::speakers::delete_voiceprint(&connection, &speaker_id).expect("delete");
-        assert!(seeds(&connection).expect("seeds").is_empty());
+        assert!(seeds(&connection, "test", "1").expect("seeds").is_empty());
 
         let friday = meetings::start(&connection, None, None).expect("m2");
         let again = clusters(&[(0, &[1.0, 0.0, 0.0])]);
@@ -913,6 +1023,247 @@ mod tests {
         assert_eq!(
             (source.sample.start_ms, source.sample.end_ms),
             (61_000, 71_000)
+        );
+    }
+
+    /// A Speaker minted in one space, with a sample to rebuild it from.
+    fn old_space_speaker(
+        connection: &rusqlite::Connection,
+        meeting_id: &str,
+        vector: &[f32],
+    ) -> (String, String) {
+        use crate::audio::CaptureOffset;
+        use evertranscript_protocol::AudioChannel;
+        let window = super::super::SampleWindow {
+            channel: AudioChannel::Mic,
+            start: CaptureOffset(1_000),
+            end: CaptureOffset(6_000),
+        };
+        let voices: BTreeMap<Cluster, Embedding> =
+            [(Cluster(0), embedding(vector).with_sample(window))]
+                .into_iter()
+                .collect();
+        let map = persist(connection, meeting_id, &voices, &heard(&voices)).expect("persist");
+        let speaker_id = map[&Cluster(0)].clone();
+        let evidence = crate::store::speakers::exemplars(connection, &speaker_id).expect("rows");
+        (speaker_id, evidence[0].id.clone())
+    }
+
+    #[test]
+    fn evidence_from_an_old_front_end_is_rebuilt_before_it_is_compared() {
+        // ADR-0035's promise, made real by the first front-end fix: the
+        // vectors on file were from features the model was never trained
+        // on, so offering them as seeds would have matched nothing. They
+        // are re-embedded from the audio they were cut from, and until
+        // then the new space simply does not see them.
+        use crate::store::meetings;
+        use crate::store::speakers;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("m");
+        meetings::set_audio_path(&connection, &meeting.id, ".data/audio/m.mp3").expect("path");
+        let (speaker_id, exemplar_id) =
+            old_space_speaker(&connection, &meeting.id, &[1.0, 0.0, 0.0]);
+
+        assert!(
+            seeds(&connection, "test", "2")
+                .expect("new space")
+                .is_empty()
+        );
+        let stale = speakers::stale_exemplars(&connection, "test", "2").expect("stale");
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].id, exemplar_id);
+        let (audio_path, sample) = stale[0].source.clone().expect("rebuildable");
+        assert_eq!(audio_path, ".data/audio/m.mp3");
+        assert_eq!((sample.start_ms, sample.end_ms), (1_000, 6_000));
+
+        let rebuilt = vec![(exemplar_id, Some(vec![0.0, 1.0, 0.0]))];
+        let adopted = adopt_rebuilt(&connection, &rebuilt, "test", "2").expect("adopt");
+        assert_eq!(
+            adopted,
+            Adopted {
+                rebuilt: 1,
+                dropped: 0,
+                speakers: 1
+            }
+        );
+
+        let offered = seeds(&connection, "test", "2").expect("seeds");
+        assert_eq!(offered.len(), 1);
+        assert_eq!(offered[0].speaker_id, speaker_id);
+        assert_eq!(offered[0].vector, vec![0.0, 1.0, 0.0], "the rebuilt vector");
+        assert!(
+            seeds(&connection, "test", "1")
+                .expect("old space")
+                .is_empty()
+        );
+        assert!(
+            speakers::stale_exemplars(&connection, "test", "2")
+                .expect("stale")
+                .is_empty()
+        );
+        let speaker = speakers::get(&connection, &speaker_id)
+            .expect("get")
+            .expect("exists");
+        assert_eq!(speaker.voiceprint_model_version.as_deref(), Some("2"));
+
+        // And a re-run in the new space recognizes the rebuilt voice.
+        let friday = meetings::start(&connection, None, None).expect("m2");
+        let again: BTreeMap<Cluster, Embedding> = [(
+            Cluster(0),
+            Embedding::new(vec![0.05, 0.97, 0.0], "test", "2", 30_000),
+        )]
+        .into_iter()
+        .collect();
+        let map = persist(&connection, &friday.id, &again, &heard(&again)).expect("persist");
+        assert_eq!(
+            map[&Cluster(0)],
+            speaker_id,
+            "recognized across the front-end change"
+        );
+    }
+
+    #[test]
+    fn evidence_with_no_audio_behind_it_is_dropped_and_the_name_stays() {
+        // An exemplar written before samples were kept, or whose Meeting
+        // is gone, cannot be rebuilt. It goes, honestly: the Speaker keeps
+        // its name and its words and loses the Voiceprint nothing can be
+        // heard of, exactly as ADR-0009's deletion leaves a Speaker.
+        use crate::store::speakers;
+        let connection = db();
+        let speaker = speakers::create(&connection, false).expect("speaker");
+        speakers::rename(&connection, &speaker.id, "Alice").expect("name");
+        speakers::add_exemplar(
+            &connection,
+            speakers::NewExemplar {
+                speaker_id: &speaker.id,
+                meeting_id: None,
+                vector: &[1.0, 0.0, 0.0],
+                model: "test",
+                model_version: "1",
+                voiced_ms: 12_000,
+                from_operator: false,
+                is_negative: false,
+                sample: None,
+            },
+        )
+        .expect("orphan");
+        speakers::set_voiceprint(&connection, &speaker.id, &[1.0, 0.0, 0.0], "test", "1")
+            .expect("voiceprint");
+
+        let stale = speakers::stale_exemplars(&connection, "test", "2").expect("stale");
+        assert_eq!(stale.len(), 1);
+        assert!(stale[0].source.is_none(), "nothing to rebuild from");
+        let adopted =
+            adopt_rebuilt(&connection, &[(stale[0].id.clone(), None)], "test", "2").expect("adopt");
+        assert_eq!(
+            adopted,
+            Adopted {
+                rebuilt: 0,
+                dropped: 1,
+                speakers: 1
+            }
+        );
+
+        let after = speakers::get(&connection, &speaker.id)
+            .expect("get")
+            .expect("exists");
+        assert!(!after.has_voiceprint, "a stranger next time");
+        assert_eq!(
+            after.display_name.as_deref(),
+            Some("Alice"),
+            "but still Alice"
+        );
+        assert!(
+            speakers::exemplars(&connection, &speaker.id)
+                .expect("rows")
+                .is_empty()
+        );
+        assert!(seeds(&connection, "test", "1").expect("old").is_empty());
+        assert!(seeds(&connection, "test", "2").expect("new").is_empty());
+    }
+
+    #[test]
+    fn a_voiceprint_nothing_can_recompute_does_not_linger_in_the_old_space() {
+        // A Speaker whose only evidence is negative keeps its Voiceprint
+        // through an ordinary refresh (there is nothing to replace it
+        // with), but a Voiceprint from the old space is not something to
+        // keep: no run would offer it, and every run would find it stale.
+        use crate::store::meetings;
+        use crate::store::speakers;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("m");
+        meetings::set_audio_path(&connection, &meeting.id, ".data/audio/m.mp3").expect("path");
+        let (speaker_id, exemplar_id) =
+            old_space_speaker(&connection, &meeting.id, &[1.0, 0.0, 0.0]);
+        connection
+            .execute(
+                "UPDATE speaker_exemplars SET is_negative = 1 WHERE id = ?1",
+                rusqlite::params![exemplar_id],
+            )
+            .expect("negate");
+
+        let adopted = adopt_rebuilt(
+            &connection,
+            &[(exemplar_id.clone(), Some(vec![0.0, 1.0, 0.0]))],
+            "test",
+            "2",
+        )
+        .expect("adopt");
+        assert_eq!(adopted.rebuilt, 1);
+
+        let after = speakers::get(&connection, &speaker_id)
+            .expect("get")
+            .expect("exists");
+        assert!(!after.has_voiceprint);
+        let evidence = speakers::exemplars(&connection, &speaker_id).expect("rows");
+        assert_eq!(evidence.len(), 1, "the negative evidence is kept");
+        assert_eq!(evidence[0].model_version, "2", "in the new space");
+        assert!(
+            speakers::stale_exemplars(&connection, "test", "2")
+                .expect("stale")
+                .is_empty()
+        );
+        assert!(
+            speakers::speakers_with_stale_voiceprint(&connection, "test", "2")
+                .expect("stale prints")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_voiceprint_averages_one_space_only() {
+        // Two spaces averaged together is a vector in neither. After a
+        // rebuild every row is in one space, but the refresh guards it
+        // anyway: the newest evidence decides the space.
+        use crate::store::meetings;
+        use crate::store::speakers;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("m");
+        let speaker = speakers::create(&connection, false).expect("speaker");
+        for (vector, version) in [([1.0_f32, 0.0, 0.0], "1"), ([0.0, 1.0, 0.0], "2")] {
+            speakers::add_exemplar(
+                &connection,
+                speakers::NewExemplar {
+                    speaker_id: &speaker.id,
+                    meeting_id: Some(&meeting.id),
+                    vector: &vector,
+                    model: "test",
+                    model_version: version,
+                    voiced_ms: 12_000,
+                    from_operator: false,
+                    is_negative: false,
+                    sample: None,
+                },
+            )
+            .expect("exemplar");
+        }
+        refresh_voiceprint(&connection, &speaker.id).expect("refresh");
+        let offered = seeds(&connection, "test", "2").expect("seeds");
+        assert_eq!(offered.len(), 1);
+        assert_eq!(
+            offered[0].vector,
+            vec![0.0, 1.0, 0.0],
+            "the old vector did not pull it"
         );
     }
 

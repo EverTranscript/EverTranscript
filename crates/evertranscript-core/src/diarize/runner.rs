@@ -129,9 +129,9 @@ pub fn decode(path: &Path) -> Result<DecodedMeeting> {
 /// Linear rather than a windowed sinc, and that is a deliberate limit: this
 /// feeds speaker embeddings, which care about spectral envelope over
 /// hundreds of milliseconds, not about the imaging artefacts a cheap
-/// resampler leaves above 7 kHz — and the mel bank stops at 7.6 kHz anyway.
+/// resampler leaves above 7 kHz, which land in the top few mel bins.
 /// The transcription path uses `rubato` where it matters.
-fn resample_to_model_rate(samples: &[f32], from_rate: u32) -> Vec<f32> {
+pub fn resample_to_model_rate(samples: &[f32], from_rate: u32) -> Vec<f32> {
     if from_rate == SAMPLE_RATE || samples.is_empty() {
         return samples.to_vec();
     }
@@ -144,6 +144,54 @@ fn resample_to_model_rate(samples: &[f32], from_rate: u32) -> Vec<f32> {
             let right = (left + 1).min(samples.len() - 1);
             let fraction = (source - left as f64) as f32;
             samples[left.min(samples.len() - 1)] * (1.0 - fraction) + samples[right] * fraction
+        })
+        .collect()
+}
+
+/// The embedding model, as [`rebuild`] sees it: samples in, a vector out,
+/// or nothing when there are too few to embed.
+pub type Embed<'a> = dyn FnMut(&[f32]) -> Result<Option<Vec<f32>>, DiarizeError> + 'a;
+
+/// Re-embeds stale exemplars from the audio they were cut from.
+///
+/// One vector per exemplar, or `None` where there is nothing to rebuild
+/// from: no sample window, a deleted Meeting, a recording that is gone, or
+/// audio the model cannot embed. `embed` is the model, passed in so the
+/// reading and resampling can be checked without one.
+///
+/// The window is read raw. The run that cut it heard the microphone with
+/// the far end cancelled, and this hears it as the Registry plays it; the
+/// window was chosen as a stretch of one voice alone, so the difference is
+/// what echo survived in it, and a fresh canceller started cold at the
+/// window's edge would not be the converged one anyway.
+pub fn rebuild(
+    stale: &[crate::store::speakers::StaleExemplar],
+    history_dir: &Path,
+    embed: &mut Embed<'_>,
+) -> Vec<(String, Option<Vec<f32>>)> {
+    stale
+        .iter()
+        .map(|exemplar| {
+            let vector = exemplar.source.as_ref().and_then(|(audio_path, sample)| {
+                let path = history_dir.join(audio_path);
+                let (samples, rate) = crate::audio::sample::read(
+                    &path,
+                    sample.channel,
+                    sample.start_ms.max(0) as u64,
+                    sample.end_ms.max(0) as u64,
+                )
+                .inspect_err(|error| {
+                    tracing::warn!(%error, exemplar = %exemplar.id, "could not read the sample to rebuild from");
+                })
+                .ok()?;
+                embed(&resample_to_model_rate(&samples, rate))
+                    .inspect_err(|error| {
+                        tracing::warn!(%error, exemplar = %exemplar.id, "could not re-embed the sample");
+                    })
+                    .ok()
+                    .flatten()
+            });
+            (exemplar.id.clone(), vector)
         })
         .collect()
 }
@@ -226,6 +274,95 @@ pub fn run_guarded(
 mod tests {
     use super::*;
     use crate::diarize::fixture::FixtureDiarizer;
+
+    #[tokio::test]
+    async fn a_stale_exemplar_is_rebuilt_from_its_own_seconds_of_the_recording() {
+        // The window is read from the Meeting's kept audio, resampled to
+        // the model's rate, and embedded; what has no recording behind it
+        // yields nothing rather than a guess.
+        use crate::audio::CaptureOffset;
+        use crate::audio::StereoBlock;
+        use crate::audio::sink::AudioSink;
+        use crate::store::speakers::Sample;
+        use crate::store::speakers::StaleExemplar;
+        use evertranscript_protocol::AudioChannel;
+
+        let dir = tempfile::tempdir().expect("dir");
+        let mut sink = AudioSink::new(dir.path(), "rebuild1").expect("sink");
+        let frames = crate::audio::SAMPLE_RATE as usize / 10;
+        for block in 0..40 {
+            // 4 s: 220 Hz on the mic, 880 Hz on the system leg.
+            let mut samples = Vec::with_capacity(frames * 2);
+            for index in 0..frames {
+                let t = (block * frames + index) as f32 / crate::audio::SAMPLE_RATE as f32;
+                samples.push((t * 220.0 * std::f32::consts::TAU).sin() * 0.5);
+                samples.push((t * 880.0 * std::f32::consts::TAU).sin() * 0.5);
+            }
+            sink.write(&StereoBlock {
+                offset: CaptureOffset::ZERO,
+                samples,
+            })
+            .await
+            .expect("write");
+        }
+        let path = sink.finalize().await.expect("finalize").expect("a file");
+        let relative = path
+            .strip_prefix(dir.path())
+            .expect("under the dir")
+            .to_string_lossy()
+            .into_owned();
+
+        let stale = vec![
+            StaleExemplar {
+                id: "kept".into(),
+                speaker_id: "s".into(),
+                source: Some((
+                    relative,
+                    Sample {
+                        channel: AudioChannel::Mic,
+                        start_ms: 1_000,
+                        end_ms: 3_000,
+                    },
+                )),
+            },
+            StaleExemplar {
+                id: "orphan".into(),
+                speaker_id: "s".into(),
+                source: None,
+            },
+            StaleExemplar {
+                id: "gone".into(),
+                speaker_id: "s".into(),
+                source: Some((
+                    "no-such.mp3".into(),
+                    Sample {
+                        channel: AudioChannel::Mic,
+                        start_ms: 0,
+                        end_ms: 1_000,
+                    },
+                )),
+            },
+        ];
+
+        let rebuilt = rebuild(&stale, dir.path(), &mut |samples| {
+            assert!(
+                (samples.len() as i64 - 2 * SAMPLE_RATE as i64).abs() < SAMPLE_RATE as i64 / 100,
+                "two seconds at the model's rate, got {}",
+                samples.len()
+            );
+            let crossings = samples
+                .windows(2)
+                .filter(|pair| (pair[0] < 0.0) != (pair[1] < 0.0))
+                .count();
+            let hz = crossings as f32 / 2.0 / (samples.len() as f32 / SAMPLE_RATE as f32);
+            assert!((hz - 220.0).abs() < 30.0, "the mic's tone, got {hz} Hz");
+            Ok(Some(vec![1.0]))
+        });
+        assert_eq!(rebuilt.len(), 3);
+        assert_eq!(rebuilt[0], ("kept".to_string(), Some(vec![1.0])));
+        assert_eq!(rebuilt[1], ("orphan".to_string(), None));
+        assert_eq!(rebuilt[2], ("gone".to_string(), None));
+    }
 
     #[test]
     fn a_second_run_is_refused_rather_than_queued() {

@@ -1358,6 +1358,23 @@ impl Core {
             return Ok(0);
         }
 
+        // Evidence from a previous model or front end, to be rebuilt from
+        // its kept audio before this run reads seeds — otherwise every
+        // Speaker History knows would be a stranger to it (ADR-0035,
+        // DECISIONS Q115). Read here, re-embedded beside the Meeting below,
+        // adopted in the same transaction as this run's own evidence.
+        let stale = self
+            .store
+            .read(|connection| {
+                crate::store::speakers::stale_exemplars(
+                    connection,
+                    diarize::live::EMBEDDING_MODEL,
+                    diarize::live::EMBEDDING_MODEL_VERSION,
+                )
+            })
+            .await?;
+        let history_dir = self.history_dir.clone();
+
         let cancel = diarize::Cancel::new();
         *self.diarization.lock().await = Some(DiarizeJob {
             meeting_id: meeting_id.to_string(),
@@ -1386,6 +1403,9 @@ impl Core {
                 .process(&mut decoded.mic, &decoded.system);
             let mut diarizer = diarize::live::LiveDiarizer::load(&segmentation, &embedding)
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
+            let rebuilt = diarize::runner::rebuild(&stale, &history_dir, &mut |samples| {
+                diarizer.embedder().embed(samples)
+            });
 
             let mut last_percent = u64::MAX;
             let result = diarize::runner::run_guarded(
@@ -1410,16 +1430,16 @@ impl Core {
                 },
                 &cancel,
             );
-            Ok(result)
+            Ok((result, rebuilt))
         })
         .await?;
 
         *self.diarization.lock().await = None;
 
-        let diarization = match outcome {
-            Ok(Ok(diarization)) => diarization,
-            Ok(Err(diarize::DiarizeError::Cancelled)) => return Ok(0),
-            Ok(Err(error)) => {
+        let (diarization, rebuilt) = match outcome {
+            Ok((Ok(diarization), rebuilt)) => (diarization, rebuilt),
+            Ok((Err(diarize::DiarizeError::Cancelled), _)) => return Ok(0),
+            Ok((Err(error), _)) => {
                 tracing::warn!(%error, "diarization did not run; the Meeting is unattributed");
                 return Ok(0);
             }
@@ -1438,6 +1458,20 @@ impl Core {
                 // between the two would leave History knowing less than
                 // either run had taught it.
                 let transaction = connection.transaction()?;
+                let adopted = diarize::cluster::adopt_rebuilt(
+                    &transaction,
+                    &rebuilt,
+                    diarize::live::EMBEDDING_MODEL,
+                    diarize::live::EMBEDDING_MODEL_VERSION,
+                )?;
+                if adopted.speakers > 0 {
+                    tracing::info!(
+                        rebuilt = adopted.rebuilt,
+                        dropped = adopted.dropped,
+                        speakers = adopted.speakers,
+                        "Voiceprints rebuilt for the embedding model in use"
+                    );
+                }
                 // The join first, then the Speakers. Persistence used to run
                 // before reconciliation and minted a Speaker for every
                 // cluster, words or none; now it is told which voices the
@@ -1453,7 +1487,11 @@ impl Core {
 
                 // The Operator's own Speaker, where the evidence supports one
                 // (ADR-0029 as amended).
-                let known = diarize::operator::known_operator(&transaction)?;
+                let known = diarize::operator::known_operator(
+                    &transaction,
+                    diarize::live::EMBEDDING_MODEL,
+                    diarize::live::EMBEDDING_MODEL_VERSION,
+                )?;
                 if let Some(mine) = diarize::operator::identify(&diarization, known.as_ref())
                     && let Some(speaker_id) = assigned.get(&mine)
                 {
