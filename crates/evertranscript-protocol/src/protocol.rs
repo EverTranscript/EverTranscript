@@ -1328,6 +1328,11 @@ pub struct SpeakerGetParams {
 #[ts(export)]
 pub struct SpeakerResponse {
     pub speaker: Speaker,
+    /// Present when the rename was **not** applied because the name belongs
+    /// to another Speaker. `speaker` is then unchanged, and repeating the
+    /// call with `join: true` performs the merge this describes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join_required: Option<SpeakerJoinPreview>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1404,6 +1409,29 @@ pub struct SpeakerSampleClip {
 pub struct SpeakerRenameParams {
     pub id: String,
     pub display_name: String,
+    /// Consent to fold this Speaker into the one already holding the name.
+    ///
+    /// Absent or false, a rename onto a name History already holds does
+    /// nothing and comes back describing what a join would merge, so the
+    /// Client can ask. Combining two identities should be a decision, not a
+    /// side effect of typing (ADR-0037).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub join: Option<bool>,
+}
+
+/// What a rename would merge, when the name is already taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerJoinPreview {
+    /// The Speaker that already holds the name, and would survive.
+    pub into: Speaker,
+    /// Meetings the surviving Speaker has been heard in.
+    #[ts(type = "number")]
+    pub into_meetings: i64,
+    /// Meetings the Speaker being named has been heard in.
+    #[ts(type = "number")]
+    pub from_meetings: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

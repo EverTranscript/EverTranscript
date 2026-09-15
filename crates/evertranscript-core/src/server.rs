@@ -48,6 +48,7 @@ use evertranscript_protocol::SettingsSetParams;
 use evertranscript_protocol::Speaker;
 use evertranscript_protocol::SpeakerChangedParams;
 use evertranscript_protocol::SpeakerDetailResponse;
+use evertranscript_protocol::SpeakerJoinPreview;
 use evertranscript_protocol::SpeakerListResponse;
 use evertranscript_protocol::SpeakerMeeting;
 use evertranscript_protocol::SpeakerResponse;
@@ -1281,26 +1282,75 @@ impl Core {
     }
 
     /// Names a Speaker, which also confirms its Voiceprint.
-    pub async fn speaker_rename(&self, id: &str, display_name: &str) -> Result<SpeakerResponse> {
+    ///
+    /// When the name already belongs to another Speaker this does **not**
+    /// rename: it answers with what a join would merge and leaves both rows
+    /// alone. Called again with `join` set, it folds this Speaker into that
+    /// one instead, which is what keeps "naming labels every past
+    /// appearance" true once a voice can come back as a new pseudonym
+    /// (ADR-0037).
+    pub async fn speaker_rename(
+        &self,
+        id: &str,
+        display_name: &str,
+        join: bool,
+    ) -> Result<SpeakerResponse> {
         let id = self
             .resolve_speaker(id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
         let display_name = display_name.to_string();
-        let speaker = self
+        let outcome = self
             .store
             .write(move |connection| {
-                let row = crate::store::speakers::rename(connection, &id, &display_name)?;
-                speaker_to_wire(connection, row)
+                use crate::store::speakers;
+
+                let holder = speakers::by_name(connection, &display_name)?
+                    .filter(|existing| existing.id != id);
+
+                match (holder, join) {
+                    // The ordinary rename: nobody else has the name.
+                    (None, _) => {
+                        let row = speakers::rename(connection, &id, &display_name)?;
+                        Ok((speaker_to_wire(connection, row)?, None))
+                    }
+                    // Taken, and the Operator has said to merge.
+                    (Some(existing), true) => {
+                        let row = speakers::join(connection, &id, &existing.id)?;
+                        // Naming is still confirmation: the surviving row
+                        // carries the name the Operator just re-asserted.
+                        let row = speakers::rename(connection, &row.id, &display_name)?;
+                        Ok((speaker_to_wire(connection, row)?, None))
+                    }
+                    // Taken, and nobody has been asked yet.
+                    (Some(existing), false) => {
+                        let preview = SpeakerJoinPreview {
+                            into_meetings: speakers::appearances(connection, &existing.id)?
+                                .meetings,
+                            from_meetings: speakers::appearances(connection, &id)?.meetings,
+                            into: speaker_to_wire(connection, existing)?,
+                        };
+                        let unchanged = speakers::get(connection, &id)?
+                            .ok_or_else(|| anyhow::anyhow!("no Speaker with id {id}"))?;
+                        Ok((speaker_to_wire(connection, unchanged)?, Some(preview)))
+                    }
+                }
             })
             .await?;
-        let _ = self
-            .notifications
-            .send(ServerNotification::SpeakerChanged(SpeakerChangedParams {
-                speaker: speaker.clone(),
-            }));
-        self.mirror_wake.notify_one();
-        Ok(SpeakerResponse { speaker })
+
+        let (speaker, join_required) = outcome;
+        if join_required.is_none() {
+            let _ =
+                self.notifications
+                    .send(ServerNotification::SpeakerChanged(SpeakerChangedParams {
+                        speaker: speaker.clone(),
+                    }));
+            self.mirror_wake.notify_one();
+        }
+        Ok(SpeakerResponse {
+            speaker,
+            join_required,
+        })
     }
 
     /// Deletes a Speaker's Voiceprint (story 31). The record is untouched.
@@ -1325,7 +1375,10 @@ impl Core {
             .send(ServerNotification::SpeakerChanged(SpeakerChangedParams {
                 speaker: speaker.clone(),
             }));
-        Ok(SpeakerResponse { speaker })
+        Ok(SpeakerResponse {
+            speaker,
+            join_required: None,
+        })
     }
 
     /// A few seconds of a Speaker's voice, cut from the recording their
@@ -3037,7 +3090,11 @@ impl Server {
 
             ClientRequest::SpeakerRename(params) => Ok(serde_json::to_value(
                 self.core
-                    .speaker_rename(&params.id, &params.display_name)
+                    .speaker_rename(
+                        &params.id,
+                        &params.display_name,
+                        params.join.unwrap_or(false),
+                    )
                     .await?,
             )?),
 

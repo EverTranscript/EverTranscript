@@ -192,6 +192,80 @@ pub fn rename(connection: &Connection, id: &str, display_name: &str) -> Result<S
     get(connection, id)?.ok_or_else(|| anyhow::anyhow!("the Speaker vanished after rename"))
 }
 
+/// The Speaker holding this exact name, if one does.
+///
+/// Case-insensitively, because "alice" and "Alice" are the same claim about
+/// the same person and a History with both is the duplicate this exists to
+/// prevent.
+pub fn by_name(connection: &Connection, display_name: &str) -> Result<Option<Speaker>> {
+    let sql = format!(
+        "SELECT {SPEAKER_COLUMNS} FROM speakers \
+         WHERE display_name IS NOT NULL AND display_name = ?1 COLLATE NOCASE \
+         ORDER BY id LIMIT 1"
+    );
+    Ok(connection
+        .query_row(&sql, params![display_name], row_to_speaker)
+        .optional()?)
+}
+
+/// Folds one Speaker into another, and removes the emptied row.
+///
+/// **Why this exists at all** (ADR-0037, ADR-0008 as amended): the glossary
+/// promises that naming a Speaker labels every past appearance. That is
+/// false the first time a voice returns as a fresh pseudonym, and a model
+/// change makes it certain for every voice at once — the vectors are gone,
+/// so everyone comes back a stranger. Without a join, naming the stranger
+/// "Alice" produces a second Alice and the promise quietly stops holding.
+///
+/// Everything that refers to `from` is moved rather than rewritten: segments
+/// keep their text and only their reference changes, corrections keep both
+/// directions, and exemplars move so the surviving Speaker keeps what both
+/// were taught. Then the emptied row goes, because a Speaker nothing refers
+/// to displays nowhere and ADR-0009's permanence is about the record, not
+/// about rows that no longer describe anybody.
+///
+/// Refuses to join a Speaker that has a name of its own. Merging two people
+/// the Operator has separately identified is the one act here that feels
+/// irreversible, and it should be asked for explicitly rather than reached
+/// by a rename.
+pub fn join(connection: &Connection, from: &str, into: &str) -> Result<Speaker> {
+    if from == into {
+        anyhow::bail!("a Speaker cannot be joined to itself");
+    }
+    let source =
+        get(connection, from)?.ok_or_else(|| anyhow::anyhow!("no Speaker with id {from}"))?;
+    let target =
+        get(connection, into)?.ok_or_else(|| anyhow::anyhow!("no Speaker with id {into}"))?;
+    if source.display_name.is_some() {
+        anyhow::bail!(
+            "{from} is already named; joining two named Speakers is not something a rename does"
+        );
+    }
+    if source.is_operator && !target.is_operator {
+        anyhow::bail!("the Operator's Speaker cannot be folded into another");
+    }
+
+    connection.execute(
+        "UPDATE transcript_segments SET speaker_id = ?2 WHERE speaker_id = ?1",
+        params![from, into],
+    )?;
+    connection.execute(
+        "UPDATE attribution_hints SET speaker_id = ?2 WHERE speaker_id = ?1",
+        params![from, into],
+    )?;
+    connection.execute(
+        "UPDATE attribution_hints SET replaced_speaker_id = ?2 WHERE replaced_speaker_id = ?1",
+        params![from, into],
+    )?;
+    connection.execute(
+        "UPDATE speaker_exemplars SET speaker_id = ?2 WHERE speaker_id = ?1",
+        params![from, into],
+    )?;
+    connection.execute("DELETE FROM speakers WHERE id = ?1", params![from])?;
+
+    get(connection, into)?.ok_or_else(|| anyhow::anyhow!("the Speaker vanished after join"))
+}
+
 /// Deletes a Speaker's Voiceprint and every exemplar behind it (story 31).
 ///
 /// **The only destructive biometric operation there is** (ADR-0009). The
@@ -1805,4 +1879,102 @@ mod tests {
             "the Operator's say-so is itself an attribution basis"
         );
     }
+
+    #[test]
+    fn joining_moves_every_appearance_onto_the_surviving_speaker() {
+        // ADR-0037's reason for existing: after a model change the same
+        // voice comes back as a stranger, and naming the stranger must
+        // produce one Alice rather than two.
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+
+        let alice = create(&connection, false).expect("alice");
+        rename(&connection, &alice.id, "Alice").expect("name");
+        let old_segment = segment(&connection, &meeting.id, 1);
+        attribute_segment(
+            &connection,
+            &old_segment,
+            Some(alice.id.as_str()),
+            crate::store::speakers::Attribution::Clustered,
+        )
+        .expect("attribute");
+
+        // The same person, back as a pseudonym after the vectors were
+        // cleared, heard again and carrying evidence of her own.
+        let stranger = create(&connection, false).expect("stranger");
+        let new_segment = segment(&connection, &meeting.id, 2);
+        attribute_segment(
+            &connection,
+            &new_segment,
+            Some(stranger.id.as_str()),
+            crate::store::speakers::Attribution::Clustered,
+        )
+        .expect("attribute");
+        add_exemplar(
+            &connection,
+            NewExemplar {
+                speaker_id: &stranger.id,
+                meeting_id: Some(&meeting.id),
+                vector: &[1.0, 0.0],
+                model: "m",
+                model_version: "1",
+                voiced_ms: 30_000,
+                from_operator: false,
+                is_negative: false,
+                sample: None,
+            },
+        )
+        .expect("exemplar");
+
+        let survivor = join(&connection, &stranger.id, &alice.id).expect("join");
+        assert_eq!(survivor.id, alice.id, "the named Speaker survives");
+        assert!(
+            get(&connection, &stranger.id).expect("get").is_none(),
+            "the pseudonymous row is swept"
+        );
+        assert_eq!(
+            attributed_speaker(&connection, &new_segment)
+                .expect("attributed")
+                .as_deref(),
+            Some(alice.id.as_str()),
+            "the segment follows rather than being rewritten"
+        );
+        assert_eq!(
+            exemplars(&connection, &alice.id).expect("exemplars").len(),
+            1,
+            "what the pseudonym was taught moves too"
+        );
+    }
+
+    #[test]
+    fn joining_one_named_speaker_into_another_is_refused() {
+        // The one act here that feels irreversible stays the one explicitly
+        // asked for, rather than something a rename can reach.
+        let connection = db();
+        let alice = create(&connection, false).expect("alice");
+        rename(&connection, &alice.id, "Alice").expect("name");
+        let bob = create(&connection, false).expect("bob");
+        rename(&connection, &bob.id, "Bob").expect("name");
+
+        assert!(join(&connection, &bob.id, &alice.id).is_err());
+        assert!(get(&connection, &bob.id).expect("get").is_some());
+    }
+
+    #[test]
+    fn a_name_already_held_is_found_whatever_its_case() {
+        // "alice" and "Alice" are the same claim about the same person, and
+        // a History holding both is the duplicate the join exists to stop.
+        let connection = db();
+        let alice = create(&connection, false).expect("alice");
+        rename(&connection, &alice.id, "Alice").expect("name");
+
+        assert_eq!(
+            by_name(&connection, "alice")
+                .expect("by_name")
+                .map(|s| s.id),
+            Some(alice.id)
+        );
+        assert!(by_name(&connection, "Bob").expect("by_name").is_none());
+    }
+
 }

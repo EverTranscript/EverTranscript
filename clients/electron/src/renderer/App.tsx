@@ -8,6 +8,7 @@ import { isMessageKey, plural, t } from "./i18n";
 import { parseSpans, parseSummary } from "./summary-markdown";
 import type { Speaker } from "@protocol/Speaker";
 import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
+import type { SpeakerJoinPreview } from "@protocol/SpeakerJoinPreview";
 import {
   useAudioCheck,
   useCalendarAccess,
@@ -843,6 +844,14 @@ function RegistryPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  // A name someone else already holds. Held until the Operator answers,
+  // because folding two identities together should be a decision rather
+  // than a side effect of typing (ADR-0037).
+  const [joining, setJoining] = useState<{
+    id: string;
+    name: string;
+    preview: SpeakerJoinPreview;
+  } | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<SpeakerMeeting[] | null>(null);
   // One clip at a time: the row whose voice is loaded, and the audio once
@@ -937,8 +946,18 @@ function RegistryPanel({
                   <form
                     onSubmit={(submitted) => {
                       submitted.preventDefault();
-                      if (draft.trim()) void rename(speaker.id, draft.trim());
+                      const name = draft.trim();
                       setEditingId(null);
+                      if (!name) return;
+                      void rename(speaker.id, name).then((response) => {
+                        if (response.joinRequired) {
+                          setJoining({
+                            id: speaker.id,
+                            name,
+                            preview: response.joinRequired,
+                          });
+                        }
+                      });
                     }}
                     className="flex gap-2"
                   >
@@ -1140,6 +1159,38 @@ function RegistryPanel({
                   <button
                     type="button"
                     onClick={() => setConfirmingId(null)}
+                    className="push"
+                  >
+                    {t("action.cancel")}
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {joining?.id === speaker.id ? (
+              <div className="mt-3 rounded border border-line p-3">
+                <p className="mb-2 text-xs text-ink-muted">
+                  {joining.name} {t("registry.join.held")}{" "}
+                  {joining.preview.intoMeetings}{" "}
+                  {plural("registry.meetings", joining.preview.intoMeetings)}.{" "}
+                  {t("registry.join.hint")} {joining.preview.fromMeetings}{" "}
+                  {plural("registry.meetings", joining.preview.fromMeetings)}{" "}
+                  {t("registry.join.hint.tail")}
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void rename(joining.id, joining.name, true);
+                      setJoining(null);
+                    }}
+                    className="push-default"
+                  >
+                    {t("registry.join.confirm")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setJoining(null)}
                     className="push"
                   >
                     {t("action.cancel")}
