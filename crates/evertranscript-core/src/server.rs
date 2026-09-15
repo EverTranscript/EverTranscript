@@ -125,6 +125,9 @@ pub struct Core {
     /// async to read a test override would push `.await` through a call path
     /// that has no other reason for it.
     summary_backend_factory: std::sync::Mutex<Option<SummaryBackendFactory>>,
+    /// Held for a whole Summary run, so runs go one at a time: a second
+    /// local run would load a second copy of the model beside the first.
+    summarizing: Mutex<()>,
     /// Cancels the model fetch in flight, if there is one.
     ///
     /// Held by the Core rather than made per-call, because the Client that
@@ -430,6 +433,7 @@ impl Core {
             notifications: broadcast::channel(NOTIFICATION_CAPACITY).0,
             transcriber_factory: Mutex::new(None),
             summary_backend_factory: std::sync::Mutex::new(None),
+            summarizing: Mutex::new(()),
             fetching: std::sync::Mutex::new(None),
             settings: Mutex::new(Settings::load_from(&settings_path)),
             settings_path,
@@ -597,13 +601,10 @@ impl Core {
     /// Asks the OS for calendar access (ADR-0036). The calendar poll sees a
     /// grant on its own, so nothing else has to be told.
     ///
-    /// On a blocking thread so the runtime's workers stay free — but the
-    /// server loop awaits this like any other request, so everything else
-    /// a Client asks queues behind the dialog, for as long as
-    /// `calendar::request` waits. Meeting Detection does not go through the
-    /// loop, so an unanswered prompt never holds up a recording. If the
-    /// stall ever matters, answer this one through the connection's writer
-    /// from a spawned task instead.
+    /// On a blocking thread so the runtime's workers stay free. The server
+    /// answers it off its loop, so an unanswered dialog, which
+    /// `calendar::request` waits on for up to five minutes, holds up no
+    /// other request.
     pub async fn request_calendar_access(&self) -> Result<CalendarAccessResponse> {
         let answer = tokio::task::spawn_blocking(crate::detect::calendar::request).await?;
         let granted = answer == crate::detect::calendar::Access::Granted;
@@ -804,6 +805,9 @@ impl Core {
 
     /// Generates a Summary for a finished Meeting.
     pub async fn summarize_meeting(&self, meeting_id: &str) -> Result<String> {
+        // Before the Meeting is read, so a run that waited reads it as it is
+        // now rather than as it was before the wait.
+        let _one_at_a_time = self.summarizing.lock().await;
         let Some((meeting, segments)) = self.get_meeting(meeting_id).await? else {
             anyhow::bail!("no Meeting with id {meeting_id}");
         };
@@ -2423,6 +2427,18 @@ fn describe_model(
     }
 }
 
+/// A request's result, as the message that answers it.
+fn reply(id: RequestId, result: Result<serde_json::Value>) -> JsonRpcMessage {
+    match result {
+        Ok(result) => JsonRpcMessage::Response(JsonRpcResponse { id, result }),
+        Err(error) => JsonRpcMessage::Error(JsonRpcError::new(
+            id,
+            error_codes::INTERNAL_ERROR,
+            error.to_string(),
+        )),
+    }
+}
+
 /// Per-connection state. Evaporates when the Client disconnects; the record
 /// and any in-flight work do not.
 struct Connection {
@@ -2538,15 +2554,17 @@ impl Server {
 
         match message {
             JsonRpcMessage::Request(request) => {
-                let response = self
+                if let Some(response) = self
                     .dispatch_request(
                         connection_id,
                         request.id.clone(),
                         &request.method,
                         request.params,
                     )
-                    .await;
-                self.send(connection_id, response).await;
+                    .await
+                {
+                    self.send(connection_id, response).await;
+                }
             }
             JsonRpcMessage::Notification(notification) => {
                 match ClientNotification::from_wire(&notification.method, notification.params) {
@@ -2572,22 +2590,22 @@ impl Server {
         id: RequestId,
         method: &str,
         params: Option<serde_json::Value>,
-    ) -> JsonRpcMessage {
+    ) -> Option<JsonRpcMessage> {
         let request = match ClientRequest::from_wire(method, params) {
             Ok(request) => request,
             Err(evertranscript_protocol::DecodeError::UnknownMethod(method)) => {
-                return JsonRpcMessage::Error(JsonRpcError::new(
+                return Some(JsonRpcMessage::Error(JsonRpcError::new(
                     id,
                     error_codes::METHOD_NOT_FOUND,
                     format!("unknown method: {method}"),
-                ));
+                )));
             }
             Err(err) => {
-                return JsonRpcMessage::Error(JsonRpcError::new(
+                return Some(JsonRpcMessage::Error(JsonRpcError::new(
                     id,
                     error_codes::INVALID_PARAMS,
                     err.to_string(),
-                ));
+                )));
             }
         };
 
@@ -2598,30 +2616,102 @@ impl Server {
 
         match (&request, initialized) {
             (ClientRequest::Initialize(_), true) => {
-                return JsonRpcMessage::Error(JsonRpcError::new(
+                return Some(JsonRpcMessage::Error(JsonRpcError::new(
                     id,
                     error_codes::ALREADY_INITIALIZED,
                     "this connection is already initialized",
-                ));
+                )));
             }
             (request, false) if !matches!(request, ClientRequest::Initialize(_)) => {
-                return JsonRpcMessage::Error(JsonRpcError::new(
+                return Some(JsonRpcMessage::Error(JsonRpcError::new(
                     id,
                     error_codes::NOT_INITIALIZED,
                     "send initialize before any other request",
-                ));
+                )));
             }
             _ => {}
         }
 
-        match self.handle(connection_id, request).await {
-            Ok(result) => JsonRpcMessage::Response(JsonRpcResponse { id, result }),
-            Err(error) => JsonRpcMessage::Error(JsonRpcError::new(
-                id,
-                error_codes::INTERNAL_ERROR,
-                error.to_string(),
-            )),
+        // Four requests can take minutes: a model download, a microphone
+        // check, a Summary, and the Calendars prompt, which waits up to five
+        // for an answer. This loop answers every Client and forwards every
+        // notification, so those four are answered from tasks of their own.
+        // Everything else is answered here, in the order it arrived.
+        let core = Arc::clone(&self.core);
+        match request {
+            ClientRequest::ModelsFetch(params) => {
+                self.answer_later(connection_id, id, async move {
+                    core.fetch_models(params.key.as_deref(), CancellationToken::new())
+                        .await?;
+                    Ok(serde_json::to_value(core.models_status()?)?)
+                })
+            }
+
+            // Recording, on the Core, for as long as the caller asked. It is
+            // the Core that records in production, so it is the Core that has
+            // to be the one asked — a check the Client ran in its own process
+            // would prove that Electron can reach a microphone and nothing
+            // about the process that actually captures Meetings.
+            ClientRequest::AudioCheck(params) => {
+                let seconds = params
+                    .seconds
+                    .unwrap_or(audio::check::DEFAULT_SECONDS)
+                    .clamp(1, 120);
+                self.answer_later(connection_id, id, async move {
+                    Ok(serde_json::to_value(audio::check::run(seconds).await)?)
+                })
+            }
+
+            ClientRequest::SummaryGenerate(params) => {
+                self.answer_later(connection_id, id, async move {
+                    core.summarize_meeting(&params.id).await?;
+                    let meeting = core
+                        .get_meeting(&params.id)
+                        .await?
+                        .map(|(meeting, _)| meeting)
+                        .ok_or_else(|| anyhow::anyhow!("the Meeting vanished"))?;
+                    // `announce` belongs to the loop; the Core's own channel
+                    // reaches the same Clients through it.
+                    let _ = core.notifications.send(ServerNotification::MeetingChanged(
+                        MeetingChangedParams {
+                            kind: MeetingChangeKind::Updated,
+                            meeting_id: meeting.id.clone(),
+                            meeting: Some(meeting.clone()),
+                        },
+                    ));
+                    Ok(serde_json::to_value(MeetingResponse { meeting })?)
+                })
+            }
+
+            ClientRequest::CalendarRequestAccess(_) => {
+                self.answer_later(connection_id, id, async move {
+                    Ok(serde_json::to_value(core.request_calendar_access().await?)?)
+                })
+            }
+
+            request => return Some(reply(id, self.handle(connection_id, request).await)),
         }
+        None
+    }
+
+    /// Answers a request from a task of its own, so the loop goes on serving
+    /// every other Client meanwhile.
+    fn answer_later(
+        &self,
+        connection_id: ConnectionId,
+        id: RequestId,
+        work: impl Future<Output = Result<serde_json::Value>> + Send + 'static,
+    ) {
+        // Always there: only an initialized connection gets this far.
+        let Some(connection) = self.connections.get(&connection_id) else {
+            return;
+        };
+        let writer = connection.writer.clone();
+        tokio::spawn(async move {
+            // A Client that left meanwhile has nobody to tell, and the loop
+            // drops its connection when the transport reports it closed.
+            let _ = writer.send(reply(id, work.await)).await;
+        });
     }
 
     async fn handle(
@@ -2729,27 +2819,7 @@ impl Server {
                 Ok(serde_json::to_value(HistorySearchResponse { results })?)
             }
 
-            // Recording, on the Core, for as long as the caller asked. It is
-            // the Core that records in production, so it is the Core that has
-            // to be the one asked — a check the Client ran in its own process
-            // would prove that Electron can reach a microphone and nothing
-            // about the process that actually captures Meetings.
-            ClientRequest::AudioCheck(params) => {
-                let seconds = params
-                    .seconds
-                    .unwrap_or(audio::check::DEFAULT_SECONDS)
-                    .clamp(1, 120);
-                Ok(serde_json::to_value(audio::check::run(seconds).await)?)
-            }
-
             ClientRequest::ModelsStatus(_) => Ok(serde_json::to_value(self.core.models_status()?)?),
-
-            ClientRequest::ModelsFetch(params) => {
-                self.core
-                    .fetch_models(params.key.as_deref(), CancellationToken::new())
-                    .await?;
-                Ok(serde_json::to_value(self.core.models_status()?)?)
-            }
 
             ClientRequest::ModelsCancel(_) => {
                 self.core.cancel_fetch();
@@ -2803,18 +2873,6 @@ impl Server {
                 Ok(serde_json::to_value(MeetingResponse { meeting })?)
             }
 
-            ClientRequest::SummaryGenerate(params) => {
-                self.core.summarize_meeting(&params.id).await?;
-                let meeting = self
-                    .core
-                    .get_meeting(&params.id)
-                    .await?
-                    .map(|(meeting, _)| meeting)
-                    .ok_or_else(|| anyhow::anyhow!("the Meeting vanished"))?;
-                self.announce(MeetingChangeKind::Updated, &meeting).await;
-                Ok(serde_json::to_value(MeetingResponse { meeting })?)
-            }
-
             ClientRequest::SummaryBackends(_) => {
                 Ok(serde_json::to_value(self.core.summary_backends().await)?)
             }
@@ -2843,10 +2901,6 @@ impl Server {
             }
 
             ClientRequest::PostureGet(_) => Ok(serde_json::to_value(self.core.posture().await?)?),
-
-            ClientRequest::CalendarRequestAccess(_) => Ok(serde_json::to_value(
-                self.core.request_calendar_access().await?,
-            )?),
 
             ClientRequest::SpeakerList(_) => Ok(serde_json::to_value(self.core.speakers().await?)?),
 
@@ -2896,6 +2950,14 @@ impl Server {
                 Ok(serde_json::to_value(TranscriptUnsubscribeResponse {
                     subscribed: false,
                 })?)
+            }
+
+            // `dispatch_request` answers these off the loop, never here.
+            ClientRequest::ModelsFetch(_)
+            | ClientRequest::AudioCheck(_)
+            | ClientRequest::SummaryGenerate(_)
+            | ClientRequest::CalendarRequestAccess(_) => {
+                anyhow::bail!("this request is answered off the server loop")
             }
         }
     }

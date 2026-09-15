@@ -15,6 +15,8 @@
 use std::sync::Arc;
 
 use evertranscript_core::Core;
+use evertranscript_core::Server;
+use evertranscript_core::client::CoreClient;
 use evertranscript_core::store::meetings;
 use evertranscript_core::summary::Backend;
 use evertranscript_core::summary::BackendError;
@@ -24,8 +26,11 @@ use evertranscript_core::summary::Request;
 use evertranscript_core::summary::fake::Failure;
 use evertranscript_core::summary::fake::FakeBackend;
 use evertranscript_core::summary::fake::Response;
+use evertranscript_core::transport;
 use evertranscript_protocol::AudioChannel;
+use evertranscript_protocol::MeetingResponse;
 use evertranscript_protocol::SettingsSetParams;
+use tokio_util::sync::CancellationToken;
 
 /// A Meeting with `lines` of transcript already in the store.
 ///
@@ -264,6 +269,68 @@ async fn switching_the_knob_mid_generation_leaves_the_run_alone() {
         Some("local"),
         "the switch itself should hold for the next run"
     );
+}
+
+#[tokio::test]
+async fn a_summary_being_generated_does_not_hold_up_other_clients() {
+    // One loop answers every Client and forwards every notification, and it
+    // used to wait out a Summary before reading the next request: for the
+    // minutes a local run takes, even a Stop from the window went unanswered.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core_in(dir.path(), "local").await;
+    let (started, reached) = std::sync::mpsc::channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let backend = Arc::new(std::sync::Mutex::new(Some(Held {
+        inner: FakeBackend::returning("# Held back\n\nBody."),
+        started: Some(started),
+        release: Some(held),
+    })));
+    core.set_summary_backend_factory(Arc::new(move || {
+        let backend = backend.lock().unwrap().take().expect("built once");
+        (Box::new(backend), None)
+    }));
+    let id = meeting_of(&core, 3).await;
+
+    let socket = dir.path().join("s");
+    let listener = transport::bind(&socket).await.expect("bind");
+    let (events_tx, events_rx) = tokio::sync::mpsc::channel(64);
+    let shutdown = CancellationToken::new();
+    tokio::spawn(Server::new(Arc::clone(&core)).run(events_rx, shutdown.clone()));
+    tokio::spawn(transport::serve(listener, events_tx, shutdown.clone()));
+
+    let mut window = CoreClient::connect_to(&socket).await.expect("connect");
+    window
+        .initialize("window", "0.0.0")
+        .await
+        .expect("initialize");
+    let run = tokio::spawn(async move {
+        window
+            .request::<MeetingResponse>("summary/generate", Some(serde_json::json!({ "id": id })))
+            .await
+    });
+    tokio::task::spawn_blocking(move || reached.recv_timeout(std::time::Duration::from_secs(30)))
+        .await
+        .expect("join")
+        .expect("the run should have reached its Backend");
+
+    let mut other = CoreClient::connect_to(&socket).await.expect("connect");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        other.initialize("cli", "0.0.0").await.expect("initialize");
+        other.status().await.expect("status");
+    })
+    .await
+    .expect("another Client should be answered while a Summary is generated");
+
+    release.send(()).expect("release");
+    let answered = run.await.expect("join").expect("summary/generate");
+    assert!(
+        answered
+            .meeting
+            .summary
+            .is_some_and(|summary| summary.contains("Held back")),
+        "the Client that asked should still get the Summary"
+    );
+    shutdown.cancel();
 }
 
 #[tokio::test]
