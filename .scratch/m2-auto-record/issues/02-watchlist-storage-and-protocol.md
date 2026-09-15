@@ -11,4 +11,4 @@ Status: done
 - [x] The helper→responsible-app table ships as seed data, ported with attribution and a `PORTS.md` entry (~25 Chromium/Electron helper bundle ids; the Windows exe→id twin lands with 05)
 - [x] Protocol: read and edit the Watchlist over the ADR-0028 surface, additively — `watchlist/list`, add, remove, and the suggested-entry promotion. Bindings and schema fixtures regenerate and are committed
 - [x] CLI: `evertranscript watchlist [list|add|remove]`, speaking to the running Core like every other subcommand (story 16)
-- [x] Adding or removing an app takes effect without restarting the Core: the Operator's edit is a live act, not a next-launch one
+- [x] Adding or removing an app takes effect without restarting the Core: the Operator's edit is a live act, not a next-launch one. *Not true when first ticked:* the driver read the Watchlist once, at start. Since 2026-09-15 it re-reads it on every detection event (`DECISIONS.md` Q105), checked by `a_watchlist_edit_takes_effect_without_a_restart`

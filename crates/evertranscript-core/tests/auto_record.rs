@@ -11,17 +11,27 @@ use std::sync::Arc;
 use evertranscript_core::Core;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
+use evertranscript_core::detect::DetectionEvent;
 use evertranscript_core::detect::DetectionSource;
 use evertranscript_core::detect::fixture::FixtureDetectionSource;
 use evertranscript_core::detect::fixture::Timeline;
 use evertranscript_core::detect::notify::SilentNotifier;
 use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::SettingsSetParams;
+use evertranscript_protocol::WatchlistAddParams;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// A Core whose capture is a script and whose detection is a timeline.
 async fn core_watching(
-    timeline: Vec<evertranscript_core::detect::DetectionEvent>,
+    timeline: Vec<DetectionEvent>,
+) -> (Arc<Core>, tempfile::TempDir, CancellationToken) {
+    core_detecting(Box::new(FixtureDetectionSource::new(timeline))).await
+}
+
+/// The same, with detection from any source.
+async fn core_detecting(
+    source: Box<dyn DetectionSource>,
 ) -> (Arc<Core>, tempfile::TempDir, CancellationToken) {
     let dir = tempfile::tempdir().expect("tempdir");
     let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
@@ -34,7 +44,6 @@ async fn core_watching(
     .await;
 
     let shutdown = CancellationToken::new();
-    let source: Box<dyn DetectionSource> = Box::new(FixtureDetectionSource::new(timeline));
     tokio::spawn(evertranscript_core::detect::driver::run(
         Arc::clone(&core),
         vec![source],
@@ -42,6 +51,30 @@ async fn core_watching(
         shutdown.clone(),
     ));
     (core, dir, shutdown)
+}
+
+/// Detection the test speaks through as it goes, so the record can be
+/// changed between two events.
+struct Relay(Option<mpsc::UnboundedReceiver<DetectionEvent>>);
+
+impl DetectionSource for Relay {
+    fn start(&mut self, events: mpsc::Sender<DetectionEvent>) -> anyhow::Result<()> {
+        let mut script = self.0.take().expect("a source starts once");
+        tokio::spawn(async move {
+            while let Some(event) = script.recv().await {
+                if events.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(())
+    }
+
+    fn stop(&mut self) {}
+
+    fn describe(&self) -> String {
+        "relay".to_string()
+    }
 }
 
 /// Long enough for the driver to have done nothing.
@@ -149,6 +182,81 @@ async fn the_auto_record_switch_turns_the_whole_thing_off() {
     assert!(
         core.list_meetings(10, 0).await.expect("list").is_empty(),
         "Auto-Record was off and something still recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_watchlist_edit_takes_effect_without_a_restart() {
+    // Ticket 02: the Operator's edit is a live act, not a next-launch one.
+    let (script, events) = mpsc::unbounded_channel();
+    let (core, _dir, shutdown) = core_detecting(Box::new(Relay(Some(events)))).await;
+    let send = |timeline: Timeline| {
+        for event in timeline.into_events() {
+            script.send(event).expect("the driver is listening");
+        }
+    };
+
+    // A Meeting first, which is also the proof that the driver has read the
+    // Watchlist it started with: an edit before that read proves nothing.
+    send(
+        Timeline::new()
+            .mic_held("us.zoom.xos")
+            .wait(60_000)
+            .mic_released("us.zoom.xos")
+            .wait(30_000)
+            .tick(),
+    );
+    settle_until(&core, |m| {
+        m.first().is_some_and(|meeting| meeting.ended_at.is_some())
+    })
+    .await;
+
+    core.watchlist_remove("com.microsoft.teams2")
+        .await
+        .expect("remove");
+    core.watchlist_add(WatchlistAddParams {
+        id: "com.tencent.xinWeChat".to_string(),
+        name: None,
+        kind: None,
+    })
+    .await
+    .expect("add");
+
+    // Teams takes the microphone, then WeChat does. A driver still holding
+    // the list it started with records Teams and never WeChat.
+    send(
+        Timeline::new()
+            .wait(100_000)
+            .mic_held("com.microsoft.teams2")
+            .wait(10_000)
+            .mic_held("com.tencent.xinWeChat")
+            .wait(60_000)
+            .mic_released("com.microsoft.teams2")
+            .mic_released("com.tencent.xinWeChat")
+            .wait(30_000)
+            .tick(),
+    );
+    settle_until(&core, |m| {
+        m.len() == 2 && m.iter().all(|meeting| meeting.ended_at.is_some())
+    })
+    .await;
+    shutdown.cancel();
+
+    let mut recorded: Vec<_> = core
+        .list_meetings(10, 0)
+        .await
+        .expect("list")
+        .into_iter()
+        .map(|meeting| meeting.detected_app)
+        .collect();
+    recorded.sort();
+    assert_eq!(
+        recorded,
+        [
+            Some("com.tencent.xinWeChat".to_string()),
+            Some("us.zoom.xos".to_string())
+        ],
+        "the removed app recorded, or the added one did not"
     );
 }
 

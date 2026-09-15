@@ -1390,3 +1390,13 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Justification:** Each option changes a product promise or a cost only Frank can weigh. The first spends on a signing certificate and installer work for a store that may be empty. The second reverses a privacy line ADR-0036 drew on purpose. The third leaves the Windows ship gate with one ambient sense instead of two. The evidence is one machine's store plus reports about the new Outlook, so it is worth confirming against a Windows machine whose calendar is actually in use before choosing.
 **Outcome:** escalated
 **Ref:** .scratch/m2-auto-record/issues/07-calendar-arming.md
+
+## Q105 — m2-auto-record/02 — gate-resolution
+
+**Question:** The driver now re-reads the Watchlist on every detection event, so an edit takes effect in a running Core. What should happen to a recording when the Operator removes the app it is recording? Ticket 02 and ADR-0024/0030 say an edit is live but not what it does to a Meeting already under way.
+**Options considered:** the recording ends the way a meeting ends, through the continuity window, because the trigger is gone (chosen) / the recording carries on until its meeting ends and the edit only affects later triggers
+**Chosen:** The recording ends 15 s after the removal is read, the same as when the app releases the microphone. Nothing was written for it: it follows from the trigger requiring Watchlist membership and a hot microphone in the same app. Adding an app that already holds the microphone starts recording at the next event, as joining a meeting late does.
+**Decided-by:** agent
+**Justification:** Match the existing rule rather than add a latch. ADR-0024 asks for membership and microphone use together, and a policy that keeps recording an app the Operator has just taken off the list records something they excluded. For contrast, anarlog filters an ignored app's microphone events out entirely (`plugins/detect/src/policy.rs`, `filter_apps`), so a session started from that app stops ending by itself; this avoids that. It differs from the Auto-Record switch, which turned off leaves a running recording alone until the Operator stops it. Checked by `a_watchlist_edit_takes_effect_without_a_restart`, which removes one app and adds another between two meetings.
+**Outcome:** assumed
+**Ref:** (pending)

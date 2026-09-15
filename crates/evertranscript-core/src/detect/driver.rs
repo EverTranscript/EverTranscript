@@ -83,6 +83,14 @@ pub async fn run(
         let settings = core.settings().await;
         policy.set_enabled(settings.auto_record);
         policy.set_acknowledged(settings.briefing_acknowledged);
+        // The Watchlist too, for the same reason: adding or removing an app
+        // is a live act (ticket 02). It is a store read rather than a copy
+        // in memory, a few a second at the detectors' pace, and a read that
+        // fails keeps the list from the last one.
+        match core.watchlist_for_detection().await {
+            Ok(list) => policy.set_watchlist(list),
+            Err(error) => debug!(%error, "could not re-read the Watchlist; keeping the last one"),
+        }
 
         // The Operator pressing Stop is invisible to the policy — it sees
         // the machine, and a person is not part of the machine. If the
