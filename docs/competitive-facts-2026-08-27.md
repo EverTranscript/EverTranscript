@@ -33,4 +33,17 @@ The claim has been removed from `audio/mod.rs`, which points here instead — a 
 
 Also mined 2026-09-05, not yet acted on: anarlog ships **no ffmpeg** — `hound` (WAV), `vorbis_rs` (Ogg Vorbis), `mp3lame-encoder`, in-process; its `audio-device` crate is device *enumeration* over `cidre::core_audio` (not ScreenCaptureKit), and capture proper lives in `audio-actual`. Its `audio-norm/encode.rs` and `audio-utils/vorbis.rs` are prior art for the codec question reopened in ADR-0032. None of its eleven audio crates are published to crates.io — they are workspace-internal path members, so they are prior art to read, never a dependency (`.scratch/kept-audio-codec/spec.md`).
 
+## Correction, 2026-09-15 — anarlog local diarization
+
+The table row, the "no longer thin" paragraph above, and `implementation-notes-2026-08-27.md` (M3, "Clustering reality check") all say anarlog's *local* multi-speaker clustering is a stub — `pyannote-local` unwired, embeddings returning zeros, clustering left to pyannote.ai's cloud. **That was true on 2026-08-27 and stopped being true on 2026-09-02**: anarlog PRs #7244 and #7251 (commits `ba1bfbd090`, `0b0d79b0d0`) landed a working on-device pipeline. Verified against HEAD `cbd2468f8f` (2026-09-15):
+
+- `crates/pyannote-local` is a full Rust port of pyannote 3.1's shape — segmentation-3.0 powerset on 10 s windows stepped 2.0 s, overlapped frames masked out of the embedding input, 0.3 s of activity before a speaker is embedded and 1.0 s of *clean* speech before its window is a clustering anchor, centroid-linkage agglomerative clustering cut at 0.7045, min cluster 12 s, max 1800 windows (`pipeline.rs` `DiarizationConfig::default`). Both ONNX models are compiled in with `include_bytes!`; there is no download.
+- `crates/embedding` is WeSpeaker ResNet34, 256-d, the same model this product ships (node names in the ONNX confirm the ResNet backbone with stats pooling).
+- It runs on the desktop path: `listener2-core/batch/diarize.rs` diarizes locally whenever a local ASR provider returned unlabeled words; cloud transcripts get a local re-embed-and-merge pass in `batch/consolidate.rs`. pyannote.ai survives only as an opt-in provider adapter in `owhisper-client` and server-side in `apps/api`.
+- Voiceprint spans are unchanged from the 08-27 read and still come from **ASR word timings**, not the diarizer: merge gap 400 ms, subtract same-channel overlap, clip to middle 10 s, drop under 1.5 s, keep the 3 longest per speaker; match at cosine ≥ 0.62 with ≥ 0.08 margin, mutual-best, never across mic/system domains.
+
+This is staleness rather than a third under-read: the 08-27 deep-mine was right on its date. What it changes for us: **Granola is no longer the only shipped local pipeline** — anarlog now runs the same two models on the same 10 s windows, with sliding overlap and per-window masking that this product's `diarize/live.rs` deliberately omits (its 10 s windows do not overlap and per-window identity is not stitched; Q112 in `DECISIONS.md` attributes ~33 of the measured 49.7 DER points to that). anarlog's constants are therefore a second reference alongside Granola's for the Q112 turn-placement work. The Closed Boundary differentiator stands: anarlog still ships cloud paths for transcript and summary content.
+
+Full four-way comparison with Granola's live worker and Swift sidecar constants: `AGENTS.local.md` on mac-mini-m2 (host-local, not synced).
+
 Adopted implications live in ADR-0027–0032.
