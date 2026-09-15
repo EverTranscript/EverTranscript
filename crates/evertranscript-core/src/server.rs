@@ -1453,7 +1453,12 @@ impl Core {
 
                 // The Operator's own Speaker, where the evidence supports one
                 // (ADR-0029 as amended).
-                let known = diarize::operator::known_operator(&transaction)?;
+                let known = match diarize::cluster::embedding_model(&diarization.embeddings) {
+                    Some((model, version)) => {
+                        diarize::operator::known_operator(&transaction, model, version)?
+                    }
+                    None => None,
+                };
                 if let Some(mine) = diarize::operator::identify(&diarization, known.as_ref())
                     && let Some(speaker_id) = assigned.get(&mine)
                 {

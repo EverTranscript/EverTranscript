@@ -126,22 +126,34 @@ pub fn ensure_operator_speaker(connection: &rusqlite::Connection) -> anyhow::Res
     Ok(crate::store::speakers::create(connection, true)?.id)
 }
 
-/// The Operator's Voiceprint, for seeding.
-pub fn known_operator(connection: &rusqlite::Connection) -> anyhow::Result<Option<SeedVoice>> {
+/// The Operator's Voiceprint, for seeding, in the vector space `model` names.
+///
+/// Returns `None` when the Operator's Voiceprint was made by a different
+/// embedding, which is the same answer as having none: [`identify`] then
+/// falls through to [`bootstrap`], and the channel decides. That is the
+/// correct behaviour after a model change and the reason this takes a model
+/// at all (ADR-0037).
+pub fn known_operator(
+    connection: &rusqlite::Connection,
+    model: &str,
+    model_version: &str,
+) -> anyhow::Result<Option<SeedVoice>> {
     let Some(speaker) = crate::store::speakers::operator(connection)? else {
         return Ok(None);
     };
     if !speaker.has_voiceprint {
         return Ok(None);
     }
-    Ok(crate::store::speakers::voiceprints(connection)?
-        .into_iter()
-        .find(|(id, _, _)| *id == speaker.id)
-        .map(|(speaker_id, vector, confirmed)| SeedVoice {
-            speaker_id,
-            vector,
-            confirmed,
-        }))
+    Ok(
+        crate::store::speakers::voiceprints(connection, model, model_version)?
+            .into_iter()
+            .find(|(id, _, _)| *id == speaker.id)
+            .map(|(speaker_id, vector, confirmed)| SeedVoice {
+                speaker_id,
+                vector,
+                confirmed,
+            }),
+    )
 }
 
 #[cfg(test)]
@@ -319,15 +331,23 @@ mod tests {
     fn the_operator_is_not_offered_as_a_seed_until_they_have_a_voiceprint() {
         let mut connection = rusqlite::Connection::open_in_memory().expect("open");
         crate::store::schema::migrate(&mut connection).expect("migrate");
-        assert!(known_operator(&connection).expect("none yet").is_none());
+        assert!(
+            known_operator(&connection, "m", "1")
+                .expect("none yet")
+                .is_none()
+        );
 
         let id = ensure_operator_speaker(&connection).expect("create");
-        assert!(known_operator(&connection).expect("still none").is_none());
+        assert!(
+            known_operator(&connection, "m", "1")
+                .expect("still none")
+                .is_none()
+        );
 
         crate::store::speakers::set_voiceprint(&connection, &id, &[1.0, 0.0], "m", "1")
             .expect("voiceprint");
         assert_eq!(
-            known_operator(&connection)
+            known_operator(&connection, "m", "1")
                 .expect("now")
                 .map(|seed| seed.speaker_id),
             Some(id)

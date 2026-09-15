@@ -562,6 +562,7 @@ mod tests {
             display_name: "Test",
             filename: "test-model.bin",
             remote_path: "test-model.bin",
+            version: "1",
             integrity: Integrity {
                 size_bytes: size,
                 sha256: None,

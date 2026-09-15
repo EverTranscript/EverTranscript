@@ -105,8 +105,15 @@ impl LiveDiarizer {
             segmentation: open(segmentation)?,
             embedding: open(embedding)?,
             mel: MelBank::new(),
-            model_name: "wespeaker-voxceleb-resnet34-LM".to_string(),
-            model_version: "1".to_string(),
+            // Read from the registry rather than written here. A literal in
+            // this constructor is an account of what produced a Voiceprint
+            // that nobody updates when the model behind it changes, and the
+            // guard in `cluster::seeds` is only as true as this stamp
+            // (ADR-0037).
+            model_name: crate::models::registry::DIARIZE_EMBEDDING.key.to_string(),
+            model_version: crate::models::registry::DIARIZE_EMBEDDING
+                .version
+                .to_string(),
         })
     }
 

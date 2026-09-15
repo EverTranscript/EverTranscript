@@ -311,16 +311,39 @@ pub fn centroid(exemplars: &[(Vec<f32>, i64, bool)]) -> Option<Vec<f32>> {
 
 // ---- Where clustering meets the record ----
 
-/// Every voice History can offer this Meeting's clusterer.
-pub fn seeds(connection: &rusqlite::Connection) -> anyhow::Result<Vec<SeedVoice>> {
-    Ok(crate::store::speakers::voiceprints(connection)?
-        .into_iter()
-        .map(|(speaker_id, vector, confirmed)| SeedVoice {
-            speaker_id,
-            vector,
-            confirmed,
-        })
-        .collect())
+/// Every voice History can offer this Meeting's clusterer, in the vector
+/// space this run is working in.
+///
+/// The model arguments are not optional bookkeeping. A Voiceprint made by a
+/// different embedding is not a worse match, it is not a match at all, and
+/// offering one as a seed asks [`resolve`] a question its thresholds cannot
+/// answer (ADR-0037).
+pub fn seeds(
+    connection: &rusqlite::Connection,
+    model: &str,
+    model_version: &str,
+) -> anyhow::Result<Vec<SeedVoice>> {
+    Ok(
+        crate::store::speakers::voiceprints(connection, model, model_version)?
+            .into_iter()
+            .map(|(speaker_id, vector, confirmed)| SeedVoice {
+                speaker_id,
+                vector,
+                confirmed,
+            })
+            .collect(),
+    )
+}
+
+/// The model identity a set of this Meeting's embeddings was made with.
+///
+/// Every embedding in one run carries the same stamp, so the first is the
+/// run's. `None` for an empty run, which needs no seeds anyway.
+pub fn embedding_model(embeddings: &BTreeMap<Cluster, Embedding>) -> Option<(&str, &str)> {
+    embeddings
+        .values()
+        .next()
+        .map(|embedding| (embedding.model.as_str(), embedding.model_version.as_str()))
 }
 
 /// Recomputes a Speaker's Voiceprint from the evidence it still holds, or
@@ -402,7 +425,14 @@ pub fn persist(
         refresh_voiceprint(connection, &speaker_id)?;
     }
 
-    let known = seeds(connection)?;
+    // Seeded only from vectors this run could actually compare against. A
+    // run whose embeddings came from a model History has never seen starts
+    // with no seeds at all, which is recognition restarting rather than
+    // recognition going quietly wrong (ADR-0037).
+    let known = match embedding_model(embeddings) {
+        Some((model, version)) => seeds(connection, model, version)?,
+        None => Vec::new(),
+    };
     let resolved = resolve(embeddings, &known);
     let mut assigned = BTreeMap::new();
 
@@ -770,6 +800,55 @@ mod tests {
     }
 
     #[test]
+    fn a_voiceprint_from_another_model_is_never_offered_as_a_seed() {
+        // ADR-0037's standing guard. The migration deletes old vectors, but
+        // this is what holds if one ever survives — and it is what makes a
+        // model change restart recognition honestly instead of comparing
+        // numbers that do not measure the same thing.
+        use crate::store::meetings;
+        let connection = db();
+
+        let monday = meetings::start(&connection, None, None).expect("m1");
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        persist(&connection, &monday.id, &first, &heard(&first)).expect("persist");
+
+        // Present for the model that made it.
+        assert_eq!(seeds(&connection, "test", "1").expect("seeds").len(), 1);
+        // Absent for any other, by name or by version.
+        assert!(seeds(&connection, "other", "1").expect("seeds").is_empty());
+        assert!(seeds(&connection, "test", "2").expect("seeds").is_empty());
+    }
+
+    #[test]
+    fn same_width_vectors_from_different_models_do_not_recognize_each_other() {
+        // The case vector length cannot catch. `cosine` scores mismatched
+        // widths zero, which happens to save us for 256 against 192 and
+        // would not for two 192-d models — so the guard cannot be a
+        // coincidence of dimensions.
+        use crate::store::meetings;
+        let connection = db();
+
+        let monday = meetings::start(&connection, None, None).expect("m1");
+        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let before = persist(&connection, &monday.id, &first, &heard(&first)).expect("persist");
+
+        // The very same vector, stamped by a different model of equal width.
+        let friday = meetings::start(&connection, None, None).expect("m2");
+        let mut same: BTreeMap<Cluster, Embedding> = BTreeMap::new();
+        same.insert(
+            Cluster(0),
+            Embedding::new(vec![1.0, 0.0, 0.0], "successor", "1", 30_000),
+        );
+        let after = persist(&connection, &friday.id, &same, &heard(&same)).expect("persist");
+
+        assert_ne!(
+            after[&Cluster(0)],
+            before[&Cluster(0)],
+            "an identical vector from another model must not be recognized as the same Speaker"
+        );
+    }
+
+    #[test]
     fn a_deleted_voiceprint_stops_seeding_future_meetings() {
         // Story 31's real consequence: deletion has to actually stop
         // recognition, not just blank a column. If the vector kept seeding
@@ -783,7 +862,7 @@ mod tests {
         let speaker_id = map[&Cluster(0)].clone();
 
         crate::store::speakers::delete_voiceprint(&connection, &speaker_id).expect("delete");
-        assert!(seeds(&connection).expect("seeds").is_empty());
+        assert!(seeds(&connection, "test", "1").expect("seeds").is_empty());
 
         let friday = meetings::start(&connection, None, None).expect("m2");
         let again = clusters(&[(0, &[1.0, 0.0, 0.0])]);

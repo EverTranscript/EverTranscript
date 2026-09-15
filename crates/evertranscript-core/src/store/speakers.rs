@@ -748,11 +748,27 @@ pub fn appearances(connection: &Connection, speaker_id: &str) -> Result<Appearan
 /// voice from any past Meeting is recognized, and pre-filtering by recency
 /// would quietly make "seen once, a year ago" unrecognizable — which is
 /// exactly the case retroactive naming exists to serve.
-pub fn voiceprints(connection: &Connection) -> Result<Vec<(String, Vec<f32>, bool)>> {
+///
+/// **Filtered by the model that made them, and only by that** (ADR-0037).
+/// Two vectors from different embeddings do not measure the same thing, so
+/// comparing them is not an approximation but a category error. Width alone
+/// cannot catch it: [`super::super::diarize::cluster::cosine`] scores
+/// mismatched lengths zero, which happens to save us for 256 against 192 and
+/// would not for two 192-d models. This is the guard that does not depend on
+/// a coincidence of dimensions. A Voiceprint another model made is not
+/// deleted here — the migration does that — it is simply never consulted.
+pub fn voiceprints(
+    connection: &Connection,
+    model: &str,
+    model_version: &str,
+) -> Result<Vec<(String, Vec<f32>, bool)>> {
     let mut statement = connection.prepare(
-        "SELECT id, voiceprint, confirmed FROM speakers WHERE voiceprint IS NOT NULL ORDER BY id",
+        "SELECT id, voiceprint, confirmed FROM speakers \
+         WHERE voiceprint IS NOT NULL \
+           AND voiceprint_model = ?1 AND voiceprint_model_version = ?2 \
+         ORDER BY id",
     )?;
-    let rows = statement.query_map([], |row| {
+    let rows = statement.query_map(rusqlite::params![model, model_version], |row| {
         let blob: Vec<u8> = row.get(1)?;
         Ok((
             row.get::<_, String>(0)?,

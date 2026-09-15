@@ -108,6 +108,16 @@ pub struct ModelEntry {
     pub filename: &'static str,
     /// Path relative to a mirror root, e.g. `ggerganov/whisper.cpp/...`.
     pub remote_path: &'static str,
+    /// Which revision of this model the build ships.
+    ///
+    /// Bumped when the artifact behind `key` changes in a way the record has
+    /// to notice — a different checkpoint, a re-export, a different graph.
+    /// The diarization embedding stamps this onto every Voiceprint it makes
+    /// and refuses to compare across it (ADR-0037), which is the whole reason
+    /// the field exists: without it a model swap silently ends recognition,
+    /// because a cosine between two vector spaces is not a low score but a
+    /// meaningless one.
+    pub version: &'static str,
     pub integrity: Integrity,
     pub purpose: ModelPurpose,
     /// False for artifacts a feature can run without.
@@ -150,6 +160,7 @@ pub const WHISPER_DEFAULT: ModelEntry = ModelEntry {
     display_name: "Whisper large-v3-turbo (q8_0)",
     filename: "ggml-large-v3-turbo-q8_0.bin",
     remote_path: "ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
+    version: "1",
     integrity: Integrity {
         size_bytes: 874_188_075,
         sha256: None,
@@ -177,6 +188,7 @@ pub const DIARIZE_SEGMENTATION: ModelEntry = ModelEntry {
     display_name: "pyannote segmentation 3.0",
     filename: "diarize-segmentation.onnx",
     remote_path: "onnx-community/pyannote-segmentation-3.0/resolve/main/onnx/model.onnx",
+    version: "1",
     integrity: Integrity {
         size_bytes: 5_986_908,
         sha256: Some("057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25"),
@@ -200,6 +212,7 @@ pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
     display_name: "WeSpeaker VoxCeleb ResNet34-LM",
     filename: "diarize-embedding.onnx",
     remote_path: "onnx-community/wespeaker-voxceleb-resnet34-LM/resolve/main/onnx/model.onnx",
+    version: "1",
     integrity: Integrity {
         size_bytes: 26_535_549,
         sha256: Some("3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb"),
@@ -229,6 +242,7 @@ pub const SUMMARY_DEFAULT: ModelEntry = ModelEntry {
     display_name: "Qwen3 4B (UD-Q4_K_XL)",
     filename: "summary-qwen3-4b-ud-q4_k_xl.gguf",
     remote_path: "unsloth/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-UD-Q4_K_XL.gguf",
+    version: "1",
     integrity: Integrity {
         // Verified against the publisher's LFS metadata, which is also what
         // the `x-linked-etag` header carries. **Not the CDN's `etag`** —

@@ -18,9 +18,9 @@ the model beside every Voiceprint; this makes the column mean something.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Registry entries carry a version, and the diarizer takes its identity from the registry rather than a constant
-- [ ] A Voiceprint or exemplar from another model is never compared, asserted at the store with two models present
-- [ ] Same-width vectors from different models are refused, which is the case length alone cannot catch
-- [ ] No behaviour change with one model in use: the existing clustering and recognition tests pass untouched
+- [x] Registry entries carry a version, and the diarizer takes its identity from the registry rather than a constant
+- [x] A Voiceprint or exemplar from another model is never compared, asserted at the store with two models present
+- [x] Same-width vectors from different models are refused, which is the case length alone cannot catch
+- [x] No behaviour change with one model in use: the existing clustering and recognition tests pass untouched

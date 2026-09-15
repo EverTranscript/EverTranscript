@@ -142,6 +142,7 @@ fn entry_for(payload: &[u8]) -> ModelEntry {
         display_name: "Test model",
         filename: "test-model.bin",
         remote_path: "test-model.bin",
+        version: "1",
         integrity: Integrity {
             size_bytes: payload.len() as u64,
             sha256: None,
