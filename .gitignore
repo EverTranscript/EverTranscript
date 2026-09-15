@@ -98,3 +98,6 @@ yarn.lock
 __pycache__/
 *.pyc
 packaging/out/
+
+# ReDimNet2 export output (fetched or produced by scripts/export-redimnet2.py)
+target/models/

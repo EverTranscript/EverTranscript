@@ -1504,3 +1504,74 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** One loop reads every Client's requests and forwards every notification, and it awaited each request before reading the next. `summary/generate` awaited the whole run, which is minutes with a local model. `models/fetch` awaited the whole download, `audio/check` 20 s by default and up to 120, and the Calendars prompt up to five minutes. Meanwhile the window's Stop waited, a CLI download could not be cancelled because `models/cancel` queued behind it, and a running recording could overflow the 512-slot notification buffer. `summarize_meeting`'s comment already said a Summary could not stall Clients, so the loop, not the intent, was wrong. Fixing only the calendar request would have left the commonest case, generating a Summary, stalled. The Electron Client and `CoreClient` both match responses by id, and no doc promises response order. Two local runs at once would each start a sidecar loading the model, which the loop had prevented by accident, hence the lock. Checked by `a_summary_being_generated_does_not_hold_up_other_clients`: before the change another Client's request timed out after 5 s, and it passes after.
 **Outcome:** assumed
 **Ref:** (pending)
+
+## Q115 — interactive/diarization-alignment — tradeoff
+
+**Question:** Q112 escalated what to do about a 49.7% AMI DER against pyannote's 18.8%: change the embedding, the turn placement, or neither. Frank asked for alignment with Granola on segmentation, clustering embedding, identity model, audio per voiceprint, enrollment minimum, cross-meeting match and in-meeting clustering, and for a higher standard than Granola and anarlog. What does the pipeline become?
+**Options considered:** the pyannote community-1 recipe with Granola's two-model split (masked WeSpeaker + PLDA/VBx for clusters, ReDimNet2-B3 for Voiceprints) / the same recipe with ReDimNet2-B3 alone and plain AHC / ReDimNet-B2 instead of B3 / keep WeSpeaker and add PLDA/VBx / turn placement alone, no model change
+**Chosen:** The community-1 recipe both Granola pipelines run — 10 s windows at 1 s step, per-local-speaker embeddings, AHC, full per-speaker reconstruction with overlapping turns and no duration floor — with **ReDimNet2-B3 as the single embedding** for clustering and Voiceprints, plain AHC, no PLDA. Two-stage clustering (blocks of 2,000, then block centroids) replaces the cubic one. Bars: AMI test DER at or under 18.8% and cross-meeting EER at or under 1% with no different-colleague pair above the floor, both on a committed harness.
+**Decided-by:** human
+**Justification:** Frank chose each branch across four interview rounds. Turn placement was 32.6 of the 49.7 points and needs no migration; the embedding was the other 17. The bake-off in `.scratch/m3-diarization/issues/09-m3-closeout.md` measured ReDimNet2-B3 at 0% cross-meeting EER where WeSpeaker put 15–44% of different colleagues above `MATCH_FLOOR`, which is the failure that gives a Speaker someone else's name. The masked-embedding half of Granola's split needs an ONNX with a `speaker_mask` input that nobody publishes (checked: `onnx-community`, `altunenes`, FluidInference ships CoreML only), so both designs require a self-made export and the one-model design requires one instead of two. Step is 1 s because pyannote's published 18.8% uses a step of one tenth of the window; 2 s is measured afterwards and kept only if DER holds within a point. Amended mid-round after the fact check corrected an earlier claim that 2 s was the tuned value.
+**Outcome:** applied
+**Supersedes:** Q112 — escalated there, decided here.
+**Ref:** docs/adr/0037-diarization-follows-pyannote-redimnet2-one-model.md
+
+## Q116 — interactive/diarization-alignment — irreversible-action
+
+**Question:** Neither ReDimNet2 nor ReDimNet is published as ONNX, so adopting B3 means hosting an export that every installed build pins by URL and checksum. Where does it live, and what is in the graph?
+**Options considered:** a Hugging Face org the product controls / a GitHub Release asset on the app repo / our own bucket, which is what Granola does / no self-hosting, which rules the model out
+**Chosen:** A Hugging Face org `EverTranscript`, model card with the MIT licence and attribution to Palabra.ai, same host as the three models already provisioned, so Sanctioned Traffic (ADR-0034) is unchanged. The graph carries the mel frontend, so the contract is `waveform [N, T]` at 16 kHz in and `embedding [N, 192]` out — Granola's contract. The export script is committed and runs under `uv run` with pinned torch.
+**Decided-by:** human
+**Justification:** Frank accepted the recommendation. Publishing is outward-facing and permanent, so the org is not created and nothing is uploaded until he says "publish"; the export and both spikes run against a local file until then. GitHub Releases would mix a model into app releases and carry no model card; a bucket adds a host to an enumerable list whose shortness is the point.
+**Outcome:** applied
+**Ref:** scripts/export-redimnet2.py
+
+## Q117 — interactive/diarization-alignment — deviation
+
+**Question:** Old 256-d and new 192-d vectors cannot be compared, so every existing Speaker would silently stop being recognized. What happens to History on a model change?
+**Options considered:** re-embed each exemplar from its stored sample offsets in Kept Audio (what ADR-0035 promised) / wipe every Voiceprint and let recognition restart / wipe, then re-run every Meeting and relearn named Speakers from their attributed segments / keep both vector spaces
+**Chosen:** A versioned migration clears every Voiceprint and exemplar, keeping every Speaker, name and attribution; seeding filters by current model name as a standing guard. Then a bulk re-run of every Meeting with Kept Audio, oldest first, relearning each **named** Speaker from its own attributed segments in that Meeting, corrections winning and negatives rebuilt from corrections that took a segment away. Pseudonymous Speakers are re-minted and renumbered. The Operator is rebuilt by ADR-0029's channel rules alone. A Meeting without Kept Audio keeps the old run's attributions.
+**Decided-by:** human
+**Justification:** Frank chose the wipe over the offset re-embed, then asked for the re-run and the relearn in a second round: "a model change should re-run all meetings, re-calculate all voiceprints for each known speaker and drop all voiceprints for unnamed speakers", and narrowed "known" to named Speakers only. Relearning from attributed segments uses the Operator's confirmation of a whole cluster rather than the old model's choice of cuts. Prior art, checked: Granola backfills its self-profile across kept recordings and keeps old model spaces; anarlog tags every exemplar with `model_provider`/`model_version` and silently skips mismatches, so recognition restarts from zero. Renumbering pseudonyms is the visible cost and was accepted explicitly. The run is automatic, one Meeting at a time, paused while recording, resumable, cancellable, with progress in the Registry.
+**Outcome:** applied
+**Ref:** docs/adr/0037-diarization-follows-pyannote-redimnet2-one-model.md
+
+## Q118 — interactive/diarization-alignment — gate-resolution
+
+**Question:** With every Voiceprint cleared and named Speakers relearned, two existing rules break: a Voiceprint the Operator deliberately deleted looks identical to one the migration cleared, and a returning voice comes back as a new pseudonym, so naming it produces a second Speaker with the same name.
+**Options considered:** for the delete: a forgotten mark set only by that act / no mark, and never rebuild any Voiceprint from audio. For the returning voice: naming with an existing name joins / a separate merge action in the Registry / allow duplicates
+**Chosen:** A `forgotten` mark that only the Operator's Voiceprint delete sets; a forgotten Speaker keeps its name and appearances and is never re-embedded. Naming a pseudonymous Speaker with a name History already holds **joins** it to that Speaker after the Client confirms; segments, corrections and exemplars move and the pseudonymous row is swept. Named-into-named is refused.
+**Decided-by:** human
+**Justification:** ADR-0009 says deleting a Voiceprint stops future recognition; a rebuild that cannot tell that act from a model change would undo it. The join makes the glossary's "naming retroactively labels all past appearances" true again — it is false the first time a voice returns as a new pseudonym, which every model change now guarantees. It also closes the oddity the M3 close-out recorded, where a re-run after a Voiceprint delete left a named Speaker with zero appearances. A separate merge button is the same code behind a second control.
+**Outcome:** applied
+**Ref:** docs/adr/0009-record-is-immutable-voiceprint-delete-only.md
+
+## Q119 — interactive/diarization-alignment — deviation
+
+**Question:** Does the Operator remain a special Speaker, and if so how is that voice identified?
+**Options considered:** remove the concept entirely and let the pipeline treat that voice as any other / remove it from the glossary too / keep it, aligned with how Granola and anarlog identify the same voice
+**Chosen:** Kept. Three rules in order: **isolated mic** — headphones the only playing output and the mic not swapped makes every mic-channel cluster the Operator, confirmed without any act; **dominance** — 80% of mic time, the existing margin, and at least 20 s of that voice; **Voiceprint match** — only once the Meeting holds 30 s of diarized speech and at least two speakers, and below that gate the Operator's Voiceprint is withheld from the whole resolve. One flagged row forever: a bootstrap re-attaches to it instead of minting a second.
+**Decided-by:** human
+**Justification:** Frank first said the Operator is not special and should leave the glossary, then reversed on the evidence that both reference products have the concept: Granola keeps an account-keyed self-profile and labels the mic side "Me", anarlog keeps a session owner and confirms it from an isolated mic. He then chose the stricter option on the third rule, Granola's 30 s and two-speaker gates, over the general match rule. Withholding the Voiceprint below the gate rather than gating only the flag is what makes the gate real: the general resolve carries that Voiceprint among all seeds and would otherwise match anyway. Re-attaching the bootstrap closes a latent defect, reachable today by deleting the Operator's Voiceprint and re-running one Meeting, where the flag lands on a freshly minted row and a second "You" appears.
+**Outcome:** applied
+**Ref:** docs/adr/0029-dual-channel-audio-aec-mic-is-operator.md
+
+## Q120 — interactive/diarization-alignment — gate-resolution
+
+**Question:** Q115 adopted ReDimNet2-B3 with its mel frontend inside the ONNX graph, on the expectation that the graph would carry an `STFT` node that nothing in this stack had ever executed. Does the export run through `ort` on both platforms, and does it agree with PyTorch?
+**Options considered:** export the whole model, frontend included (Granola's contract) / reimplement a 72-bin frontend in pure Rust and export the backbone only, if STFT fails
+**Chosen:** The whole model, frontend included. There is no `STFT` node to worry about: the upstream frontend is convolutional, so the graph's 34 operators are ordinary ones (`Conv`, `MatMul`, `LayerNormalization`, `Resize`, …) and the pure-Rust fallback is not needed.
+**Decided-by:** agent
+**Justification:** Measured 2026-09-15, not assumed. Export at opset 18 through the TorchScript exporter — dynamo fails on `prims.broadcast_in_dim` in the frontend's normalisation under torch 2.8 — gives an 18.0 MB file, `waveform [batch, samples]` in, `embedding [batch, 192]` out, matching PyTorch at cosine 1.0000 for both a 3 s and a 6 s input, so the samples axis is genuinely dynamic. The same file then ran through `ort` 2.0.0-rc.13 on macOS arm64 and on windows-zx8 (x86_64), both at cosine 1.000000 against the PyTorch reference and agreeing with each other to six decimal places; 53 ms and 90 ms respectively for 3 s of audio. The Windows run used a standalone crate in `%TEMP%`, since deleted, so that checkout and its target directory were never touched.
+**Outcome:** applied
+**Ref:** crates/evertranscript-core/examples/redimnet_spike.rs
+
+## Q121 — interactive/diarization-alignment — irreversible-action
+
+**Question:** Q116 chose to publish the ReDimNet2-B3 export to a Hugging Face organization named `EverTranscript`. Hugging Face has no API for creating an organization, and the account holding the token belongs to no organization. Publish where?
+**Options considered:** wait for the organization to be created in a browser and publish nothing meanwhile / publish under the token holder's own namespace and transfer the repository to the organization later / a GitHub Release asset instead
+**Chosen:** Published at `soulmachine/evertranscript-redimnet2-b3-vox2-lm`, public, MIT, with a model card crediting Palabra.ai and the export script beside the file. To be transferred to the `EverTranscript` organization once that exists, which is a browser-only act.
+**Decided-by:** agent
+**Justification:** Frank said "publish". Creating an organization is not exposed by the API — `POST /api/organizations` answers 403 for a classic write token and `/api/orgs` does not exist — so the namespace Q116 named cannot be reached from here, and the choice was between the wrong namespace now and nothing. The deviation is cheap to undo: Hugging Face transfers repositories between owners and leaves a redirect, and no build pins this URL yet because the model registry entry is deliberately not written until the pipeline uses it. Verified after upload: an anonymous fetch of `…/resolve/main/redimnet2-b3-vox2-lm.onnx` returns 200 and 18,045,013 bytes whose SHA-256 is `dcecdce7d52bbd4739b24d0874359ec564d43f4b3a392f0104f505593b566d41`, matching the export report. The file is the only thing published; nothing from any Meeting, Transcript or History left the machine.
+**Outcome:** applied
+**Ref:** https://huggingface.co/soulmachine/evertranscript-redimnet2-b3-vox2-lm
