@@ -1,5 +1,6 @@
 {
   "name": "@evertranscript/client",
+  "productName": "EverTranscript",
   "private": true,
   "version": "1.0.1",
   "license": "Apache-2.0",
@@ -37,7 +38,6 @@
   },
   "build": {
     "appId": "com.evertranscript.client",
-    "productName": "EverTranscript",
     "directories": {
       "output": "../../packaging/out/installers",
       "buildResources": "resources"

@@ -990,3 +990,331 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Justification:** _Contradicts ADR-0009 ("Speaker records themselves are permanent"), but worth reopening because_ that sentence exists so nothing in the record dangles or rewrites, and a Speaker nothing references is not in the record: deleting it changes no Transcript, no attribution, no correction. A standing rule was rejected because a Speaker orphaned by a *Meeting* deletion matches the same predicate, and "Voiceprints outlive the recordings they came from" is a guarantee the store's own tests make. Named rows are kept regardless: a name is the Operator's act. ADR-0009 amended to say so.
 **Outcome:** applied — `store/schema.rs` migration 10, with a test that the attributed, corrected-to, corrected-from, named and Operator rows all survive it
 **Ref:** (pending)
+
+## Q66 — interactive/native-ui — tradeoff
+
+**Question:** Frank asked for the Electron Client to be "native on both macOS and Windows", and later to "follow https://developer.apple.com/design/". What does native mean for a Client that has its own identity (ink/paper/record palette, the seahorse mark)?
+**Options considered:** one cross-platform look carrying the brand everywhere / a per-platform imitation with no brand left / one identity inside each OS's frame — the window edge, type, controls and colours diverge per platform, the brand keeps the mark and the recording red (chosen)
+**Chosen:** The third. macOS draws with AppKit's semantic colours, the macOS text styles, standard control metrics and a unified toolbar over sidebar vibrancy; Windows keeps the brand palette on Mica with Segoe UI Variable and Fluent control metrics. The seahorse appears once, in the empty state.
+**Decided-by:** human (Frank approved the plan the agent proposed — "Plan approved" — then pointed at Apple's guidelines)
+**Justification:** The brand's grounds fight AppKit's semantic colours, which is what Apple's colour guidance asks a Mac app to use, while Windows 11 has no published palette beyond the accent, so the brand has somewhere to live there. The details are Q67–Q76.
+**Outcome:** applied — `clients/electron/src/main/index.ts`, `src/preload/index.ts`, `src/renderer/{App.tsx,index.css,i18n.ts,main.tsx}`
+**Ref:** (pending)
+
+## Q67 — interactive/native-ui — tradeoff
+
+**Question:** How does the page get AppKit's semantic colours? CSS `AccentColor` resolves to nothing in this Chromium, and `systemPreferences.getColor` turned out to answer in the appearance the process launched in: after `nativeTheme.themeSource = "light"`, and after a real system switch to Light, `text-background` still read `#1E1E1E`.
+**Options considered:** copy AppKit's values into the stylesheet (loses Increase Contrast and the Operator's accent) / inject `getColor`'s answers unscoped (after any appearance switch the dark palette stays: white text on a light sidebar — seen on screen) / inject them scoped to the appearance they resolved in, with AppKit's standard-contrast values as the stylesheet's fallback for the other appearance (chosen) / a native addon that resolves in both appearances
+**Chosen:** The main process reads the palette and accent on load, on `nativeTheme` `updated` and on `AppleColorPreferencesChangedNotification`, and inserts it inside `@media (prefers-color-scheme: …)` for the appearance `text-background` resolved in. `:root[data-platform="darwin"]` carries AppKit's own light and dark values (resolved in each appearance with `performAsCurrentDrawingAppearance`), with the selection darkened from the accent.
+**Decided-by:** agent
+**Justification:** The scoping is forced: `NSAppearance.current` only moves while a view draws — reproduced in a plain AppKit process, where setting `NSApp.appearance` left dynamic colours resolving in the launch appearance. Ceiling, marked `ponytail:` in the code: the non-launch appearance runs at standard contrast with an approximated selection colour until the next launch.
+**Outcome:** applied — `applySystemColors` in `main/index.ts`, darwin block in `index.css`
+**Ref:** (pending)
+
+## Q68 — interactive/native-ui — tradeoff
+
+**Question:** Where do the window controls and the view commands live on a Mac, and how close can Electron get to macOS 26's unified toolbar?
+**Options considered:** system title bar plus an in-page header / `hiddenInset` with the header in the strip / a hidden title bar with explicitly placed traffic lights and a 52px toolbar strip whose items imitate macOS 26's toolbar capsules (chosen) / wait for Electron to expose Liquid Glass
+**Chosen:** `titleBarStyle: "hidden"`, `trafficLightPosition: { x: 19, y: 19 }`, `vibrancy: "sidebar"`. Record/Stop sit in the sidebar's strip; Voices, What It Knows and Settings in the content's. Toolbar items are 36px capsules (radius 18, 9px padding, 8px apart, a 40px-blur shadow in light); push buttons and text fields 24px, radius 6. Every number was measured from an on-screen `NSWindow` with an `NSToolbar` on macOS 26 and compared pixel-for-pixel with the Client's own window capture.
+**Decided-by:** agent
+**Justification:** `toolbars.md › macOS`: toolbar items carry no bezel, and every toolbar item is also a menu command (Q72). `windows.md › macOS`: custom chrome has to do the key/non-key work itself, so toolbar labels dim when the window is inactive. `hiddenInset` put the lights about 8pt above the toolbar items' centre line (measured). Ceiling: no refraction; on macOS 15 and earlier the capsules are a macOS 26 look on an older system.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q69 — interactive/native-ui — gate-resolution
+
+**Question:** Title bar, material and accent on Windows 11.
+**Options considered:** default frame / hidden title bar with a 32px caption overlay / hidden with a 48px overlay that the toolbar shares (chosen); Mica always / Mica only where Electron's `backgroundMaterial` is honoured (chosen); one accent listener / one per platform (chosen)
+**Chosen:** A 48px strip holding the toolbar, caption buttons drawn over its right end, the page reading `env(titlebar-area-*)` to stay clear of them. Mica from build 22621, an opaque ground below it. The accent is re-read on `accent-color-changed` on Windows and the distributed notification on macOS. Fluent control metrics: 32px buttons and fields, radius 4, list selection as a subtle fill with a 3×16 accent pill.
+**Decided-by:** agent
+**Justification:** Fluent's tall title bar is the variant for a title bar that hosts controls; Electron documents `backgroundMaterial` for Windows 11 22H2 and `accent-color-changed` as Windows-only. The 44px version of this passed the Registry e2e and the frame checks on windows-zx8 in light and forced dark.
+**Outcome:** applied — the 48px run on Windows is still owed: windows-zx8 went offline mid-session, and the driver's expectations (48px strip, pill, buttons clear of the captions) are updated and waiting
+**Ref:** (pending)
+
+## Q70 — interactive/native-ui — tradeoff
+
+**Question:** One type scale for both platforms, or each platform's own?
+**Options considered:** one scale / each platform's ramp mapped onto the same Tailwind tokens (chosen)
+**Chosen:** macOS: Subheadline 11/14, Body 13/16, Title 3 at 15 with loose 22 leading for the transcript, Title 1 22/26, emphasized weights one step up (medium → Semibold, semibold → Bold). Windows: Caption 12/16, Body 14/20, Body Large 18/24, Subtitle 20/28.
+**Decided-by:** agent
+**Justification:** `typography.md › Specifications` for the macOS text styles, and its advice to loosen leading for long passages, which a transcript is; the Fluent type ramp for Windows. Same tokens, so no call site changes.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q71 — interactive/native-ui — deviation
+
+**Question:** The string catalog is shared, but a Mac writes button and menu labels in title-style capitalization and Windows writes them in sentence case.
+**Options considered:** title case everywhere (foreign on Windows) / `text-transform: capitalize` (wrong for short prepositions and phrasal verbs) / Mac-only English overrides for the multi-word button and menu labels (chosen) / a catalog per platform
+**Chosen:** `englishOnMac` in `i18n.ts`, thirteen labels, consulted by `t()` on a Mac in English. Headings, links and checkbox labels stay sentence case on both platforms.
+**Decided-by:** agent
+**Justification:** `buttons.md › Content`, `menus.md` and `alerts.md` all ask for title-style capitalization on buttons and menu items; `writing.md` asks for one style per element type, which sentence-case headings keep. Chinese has no case, so only English is affected.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q72 — interactive/native-ui — gate-resolution
+
+**Question:** What belongs in the Mac menu bar?
+**Options considered:** Electron's default menu / the standard menus with the app's commands in them (chosen)
+**Chosen:** App menu (About, Settings… ⌘,, Services, Hide, Hide Others, Show All, Quit); File (Record ⌘R, Stop ⌘., Close Window); Edit (Electron's role); View (Voices, What It Knows, Enter/Exit Full Screen, named for the way it will go and rebuilt when the window gets there; Toggle Developer Tools only when unpackaged); Window (role). Commands disable rather than disappear. The renderer supplies the labels and what is possible, so the menu speaks the catalog's language.
+**Decided-by:** agent
+**Justification:** `the-menu-bar.md`: menu order, App menu contents, "Provide a View menu…", show/hide item titles reflect the current state, a Window menu with Minimize and Zoom even for one window. Assumed, for review: ⌘R and ⌘. as the recording shortcuts; no Help menu (the page ties it to Help Book content, which this app doesn't have); no Show/Hide Sidebar, because the sidebar does not collapse yet (`sidebars.md › macOS` suggests hiding it as the window narrows); Electron's role items stay English under zh-CN.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q73 — interactive/native-ui — gate-resolution
+
+**Question:** How is deleting a Meeting — irreversible, audio included — confirmed?
+**Options considered:** an in-page confirmation / `window.confirm` (OK and Cancel) / the platform's own alert through `dialog.showMessageBox` (chosen)
+**Chosen:** Title "Delete this meeting?", informative text saying what is removed, buttons Delete (default, Return) and Cancel (Escape). No warning icon, no destructive styling.
+**Decided-by:** agent
+**Justification:** `alerts.md`: name the act on the button; always "Cancel" for cancelling and never as the default; the destructive style is for a destructive action people didn't deliberately choose — the Empty Trash example, where Return confirming the chosen action wins; avoid titles over two lines, which the first single-string version wrapped to three. Checked on macOS 26 through the real button: the alert rendered, and dismissing it unconfirmed left both Meetings in place.
+**Outcome:** applied — `meeting.deleteConfirm` split into title and `meeting.deleteConfirm.detail`
+**Ref:** (pending)
+
+## Q74 — interactive/native-ui — tradeoff
+
+**Question:** How does the Meeting list behave with the keyboard, and how does it show selection on a Mac?
+**Options considered:** every row a tab stop with a focus ring / a source list: one tab stop, arrow keys, selection shown by highlight (chosen)
+**Chosen:** Roving tabindex (only the selected row is tabbable), ↑/↓ move selection and focus. On a Mac no ring on rows: accent highlight with white text while the list has focus, the unemphasized grey otherwise and whenever the window is in the background (`:focus-within`, which Chromium stops matching for an inactive window). Windows keeps its focus-visible outline and the accent pill.
+**Decided-by:** agent
+**Justification:** `focus-and-selection.md`: on macOS lists show focus by highlight rather than a ring, with distinct focused and unfocused selection colours; `windows.md` for the key/non-key difference. Ceiling: Tab still reaches every button, because Chromium ignores macOS's Keyboard Navigation setting.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q75 — interactive/native-ui — tradeoff
+
+**Question:** On Windows the Client reported no Core while an isolated Core was running. The Core names its pipe per runtime directory (`paths::pipe_name_for`, an FNV-style digest of the directory); the Client still built the old global name, so an isolated Client looked for the Operator's pipe instead — "no Core is listening" at best, the real Core's History at worst. Fix which side?
+**Options considered:** have the Client derive the name the way the Core does, digest copied as written (chosen) / "correct" the digest to textbook FNV-1a on both sides, renaming every existing pipe
+**Chosen:** `pipeNameFor` in `core-client.ts` reproduces the Core's derivation, including a multiplier with one more zero than textbook FNV's; both sides' tests pin the same literal, so neither can drift alone.
+**Decided-by:** agent
+**Justification:** Matching the Core is the requirement, not textbook FNV, and pinning one literal on both sides is what turns a silent mismatch into a failing test on whichever side moved.
+**Outcome:** applied — `core-client.ts` + `core-client.test.ts`, assertion added in `paths.rs` tests
+**Ref:** (pending)
+
+## Q76 — interactive/native-ui — deviation
+
+**Question:** The project's front-end guidance (Vercel's design page, per `AGENTS.md`) hard-rejects glass effects, ornamental shadows and fake depth. Frank's later instruction is to follow Apple's guidelines, and macOS 26 draws toolbar items as glass capsules over sidebar vibrancy; Windows 11 uses Mica.
+**Options considered:** flat, shadowless chrome per Vercel (reads as a web page inside a Mac window) / OS-drawn materials plus a restrained imitation of macOS 26's toolbar capsules (chosen)
+**Chosen:** Vibrancy and Mica are drawn by the OS, not the page. The only imitated depth is the toolbar capsule's rim and shadow, measured from AppKit's own. Everything else stays flat.
+**Decided-by:** agent
+**Justification:** _Contradicts the Vercel guidance, but_ the more specific, later instruction was to follow Apple's HIG for this Client, and in a native window these materials are the platform's convention rather than decoration. Worth confirming that the standing guidance is meant for web surfaces, not the desktop Client's chrome.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q77 — interactive/native-ui — deviation
+
+**Question:** The main window's toolbar carried a Settings button on both platforms. Does it stay on the Mac, where the App menu already has Settings… under ⌘,?
+**Options considered:** keep it on both (one toolbar for both OSes) / drop it on macOS only, keep it on Windows (chosen) / drop it on both
+**Chosen:** On macOS the toolbar holds Voices and What It Knows; Settings is reached from the App menu (Settings…, ⌘,). Windows keeps the button, since it has no menu bar to hold the item.
+**Decided-by:** agent
+**Justification:** `settings.md › macOS`: put the settings item in the App menu and avoid a settings button in a window's toolbar, which takes room from frequently used commands. The renderer reads the `data-platform` attribute `main.tsx` already sets. Checked on a live instance: two toolbar buttons, and the menu item opens the Settings pane.
+**Outcome:** applied — `App.tsx` toolbar
+**Ref:** (pending)
+
+## Q78 — interactive/native-ui — tradeoff
+
+**Question:** `settings.md › macOS` describes Settings as its own window (titled "EverTranscript Settings", minimize and zoom dimmed, opening to the last pane). The Client shows Settings as a pane inside the main window. Build the separate window as part of this pass?
+**Options considered:** a second BrowserWindow for Settings (needs the main process to fan Core notifications out to more than one window, plus a renderer entry for the Settings page) / keep the in-window pane with its Done button (chosen for now)
+**Chosen:** Keep the in-window pane. On a Mac it is now reached only from the App menu (Q77).
+**Decided-by:** agent
+**Justification:** The main process holds one `window` and sends both Core notifications and menu commands to it alone, so a second window is new plumbing rather than restyling, and it is the one remaining HIG gap of this size in this pass. Easy to reverse later: nothing added here has to be undone to build it.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q79 — interactive/native-ui — deviation
+
+**Question:** File › Stop was bound to ⌘. (Q72). ⌘. is the system's Cancel, and a review of the diff pointed out that with a recording running it could reach the menu's Stop instead of cancelling the delete alert. Which shortcut should Stop have?
+**Options considered:** keep ⌘. / ⌘R toggling Record and Stop / ⇧⌘R / no shortcut (chosen)
+**Chosen:** Stop has no shortcut. Record keeps ⌘R. With no menu item on ⌘., the delete alert's Cancel receives it (checked on a live instance: ⌘. sent to the app closed the alert and nothing was deleted).
+**Decided-by:** agent
+**Justification:** `keyboards.md › Standard keyboard shortcuts` lists Command-Period as "Cancel an operation" and says not to repurpose standard shortcuts; stopping keeps the recording, so it is not a cancel. `keyboards.md › Custom keyboard shortcuts` keeps custom shortcuts for the most frequent commands, and Stop happens once per Meeting. Granola's menu binds no recording shortcut at all (`app.asar`, application menu template).
+**Outcome:** applied — `index.ts` menu
+**Ref:** (pending)
+**Supersedes:** Q72 — only its Stop shortcut; the rest of Q72 stands.
+
+## Q80 — interactive/native-ui — tradeoff
+
+**Question:** The refactor gave Try Again, the three panes' Done, the Briefing's I Have Read This and setup's Continue the accent-filled default look, but only form submit buttons responded to Return. On a Mac, a filled button promises Return. Make the look true, or take it away?
+**Options considered:** filled only on form submits (no new behaviour, but setup loses its Continue) / wire Return to every filled button (the Registry would show two while renaming) / wire Return, and keep the filled look only where Return should act without a second look (chosen)
+**Chosen:** `main.tsx` sends Return to the one enabled `.push-default` unless focus is on a field, button, link or editable text. Filled: Try Again, setup's Continue, the rename forms' Save. Plain: the panes' Done (closing a pane is not what it was opened for) and I Have Read This (it should be read before it is pressed). Checked live: Return with nothing focused advanced setup one step; Return on a focused Skip This pressed Skip only.
+**Decided-by:** agent
+**Justification:** `buttons.md › Role`: the primary role goes to the button people are most likely to choose and responds to Return. `alerts.md › Buttons`: when people should read first, make no button the default. Ceiling: Return on a focused button presses that button, as Chromium does, where AppKit would press the default button and leave Space for the focused one.
+**Outcome:** applied — `main.tsx`, `App.tsx`, `index.css` comment
+**Ref:** (pending)
+
+## Q81 — interactive/native-ui — tradeoff
+
+**Question:** Filled buttons draw white text on the raw accent colour from `getAccentColor()`. On Windows, a light accent such as Gold gives roughly 1.9:1 contrast, and Fluent's accent buttons use a darker shade of the accent in the light theme and a lighter shade with dark text in the dark theme. Fix it in this pass?
+**Options considered:** derive approximate shades in CSS now, without a Windows machine to look at them / defer to the owed Windows run (chosen)
+**Chosen:** Deferred. The default Windows blue is unaffected; light accent colours are not.
+**Decided-by:** agent
+**Justification:** windows-zx8 has been offline for this whole stretch, so the shades cannot be checked against the real title bar and Mica, and Electron exposes only the base accent, not Windows' computed shades. Fixing it blind would mean guessing at colour values. Linux (not packaged) has no accent at all and falls back to the base palette.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q82 — interactive/native-ui — gate-resolution
+
+**Question:** Does the project's Vercel design guidance (no glass, no ornamental shadows, no fake depth) govern the desktop Client's chrome, or do the platforms' own conventions?
+**Options considered:** Vercel's flat guidance / Apple's and Windows' native UI styles (chosen)
+**Chosen:** For the desktop Client, follow Apple's HIG on macOS and Windows' native (Fluent) style on Windows, and set the Vercel guidance aside. The OS-drawn vibrancy and Mica and the measured toolbar-capsule rim and shadow stay as built; no code change.
+**Decided-by:** human
+**Justification:** Frank, answering Q76 in session: ignore Vercel and follow the Apple and Windows native UI styles.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q76 — confirmed by the human, and the native styles now outrank the Vercel guidance for this Client rather than being an agent's exception to it.
+
+## Q83 — interactive/native-ui — gate-resolution
+
+**Question:** Q78 kept Settings as a pane inside the main window. Should the Mac get the separate Settings window `settings.md › macOS` describes?
+**Options considered:** a Settings window on macOS, with Windows keeping its in-app page (chosen) / keep the in-window pane on both
+**Chosen:** On macOS, Settings… (⌘,) opens its own Settings window, reopening to the last pane; the main process sends Core notifications to every window, not just the main one. Windows and Linux keep the in-window pane.
+**Decided-by:** human
+**Justification:** Frank, answering the Q78 review question; consistent with Q82 (follow each platform's native style).
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q78 — the human chose the separate window.
+
+## Q84 — interactive/native-ui — gate-resolution
+
+**Question:** Q81 deferred the Windows accent contrast (white text on the raw accent). Fix it now that windows-zx8 is reachable?
+**Options considered:** fix now and check on windows-zx8 (chosen) / leave the raw accent
+**Chosen:** Filled buttons and the selection pill use Fluent's accent shades on Windows — the darker shade with white text in the light theme, the lighter shade with dark text in the dark theme — checked on windows-zx8 with a light accent and the default blue, in both themes.
+**Decided-by:** human
+**Justification:** Frank, answering the Q81 review question.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q81 — no longer deferred.
+
+## Q85 — interactive/native-ui — gate-resolution
+
+**Question:** Q72 assumed several things about the Mac menu bar: ⌘R for Record, no Help menu, no Show/Hide Sidebar, and Electron's role items left in English under Chinese. Which should change?
+**Options considered:** translate the system menu items / add a sidebar toggle / remove ⌘R from Record / keep all as built
+**Chosen:** Translate the system menu items (App, File, Edit and Window menus) through the catalog, so the whole menu bar speaks the app's language. The other assumptions stand: ⌘R records, no Help menu, no sidebar toggle.
+**Decided-by:** human
+**Justification:** Frank, answering the Q72 review question.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q72 — its English role items; the rest of Q72, as amended by Q79, stands.
+
+## Q86 — brand-identity/reference-logos — gate-resolution
+
+**Question:** Q19 kept the extracted Granola, Anarlog and Meetily logos in `brand/reference/` but out of git. Keep them untracked?
+**Options considered:** keep them untracked with the provenance README (chosen) / commit them
+**Chosen:** Keep them untracked; nothing changes.
+**Decided-by:** human
+**Justification:** Frank, answering the Q19 review question.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q19 — confirmed by the human.
+
+## Q87 — interactive/native-ui — tradeoff
+
+**Question:** How much of `settings.md › macOS` should the new Settings window (Q83) take on: a toolbar of panes sized to each, or the existing settings as one pane?
+**Options considered:** split into panes with a toolbar (needs pane icons Electron has no SF Symbols for, and a regrouping of the settings) / one pane in a fixed-size window that scrolls (chosen)
+**Chosen:** One pane, 600×640, not resizable, minimize and zoom dimmed, no full screen, titled "EverTranscript Settings" ("EverTranscript设置" in Chinese), no heading or Done button. It reopens rather than duplicates. Settings… stays enabled with no main window open; Run Setup Again closes Settings and brings the main window forward (reopening it if needed); a Dock click reopens the main window even while Settings is open. The hairline under the title bar stays: it is what AppKit draws for a standard titled window, and removing it means drawing the title in the page.
+**Decided-by:** agent
+**Justification:** `settings.md › macOS`: "If your settings window doesn't have multiple panes, use the title App Name Settings." Window flags, title and its Chinese form matched against a SwiftUI `Settings` scene run on this Mac (not miniaturizable, not resizable, full screen off). A native Settings window has no hairline only because its content runs under the title bar, which Electron cannot do with the title still shown. Panes are the upgrade when the settings outgrow one scrolling view.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q88 — interactive/native-ui — gate-resolution
+
+**Question:** Where do the translated system menu items (Q85) take their wording from, and do they keep Electron's item set?
+**Options considered:** translate by hand / take Apple's own localizations (chosen); match SwiftUI's shorter default Edit menu / keep Electron's items (chosen)
+**Chosen:** English and Simplified Chinese from Apple's tables (`SwiftUI.framework` `MainMenu.loctable`, AppKit `MenuCommands.loctable`), checked against a SwiftUI app's menu bar in both languages. File › Close Window becomes Close. The Edit menu keeps Paste and Match Style, Substitutions and Speech.
+**Decided-by:** agent
+**Justification:** `the-menu-bar.md › File menu` names the item Close for a window without tabs, and a native app's menu reads 关闭. Read back through Accessibility with AppKit in Chinese: every item is Chinese, AppKit still adds Writing Tools, AutoFill, Start Dictation and Emoji & Symbols to the renamed Edit menu, and the Option alternates appear. Dropping Edit items the Client already had would be a change nobody asked for.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q89 — interactive/native-ui — gate-resolution
+
+**Question:** Electron hands over only the base Windows accent. Where do Fluent's accent shades (Q84) come from?
+**Options considered:** derive shades in CSS (a guess at Windows' algorithm) / read the palette Windows stores beside the accent (chosen)
+**Chosen:** The main process reads `HKCU\…\Explorer\Accent\AccentPalette` with `reg query` and sets the accent to `light-dark(Dark1, Light2)`, falling back to the base accent if it cannot. Accent buttons take white text in the light theme and black in the dark, Fluent's accent stroke, and hover and press at 90% and 80% fill with Fluent's secondary text. The selection pill, checkboxes and field focus underline take the shade through the same variable.
+**Decided-by:** agent
+**Justification:** On windows-zx8 the registry palette matched `UISettings.GetColorValue` for all seven shades. Fluent's `AccentFillColorDefault` is Dark1 in the light theme and Light2 in the dark, with `TextOnAccentFillColorPrimary` white or black.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q90 — interactive/native-ui — irreversible-action
+
+**Question:** Q84's check needs windows-zx8's system accent changed. How is it changed, and what is put back afterwards?
+**Options considered:** write the accent keys straight into the registry (skips the palette Windows computes, so tests nothing real) / pick swatches in Settings › Personalisation › Colours through UI Automation, then restore from a registry snapshot (chosen)
+**Chosen:** Exported the accent, DWM, Themes and Control Panel colour keys first. Picked Gold, Yellow gold (the lightest swatch) and the default blue in Settings while the Client ran, in both themes, then picked the default blue again. Settings had also switched `DWM\EnableWindowColorization` from 0 to 1 and pushed Yellow gold onto the recent-colours list, so both were written back to their snapshot values; all four exports then matched the snapshot exactly. Cleanup also removed the build files only the deleted worktree used from the repo's `target\debug` (the repo's own binary is intact, same hash) and the pnpm cache and state folders this session's first zx8 run created.
+**Decided-by:** agent
+**Justification:** The Q84 answer asked for the check on windows-zx8. Going through Settings is the only way to get the palette Windows itself derives. The snapshot diff is what shows the machine was left as found.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q91 — interactive/app-name — tradeoff
+
+**Question:** Naming the Client "EverTranscript" also renames the folder Electron keeps Chromium's profile in, and on macOS and Windows that folder is exactly the Core's Application Support. Where does the profile go?
+**Options considered:** Electron's default, sharing the Core's folder (Chromium's cache folders beside `settings.json` and `run`, and a test instance isolated with `EVERTRANSCRIPT_APP_SUPPORT_DIR` still writes a profile into the real folder) / a `Client` folder inside whichever Application Support folder the Core is using (chosen) / keep the old `@evertranscript/client` folder by path (the scoped npm name kept alive only as a folder name)
+**Chosen:** `productName` moved to the top of `clients/electron/package.json`, so `app.name` is "EverTranscript" unpackaged and packaged alike; `build.productName` removed, since electron-builder falls back to it. At load, before `ready`, the main process sets `userData` to `<EVERTRANSCRIPT_APP_SUPPORT_DIR or appData/EverTranscript>/Client`.
+**Decided-by:** agent
+**Justification:** ADR-0035 makes Application Support the home of re-creatable state, which a Chromium profile is, while keeping the Core's own files apart from a browser's. Following the Core's override keeps an isolated run fully isolated. The Client reads nothing back from the profile (no localStorage or other page storage in the renderer), so existing installs lose only caches and electron-updater's staging id when the folder moves.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q92 — interactive/app-name — tradeoff
+
+**Question:** How is the Windows dialog title checked on windows-zx8 without rebuilding the Core there?
+**Options considered:** full harness with a Core built from the worktree and the seeded Meeting's Delete button (a rebuild of several minutes and GBs of output in the repo's `target\debug`, for code this change does not touch) / Client only, opening the same confirmation through the page's `confirm` bridge (chosen)
+**Chosen:** Client only, isolated with the same env vars as launch.ps1 and `EVERTRANSCRIPT_BIN` pointed at a missing file so no Core is found. The confirmation was requested through `window.evertranscript.confirm` with the Delete dialog's own strings, and dialog.ps1 read the title, pictured it, and closed it with Escape. Teardown removed the worktree, the test folder and tasks, and a leftover `accent.ps1` from the Q90 run in the home folder; the profile folder listings and the repo's binary hash match what was there before.
+**Decided-by:** agent
+**Justification:** The Delete button calls that bridge, which runs the same `dialog:confirm` handler, so the title Windows draws is the same; the Core only decides whether a Meeting exists to press it on.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q93 — interactive/app-name — gate-resolution
+
+**Question:** How is the macOS packaged build made on this Mac, and what does it carry?
+**Options considered:** `packaging/build.sh` (stages the binaries but never runs electron-builder) / the steps of `.github/workflows/package.yml`, run by hand (chosen)
+**Chosen:** Release-built the Core and the Summary sidecar from the working tree, staged them in `packaging/out`, built the Client, and ran `electron-builder --mac --publish never` with `GITHUB_TOKEN` removed from its environment. electron-builder found this Mac's self-signed "frankdai Local Code Signing" identity and signed with it; notarization was skipped for want of credentials. Output: `packaging/out/installers/EverTranscript-1.0.1-arm64-mac.zip` and `mac-arm64/EverTranscript.app`, both git-ignored. Checked the way the workflow checks: both binaries are in `Contents/Resources`, and `latest-mac.yml` names a zip that exists, with no spaces.
+**Decided-by:** agent
+**Justification:** package.yml is the recipe that makes the shipped artifacts; build.sh stops before electron-builder. Without the Operator's Developer ID certificate and notary key (packaging/README.md › What only the Operator can do) the build can only be run on this Mac — Gatekeeper would reject it anywhere it was downloaded to.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q94 — interactive/e2e-harness — gate-resolution
+
+**Question:** `scripts/e2e-registry.sh` checks that auto-record is off with `evertranscript settings | grep -q`, under `set -o pipefail`. `grep -q` exits at its first match, and when the Core writes its remaining lines into the closed pipe it panics with "Broken pipe" and the check fails even though it matched. The scratchpad copy of the Mac launch script hit this under load. Fix the repo script too, and how?
+**Options considered:** leave it / drop pipefail for that line / capture the output first / `grep … >/dev/null`, which reads to the end (chosen)
+**Chosen:** `grep "auto-record            off" >/dev/null`, with a two-line comment saying why it is not `-q`. The script's other `grep -q` checks read here-strings, where no process writes into the pipe, so they stay.
+**Decided-by:** agent
+**Justification:** anarlog's sturdier scripts avoid the pattern the same two ways (read to the end, or capture first). Against an isolated Core on this Mac, 300 runs of each: `grep -q` failed 2 times with the panic, `>/dev/null` failed none. The auto-record line is the second of five, so there is always output left to write.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q95 — interactive/native-ui — gate-resolution
+
+**Question:** Q87 assumed the Mac Settings window is one fixed 600×640 scrolling pane rather than toolbar panes. Keep it?
+**Options considered:** one scrolling pane (chosen) / toolbar panes (General, Watchlist, Summaries) / a sidebar of sections, as Granola and anarlog lay out theirs
+**Chosen:** Keep the one scrolling pane; nothing changes.
+**Decided-by:** human
+**Justification:** Frank, answering the Q87 review question. None of Granola, anarlog or Meetily has a separate Settings window to compare against; all three split settings into sections, but across 5 to 21 sections against this Client's 5 groups. Electron 38 cannot load SF Symbols by name (checked: `gearshape` comes back empty), so panes would mean a toolbar and icons drawn in the page.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q87 — confirmed by the human.
+
+## Q96 — interactive/native-ui — gate-resolution
+
+**Question:** On Windows in the light theme, white text on a light accent's Dark1 shade is hard to read: 3.0:1 on Gold (#E37700) and 2.3:1 on Yellow gold (#E19D00), where text needs 4.5:1. Windows' own controls pair them the same way. What should filled buttons do?
+**Options considered:** white or black text by whichever contrasts more / keep Windows' pairing / a fixed blue for filled buttons (chosen)
+**Chosen:** On Windows, the filled button takes the default blue's shades whatever the accent: #0067C0 with white text in the light theme (5.7:1) and #4CC2FF with black in the dark (10.5:1), with hover and press thinning that fill as before. The accent still colours the selection pill, checkboxes and the focused field's underline. The Mac is unchanged.
+**Decided-by:** human
+**Justification:** Frank, answering the review question. Granola, anarlog and Meetily give buttons one fixed colour and do not follow the system accent. The shades are the default blue's own palette, from windows-zx8's `AccentPalette` backup taken before the Q90 run. With Gold set, the built stylesheet gave the button those fills and text colours in both themes, 90% and 80% on hover and press, and Gold on the pill, underline and checkbox; the Mac rules still take the accent. Not re-run on windows-zx8: the button no longer reads the accent, and checking with Gold would mean changing the machine's accent again.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q84 — filled buttons no longer take the accent shades; the same change retires the accent-button part of Q89.
+
+## Q97 — interactive/native-ui — irreversible-action
+
+**Question:** Q96's filled buttons were then checked on windows-zx8 with the Gold accent, which means changing that machine's accent again. How was it changed, and what was put back?
+**Options considered:** Q90's procedure: pick swatches in Settings › Personalisation › Colours through UI Automation, then restore from a registry snapshot (chosen) / write the accent keys straight into the registry
+**Chosen:** A fresh export of the accent, DWM, Themes and Control Panel colour keys matched Q90's snapshot byte for byte. Gold was picked in Settings, the Client checked in the light theme and again after relaunching it dark, then the default blue picked again. Settings again switched `DWM\EnableWindowColorization` from 0 to 1, which was written back, and all four exports then matched the snapshot. With Gold, Save was #0067C0 with white text (5.7:1) in the light theme and #4CC2FF with black (10.5:1) in the dark, 90% on hover and 80% pressed; the selection pill, the focused field's underline and a checked checkbox took Gold's #E37700 and #FFB634, and Settings' own toggle was filled #E37700. The simulated press only registered once the real pointer, which sat over the Client's window, was moved off it (and back afterwards): Windows' own mouse events were clearing the page's hover and pressed states, which also accounts for Q90's one failed pressed reading. Cleanup removed the test folder, tasks and worktree, and every entry created that day in the repo's `target\debug` (72 entries, 1.1 GB). About 340 MB of that was dependency builds and fingerprints left by the first zx8 run that morning, which the earlier cleanups had missed. The repo's binaries kept their hashes. The five crates that first run downloaded into the machine's cargo cache were left there.
+**Decided-by:** agent
+**Justification:** Frank asked for the check on windows-zx8 with Gold. Picking in Settings is the only way to get the palette Windows itself derives, and the snapshot comparison is what shows the machine was left as found.
+**Outcome:** applied
+**Ref:** (pending)

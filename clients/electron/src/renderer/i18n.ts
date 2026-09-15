@@ -7,6 +7,29 @@
  * this shim in M5; the call sites do not change.
  */
 
+/**
+ * English as a Mac writes it on a button or a menu item: title-style
+ * capitalization (HIG, Buttons › Content; Menus), where Windows writes the
+ * same label in sentence case. Only labels of more than one word differ, so
+ * only they are here — headings, links and checkbox labels are sentence case
+ * on both.
+ */
+const englishOnMac: Partial<Record<MessageKey, string>> = {
+  "core.retry": "Try Again",
+  "onboarding.skip": "Skip This",
+  "onboarding.reopen": "Run Setup Again…",
+  "onboarding.briefing.accept": "I Have Read This",
+  "onboarding.permissions.check": "Check by Recording",
+  "onboarding.permissions.recheck": "Check Again",
+  "posture.open": "What It Knows",
+  "backend.warning.accept": "I Understand — Use This Provider",
+  "backend.warning.cancel": "Keep Summary Local",
+  "backend.key.save": "Save Key",
+  "backend.key.clear": "Forget Key",
+  "registry.sample.play": "Play Voice",
+  "registry.rename": "Name This Voice",
+};
+
 const en = {
   "app.title": "EverTranscript",
   "core.connecting": "Connecting to the Core…",
@@ -21,7 +44,40 @@ const en = {
   "core.start.exited":
     "The Core started and then stopped by itself. Its log will say why.",
   "core.retry": "Try again",
+  "menu.file": "File",
+  "menu.view": "View",
+  "menu.enterFullScreen": "Enter Full Screen",
+  "menu.exitFullScreen": "Exit Full Screen",
+  "menu.about": "About EverTranscript",
+  "menu.services": "Services",
+  "menu.hide": "Hide EverTranscript",
+  "menu.hideOthers": "Hide Others",
+  "menu.showAll": "Show All",
+  "menu.quit": "Quit EverTranscript",
+  "menu.close": "Close",
+  "menu.edit": "Edit",
+  "menu.undo": "Undo",
+  "menu.redo": "Redo",
+  "menu.cut": "Cut",
+  "menu.copy": "Copy",
+  "menu.paste": "Paste",
+  "menu.pasteAndMatchStyle": "Paste and Match Style",
+  "menu.delete": "Delete",
+  "menu.selectAll": "Select All",
+  "menu.substitutions": "Substitutions",
+  "menu.showSubstitutions": "Show Substitutions",
+  "menu.smartQuotes": "Smart Quotes",
+  "menu.smartDashes": "Smart Dashes",
+  "menu.textReplacement": "Text Replacement",
+  "menu.speech": "Speech",
+  "menu.startSpeaking": "Start Speaking",
+  "menu.stopSpeaking": "Stop Speaking",
+  "menu.window": "Window",
+  "menu.minimize": "Minimize",
+  "menu.zoom": "Zoom",
+  "menu.front": "Bring All to Front",
   "settings.title": "Settings",
+  "settings.windowTitle": "EverTranscript Settings",
   "settings.open": "Settings",
   "settings.close": "Done",
   "settings.autoRecord": "Auto-Record",
@@ -199,8 +255,8 @@ const en = {
   "meeting.recordingNow": "Recording now",
   "meeting.selectPrompt": "Select a meeting",
   "meeting.incomplete": "This recording is incomplete",
-  "meeting.deleteConfirm":
-    "Delete this meeting? Its transcript, notes file, and audio are removed permanently.",
+  "meeting.deleteConfirm": "Delete this meeting?",
+  "meeting.deleteConfirm.detail": "Its transcript, notes file, and audio are removed permanently.",
   "transcript.empty": "No transcript yet.",
   "transcript.listening": "Listening…",
   "transcript.dropped": "Some captions were dropped — this window fell behind.",
@@ -228,7 +284,40 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "core.start.killed": "Core 刚启动就被某个程序终止了。通常是杀毒软件或其他安全工具所致。",
     "core.start.exited": "Core 启动后自行退出了。具体原因请查看它的日志。",
     "core.retry": "重试",
+    "menu.file": "文件",
+    "menu.view": "显示",
+    "menu.enterFullScreen": "进入全屏幕",
+    "menu.exitFullScreen": "退出全屏幕",
+    "menu.about": "关于EverTranscript",
+    "menu.services": "服务",
+    "menu.hide": "隐藏EverTranscript",
+    "menu.hideOthers": "隐藏其他",
+    "menu.showAll": "全部显示",
+    "menu.quit": "退出EverTranscript",
+    "menu.close": "关闭",
+    "menu.edit": "编辑",
+    "menu.undo": "撤销",
+    "menu.redo": "重做",
+    "menu.cut": "剪切",
+    "menu.copy": "拷贝",
+    "menu.paste": "粘贴",
+    "menu.pasteAndMatchStyle": "粘贴并匹配样式",
+    "menu.delete": "删除",
+    "menu.selectAll": "全选",
+    "menu.substitutions": "替换",
+    "menu.showSubstitutions": "显示替换",
+    "menu.smartQuotes": "智能引号",
+    "menu.smartDashes": "智能破折号",
+    "menu.textReplacement": "文本替换",
+    "menu.speech": "语音",
+    "menu.startSpeaking": "开始朗读",
+    "menu.stopSpeaking": "停止朗读",
+    "menu.window": "窗口",
+    "menu.minimize": "最小化",
+    "menu.zoom": "缩放",
+    "menu.front": "前置全部窗口",
     "settings.title": "设置",
+    "settings.windowTitle": "EverTranscript设置",
     "settings.open": "设置",
     "settings.close": "完成",
     "settings.autoRecord": "自动录制",
@@ -394,7 +483,8 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "meeting.recordingNow": "正在录制",
     "meeting.selectPrompt": "请选择一个会议",
     "meeting.incomplete": "这次录音不完整",
-    "meeting.deleteConfirm": "确定删除这个会议？转录、笔记文件和音频都会被永久删除。",
+    "meeting.deleteConfirm": "确定删除这个会议？",
+    "meeting.deleteConfirm.detail": "转录、笔记文件和音频都会被永久删除。",
     "transcript.empty": "暂无转录内容。",
     "transcript.listening": "正在聆听…",
     "transcript.dropped": "部分字幕已丢弃 — 此窗口处理不及时。",
@@ -408,13 +498,18 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
   },
 };
 
-function activeLocale(): string {
+/// The locale the catalog is answering in, which is also what the
+/// document should be declaring in `<html lang>`.
+export function activeLocale(): string {
   const requested = typeof navigator !== "undefined" ? navigator.language : "en";
   return requested in catalogs ? requested : "en";
 }
 
+const MAC = typeof navigator !== "undefined" && navigator.userAgent.includes("Macintosh");
+
 export function t(key: MessageKey): string {
-  return catalogs[activeLocale()]?.[key] ?? en[key];
+  const locale = activeLocale();
+  return (MAC && locale === "en" ? englishOnMac[key] : undefined) ?? catalogs[locale]?.[key] ?? en[key];
 }
 
 /** A key the catalog holds one string per plural category for. */

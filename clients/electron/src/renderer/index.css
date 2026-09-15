@@ -1,29 +1,143 @@
 @import "tailwindcss";
 
-/* Theme tokens, defined once and used by both light and dark. The Client
-   follows the system rather than offering a theme switch: a notetaker that
-   sits in the background all day should look like the rest of the desktop. */
 @theme {
-  --color-surface: #ffffff;
-  --color-surface-raised: #f7f7f8;
-  --color-ink: #16181d;
-  --color-ink-muted: #6b7280;
-  --color-line: #e5e7eb;
-  --color-recording: #b42318;
-}
+  /* Each platform's own UI face, named precisely enough to actually reach
+     it. `-apple-system` is ignored off macOS, so Windows lands on Segoe UI
+     Variable — Windows 11's optical-size family, which the plain "Segoe UI"
+     fallback never gets to. macOS switches Text to Display by itself;
+     Windows needs to be told, which is what --font-display is for.
+     Nothing is downloaded: the CSP in index.html forbids it, and the
+     platform's own face is the point. */
+  --font-sans:
+    -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display:
+    -apple-system, "Segoe UI Variable Display", "Segoe UI", system-ui,
+    sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 
-@media (prefers-color-scheme: dark) {
-  @theme {
-    --color-surface: #16181d;
-    --color-surface-raised: #1d2026;
-    --color-ink: #f3f4f6;
-    --color-ink-muted: #9ca3af;
-    --color-line: #2c2f36;
-    --color-recording: #f97066;
-  }
+  /* The platform's own type ramp, size and leading together. These are
+     Apple's macOS text styles; Windows' ramp replaces them below.
+     Subheadline for secondary lines, Body for everything the Operator
+     operates, Title 1 for a view's title. The transcript takes Title 3 with
+     the loose leading Apple gives a long passage that is read rather than
+     scanned — the one place the record is set larger than the chrome
+     around it. */
+  --text-xs: 11px;
+  --text-xs--line-height: 14px;
+  --text-sm: 13px;
+  --text-sm--line-height: 16px;
+  --text-lg: 15px;
+  --text-lg--line-height: 22px;
+  --text-xl: 22px;
+  --text-xl--line-height: 26px;
+
+  /* Emphasis in the platform's own weights, of which neither ramp has
+     Medium: Apple emphasizes body sizes in Semibold, and Fluent's Body
+     Strong and Subtitle are Semibold too. Titles go to Bold on macOS,
+     below. */
+  --font-weight-medium: 600;
+
+  /* On macOS every colour here is a stand-in, replaced twice over: the
+     base layer swaps in AppKit's semantic colours, and the main process
+     lays the Operator's live ones over those. What is written here is what
+     Windows keeps.
+
+     From brand/README.md: `ink` #1F1D1B and `paper` #F5F1E8 are the brand's
+     two grounds, and `record` #E5484D is the one accent it reserves for
+     recording. light-dark() follows the system rather than offering a theme
+     switch: a notetaker that sits in the background all day should look
+     like the rest of the desktop.
+
+     Muted, hairline and raised are mixed from the ink rather than chosen,
+     so they hold their family in both appearances — and stay translucent,
+     which is what lets the window's material through. */
+  --color-surface: light-dark(#ffffff, #1f1d1b);
+  --color-ink: light-dark(#1f1d1b, #f5f1e8);
+  --color-ink-muted: color-mix(in oklab, var(--color-ink) 62%, transparent);
+  --color-line: color-mix(in oklab, var(--color-ink) 14%, transparent);
+  --color-surface-raised: color-mix(in oklab, var(--color-ink) 7%, transparent);
+  --color-recording: light-dark(#e5484d, #ff6369);
+  --color-placeholder: var(--color-ink-muted);
+
+  /* The Operator's own accent, set in System Settings or Windows
+     Personalization — the colour here we don't choose. CSS has a keyword
+     for it, `AccentColor`, and this Chromium resolves it to nothing, so the
+     main process reads it from the OS and overwrites this line at runtime.
+     On Windows what it reads is the shade Fluent fills a control with,
+     darker in the light theme and lighter in the dark. Ink stands in until
+     then. */
+  --color-accent: var(--color-ink);
+  --color-focus: color-mix(in oklab, var(--color-accent) 50%, transparent);
+  /* AppKit's own selection blue, for the moment before the real one
+     arrives: a selected row carries white text, and has to be legible
+     before it has to be personal. */
+  --color-selected: light-dark(#0064e1, #0059d1);
+  --color-selected-unemphasized: color-mix(
+    in oklab,
+    var(--color-ink) 10%,
+    transparent
+  );
 }
 
 @layer base {
+  :root {
+    /* Tells the engine which half of light-dark() to take, and hands the OS
+       its own scrollbars, selection and form controls at the same time. */
+    color-scheme: light dark;
+    /* The checkboxes and radio buttons the engine draws take the system
+       accent too, as the platform's own do. */
+    accent-color: var(--color-accent);
+    font-size: 13px;
+
+    /* The strip at the top of the window the OS shares with the page.
+       Windows publishes its real height through titleBarOverlay; macOS has
+       no equivalent, and 52px is the height AppKit gives a window whose
+       toolbar is unified with its title bar, which is where the main
+       process centres the traffic lights. */
+    --titlebar-height: env(titlebar-area-height, 52px);
+    /* The part of that strip at the right that belongs to the caption
+       buttons, and so to no content. Nothing on macOS. */
+    --titlebar-inset-end: calc(
+      100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)
+    );
+  }
+
+  :root[data-platform="darwin"] {
+    /* Title 1's emphasized weight on a Mac is Bold. */
+    --font-weight-semibold: 700;
+
+    /* AppKit's semantic colours as a view drawing in each appearance gets
+       them, at standard contrast. The main process lays the Operator's own
+       over whichever appearance it could read them in (AppKit answers in the
+       one the app launched in); these carry the other appearance until the
+       next launch. A selected row darkens the accent, as AppKit's does. */
+    --color-surface: light-dark(#ffffff, #1e1e1e);
+    --color-ink: light-dark(#000000d8, #ffffffd8);
+    --color-ink-muted: light-dark(#0000007f, #ffffff8c);
+    --color-line: light-dark(#00000019, #ffffff19);
+    --color-placeholder: var(--color-ink-muted);
+    --color-recording: light-dark(#ff383c, #ff4245);
+    --color-selected: light-dark(
+      color-mix(in srgb, var(--color-accent) 88%, black),
+      color-mix(in srgb, var(--color-accent) 82%, black)
+    );
+    --color-selected-unemphasized: light-dark(#dcdcdc, #464646);
+  }
+
+  /* Windows 11's own ramp: Caption, Body, Body Large, Subtitle. */
+  :root[data-platform="win32"] {
+    font-size: 14px;
+    --text-xs: 12px;
+    --text-xs--line-height: 16px;
+    --text-sm: 14px;
+    --text-sm--line-height: 20px;
+    --text-lg: 18px;
+    --text-lg--line-height: 24px;
+    --text-xl: 20px;
+    --text-xl--line-height: 28px;
+  }
+
   html,
   body,
   #root {
@@ -31,11 +145,289 @@
   }
 
   body {
-    background: var(--color-surface);
+    /* Transparent on purpose: the window's own material — vibrancy on
+       macOS, Mica on Windows 11 — is drawn behind the page, and anything
+       opaque here would hide it. Panes that need a ground paint their own,
+       and on a machine with no material this reveals the window's
+       background colour, which is the same colour. */
+    background: transparent;
     color: var(--color-ink);
-    font-family:
-      -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-family: var(--font-sans);
     /* The window is a fixed frame with independently scrolling panes. */
     overflow: hidden;
+  }
+
+  /* The window has no title bar of its own, so this is the only place it
+     can be dragged by — and controls sitting in it still have to be
+     clickable. */
+  .titlebar {
+    -webkit-app-region: drag;
+  }
+
+  .titlebar :is(button, input, a, select, textarea) {
+    -webkit-app-region: no-drag;
+  }
+
+  ::placeholder {
+    color: var(--color-placeholder);
+    opacity: 1;
+  }
+
+  /* The Mac's focus ring is a soft halo of the accent hugging the control's
+     own shape; Windows draws a hard stroke in the ink, set off from it. */
+  :focus-visible {
+    outline: 3px solid var(--color-focus);
+    outline-offset: 0;
+  }
+
+  :root[data-platform="win32"] :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 1px;
+  }
+}
+
+@layer components {
+  /* A row of the window's toolbar, in the strip a title bar would take. */
+  .toolbar {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    height: var(--titlebar-height);
+    padding-inline: 9px;
+  }
+
+  /* A toolbar item. macOS 26 draws each text item as its own capsule of
+     glass: measured off a live NSToolbar, 36px tall, 9px either side of a
+     13px label, 8px apart, sitting 8px from the top of the 52px strip. This
+     engine has no glass to draw with, so the capsule is the fill, rim and
+     halo the real one shows over a flat window, without the refraction.
+     ponytail: the macOS 26 look only; a Mac on 15 or older draws borderless
+     items, and would need the OS version passed through to tell. */
+  .tool {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 36px;
+    height: 36px;
+    padding-inline: 9px;
+    border-radius: 18px;
+    background: light-dark(rgb(0 0 0 / 1%), rgb(0 0 0 / 18%));
+    box-shadow:
+      inset 0 0 0 1px light-dark(rgb(255 255 255 / 70%), rgb(255 255 255 / 8%)),
+      0 2px 40px light-dark(rgb(0 0 0 / 10%), rgb(0 0 0 / 0%));
+    color: var(--color-ink);
+    font-size: 13px;
+    line-height: 16px;
+    white-space: nowrap;
+  }
+
+  .tool:active {
+    background: light-dark(rgb(0 0 0 / 9%), rgb(255 255 255 / 10%));
+  }
+
+  /* A Mac shows which window is being typed into by dimming the frame of
+     every other one. The page draws part of this window's frame, so it
+     dims that part itself. */
+  :root[data-platform="darwin"][data-active="false"] .tool {
+    color: var(--color-ink-muted);
+  }
+
+  /* A push button at the platform's regular size. The macOS numbers were
+     measured off a live NSButton on macOS 26 rather than recalled: 24px
+     tall, a 6px corner, a quiet fill and no stroke. It has no hover state
+     because a Mac button has none — pressing is what shows. `push-default`
+     is the one action Return performs (`main.tsx` sends Return to it),
+     filled with the accent as AppKit fills it; a view gets one, and only
+     when Return should act without a second look. */
+  .push,
+  .push-default {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 24px;
+    padding-inline: 10px;
+    border-radius: 6px;
+    background: light-dark(rgb(0 0 0 / 6%), rgb(255 255 255 / 11%));
+    color: var(--color-ink);
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+    white-space: nowrap;
+  }
+
+  .push:active:not(:disabled) {
+    background: light-dark(rgb(0 0 0 / 14%), rgb(255 255 255 / 22%));
+  }
+
+  .push-default:not(:disabled) {
+    background: var(--color-accent);
+    color: white;
+  }
+
+  .push-default:active:not(:disabled) {
+    filter: brightness(0.88);
+  }
+
+  :is(.push, .push-default):disabled {
+    opacity: 0.45;
+  }
+
+  /* A text field: the hairline and the text background AppKit draws, with
+     the focus ring above doing the rest. */
+  .field {
+    min-height: 24px;
+    padding: 3px 7px;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-ink);
+    /* Body, not the 1.5 the reset gives form controls, which would make the
+       field — and every button stretched beside it — a few pixels taller
+       than the platform's. */
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+  }
+
+  /* A meeting in the sidebar, selected the way a Mac source list selects:
+     a rounded plate inset from the column's edges, grey while the list
+     doesn't have the keyboard and the accent with white text while it does.
+     `:focus-within` stops matching when the window goes to the background,
+     which is exactly when AppKit greys its own selection too. */
+  .row {
+    display: block;
+    width: calc(100% - 20px);
+    margin-inline: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    text-align: start;
+  }
+
+  .row[aria-current="true"] {
+    background: var(--color-selected-unemphasized);
+  }
+
+  /* The highlight is the focus indicator for a list on a Mac, so a row
+     that has the keyboard shows no ring as well. */
+  :root[data-platform="darwin"] .row:focus-visible {
+    outline: none;
+  }
+
+  :root[data-platform="darwin"] :focus-within > li > .row[aria-current="true"] {
+    --color-ink: white;
+    --color-ink-muted: rgb(255 255 255 / 80%);
+    background: var(--color-selected);
+    color: var(--color-ink);
+  }
+
+  /* Windows, in Fluent's own measures: 32px controls on a 4px corner, a
+     fill with an elevation stroke that is darker along the bottom, hover
+     as well as press, and text fields that mark focus with an accent
+     underline rather than a ring. */
+  :root[data-platform="win32"] :is(.push, .push-default) {
+    min-height: 32px;
+    padding-inline: 12px;
+    border: 1px solid light-dark(rgb(0 0 0 / 6%), rgb(255 255 255 / 9%));
+    border-bottom-color: light-dark(rgb(0 0 0 / 16%), rgb(255 255 255 / 7%));
+    border-radius: 4px;
+    background: light-dark(rgb(255 255 255 / 70%), rgb(255 255 255 / 6%));
+  }
+
+  /* A subtle button: no fill until the pointer is over it. */
+  :root[data-platform="win32"] .tool {
+    min-width: 32px;
+    height: 32px;
+    padding-inline: 11px;
+    border-radius: 4px;
+    background: transparent;
+    box-shadow: none;
+    font-size: var(--text-sm);
+    line-height: var(--text-sm--line-height);
+  }
+
+  :root[data-platform="win32"] .tool:hover {
+    background: light-dark(rgb(0 0 0 / 4%), rgb(255 255 255 / 6%));
+  }
+
+  :root[data-platform="win32"] .tool:active {
+    background: light-dark(rgb(0 0 0 / 2%), rgb(255 255 255 / 4%));
+    color: var(--color-ink-muted);
+  }
+
+  :root[data-platform="win32"] .push:hover:not(:disabled) {
+    background: light-dark(rgb(249 249 249 / 50%), rgb(255 255 255 / 8%));
+  }
+
+  :root[data-platform="win32"] .push:active:not(:disabled) {
+    background: light-dark(rgb(249 249 249 / 30%), rgb(255 255 255 / 3%));
+    color: var(--color-ink-muted);
+  }
+
+  /* Fluent's accent button, filled with the default blue's shades (Dark1 in
+     the light theme, Light2 in the dark) whatever accent the Operator
+     picked: white text on a light accent's Dark1 falls to 2.3:1 on Yellow
+     gold, and a button has to be read. The accent still marks selection,
+     checkboxes and focus. The stroke lightens the top and darkens the
+     bottom, and hover and press thin the fill rather than darken it. */
+  :root[data-platform="win32"] .push-default:not(:disabled) {
+    --button-fill: light-dark(#0067c0, #4cc2ff);
+    border-color: rgb(255 255 255 / 8%);
+    border-bottom-color: light-dark(rgb(0 0 0 / 40%), rgb(0 0 0 / 14%));
+    background: var(--button-fill);
+    color: light-dark(white, black);
+  }
+
+  :root[data-platform="win32"] .push-default:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--button-fill) 90%, transparent);
+  }
+
+  :root[data-platform="win32"] .push-default:active:not(:disabled) {
+    background: color-mix(in srgb, var(--button-fill) 80%, transparent);
+    color: light-dark(rgb(255 255 255 / 70%), rgb(0 0 0 / 50%));
+    filter: none;
+  }
+
+  :root[data-platform="win32"] .field {
+    min-height: 32px;
+    padding: 5px 11px;
+    border-color: light-dark(rgb(0 0 0 / 6%), rgb(255 255 255 / 7%));
+    border-bottom-color: light-dark(rgb(0 0 0 / 45%), rgb(255 255 255 / 55%));
+    border-radius: 4px;
+    background: light-dark(rgb(255 255 255 / 70%), rgb(255 255 255 / 6%));
+  }
+
+  :root[data-platform="win32"] .field:focus {
+    outline: none;
+    border-bottom-color: var(--color-accent);
+    box-shadow: inset 0 -1px 0 var(--color-accent);
+    background: var(--color-surface);
+  }
+
+  /* A navigation list item: the subtle fill, and the short accent pill at
+     the leading edge that marks which one is current. */
+  :root[data-platform="win32"] .row {
+    position: relative;
+    width: calc(100% - 8px);
+    margin-inline: 4px;
+    padding: 6px 12px;
+    border-radius: 4px;
+  }
+
+  :root[data-platform="win32"] .row:is(:hover, [aria-current="true"]) {
+    background: light-dark(rgb(0 0 0 / 4%), rgb(255 255 255 / 6%));
+  }
+
+  :root[data-platform="win32"] .row[aria-current="true"]::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: 0;
+    width: 3px;
+    height: 16px;
+    margin-block: auto;
+    border-radius: 2px;
+    background: var(--color-accent);
   }
 }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { AudioLegReport } from "@protocol/AudioLegReport";
 import type { Meeting } from "@protocol/Meeting";
@@ -39,14 +39,107 @@ export function App(): React.JSX.Element {
   const active = core.meetings.find((meeting) => meeting.id === activeId) ?? null;
   const isLive = active !== null && active.id === recording?.id;
 
+  // One set of handlers behind the toolbar and the menu bar alike, so a
+  // command cannot come to mean one thing in one and another in the other.
+  const commands = {
+    record: () => void core.startRecording(),
+    stop: () => void core.stopRecording(),
+    settings: () => {
+      setShowingRegistry(false);
+      setShowingSettings((open) => !open);
+    },
+    registry: () => {
+      setShowingSettings(false);
+      setShowingPosture(false);
+      setShowingRegistry((open) => !open);
+    },
+    posture: () => {
+      setShowingSettings(false);
+      setShowingRegistry(false);
+      setShowingPosture((open) => !open);
+    },
+    // Asked for from Settings, which on a Mac is a window of its own.
+    onboarding: () => {
+      setShowingSettings(false);
+      setShowingOnboarding(true);
+    },
+  };
+  const latestCommands = useRef(commands);
+  latestCommands.current = commands;
+  useEffect(
+    () =>
+      window.evertranscript.onMenuCommand((command) =>
+        latestCommands.current[command as keyof typeof commands]?.(),
+      ),
+    [],
+  );
+
+  // The menu bar is where a Mac looks for every command a window offers,
+  // so the toolbar's are there too, in the catalog's words. They are
+  // offered only once the window is showing the toolbar they mirror.
+  const available =
+    !core.error && Boolean(core.status) && Boolean(briefing?.acknowledged) && !showingOnboarding;
+  const isRecording = recording !== null;
+  useEffect(() => {
+    window.evertranscript.updateMenu({
+      available,
+      recording: isRecording,
+      labels: {
+        about: t("menu.about"),
+        services: t("menu.services"),
+        hide: t("menu.hide"),
+        hideOthers: t("menu.hideOthers"),
+        showAll: t("menu.showAll"),
+        quit: t("menu.quit"),
+        file: t("menu.file"),
+        close: t("menu.close"),
+        edit: t("menu.edit"),
+        undo: t("menu.undo"),
+        redo: t("menu.redo"),
+        cut: t("menu.cut"),
+        copy: t("menu.copy"),
+        paste: t("menu.paste"),
+        pasteAndMatchStyle: t("menu.pasteAndMatchStyle"),
+        delete: t("menu.delete"),
+        selectAll: t("menu.selectAll"),
+        substitutions: t("menu.substitutions"),
+        showSubstitutions: t("menu.showSubstitutions"),
+        smartQuotes: t("menu.smartQuotes"),
+        smartDashes: t("menu.smartDashes"),
+        textReplacement: t("menu.textReplacement"),
+        speech: t("menu.speech"),
+        startSpeaking: t("menu.startSpeaking"),
+        stopSpeaking: t("menu.stopSpeaking"),
+        view: t("menu.view"),
+        window: t("menu.window"),
+        minimize: t("menu.minimize"),
+        zoom: t("menu.zoom"),
+        front: t("menu.front"),
+        settings: t("settings.open"),
+        record: t("action.record"),
+        stop: t("action.stop"),
+        registry: t("registry.open"),
+        posture: t("posture.open"),
+        enterFullScreen: t("menu.enterFullScreen"),
+        exitFullScreen: t("menu.exitFullScreen"),
+      },
+    });
+  }, [available, isRecording]);
+
   if (core.error) {
-    return <CoreUnreachable message={core.error} onRetry={core.refresh} />;
+    return (
+      <Frame>
+        <CoreUnreachable message={core.error} onRetry={core.refresh} />
+      </Frame>
+    );
   }
   if (!core.status) {
     return (
-      <div className="grid h-full place-items-center text-[--color-ink-muted]">
-        {t("core.connecting")}
-      </div>
+      <Frame>
+        <div className="grid h-full place-items-center bg-surface text-ink-muted">
+          {t("core.connecting")}
+        </div>
+      </Frame>
     );
   }
 
@@ -54,7 +147,11 @@ export function App(): React.JSX.Element {
   // Nothing is captured before that (ADR-0023), so a sidebar offering a
   // Record button would be offering an action that will be refused.
   if (!briefing?.acknowledged || showingOnboarding) {
-    return <Onboarding onDone={() => setShowingOnboarding(false)} />;
+    return (
+      <Frame>
+        <Onboarding onDone={() => setShowingOnboarding(false)} />
+      </Frame>
+    );
   }
 
   return (
@@ -64,31 +161,47 @@ export function App(): React.JSX.Element {
         activeId={activeId}
         recordingId={recording?.id ?? null}
         onSelect={setSelectedId}
-        onRecord={() => void core.startRecording()}
-        onStop={() => void core.stopRecording()}
-        onSettings={() => {
-          setShowingRegistry(false);
-          setShowingSettings((open) => !open);
-        }}
-        onRegistry={() => {
-          setShowingSettings(false);
-          setShowingPosture(false);
-          setShowingRegistry((open) => !open);
-        }}
-        onPosture={() => {
-          setShowingSettings(false);
-          setShowingRegistry(false);
-          setShowingPosture((open) => !open);
-        }}
+        onRecord={commands.record}
+        onStop={commands.stop}
       />
-      <main className="flex h-full min-w-0 flex-col overflow-hidden">
+      <main className="flex h-full min-w-0 flex-col overflow-hidden bg-surface">
+        {/* The window's toolbar, in the strip a title bar would have taken —
+            where a Mac app keeps its toolbar, and where Windows puts
+            commands in a tall title bar. It stops short of the caption
+            buttons Windows draws over its far end. */}
+        <div
+          className="titlebar toolbar"
+          style={{ paddingInlineEnd: "calc(var(--titlebar-inset-end) + 9px)" }}
+        >
+          <button
+            type="button"
+            onClick={commands.registry}
+            title={t("registry.title")}
+            className="tool"
+          >
+            {t("registry.open")}
+          </button>
+          <button
+            type="button"
+            onClick={commands.posture}
+            title={t("posture.title")}
+            className="tool"
+          >
+            {t("posture.open")}
+          </button>
+          {/* A Mac keeps Settings in the App menu, under ⌘, — not in the
+              toolbar, where it would take room from what is used every day.
+              Windows has no menu bar to keep it in. */}
+          {document.documentElement.dataset.platform !== "darwin" && (
+            <button type="button" onClick={commands.settings} className="tool">
+              {t("settings.open")}
+            </button>
+          )}
+        </div>
         {showingSettings ? (
           <SettingsPanel
             onClose={() => setShowingSettings(false)}
-            onRerunSetup={() => {
-              setShowingSettings(false);
-              setShowingOnboarding(true);
-            }}
+            onRerunSetup={commands.onboarding}
           />
         ) : showingRegistry ? (
           <RegistryPanel
@@ -118,6 +231,23 @@ export function App(): React.JSX.Element {
   );
 }
 
+/**
+ * The window edge, for the states that fill the window without a toolbar.
+ *
+ * There is no title bar: macOS keeps its traffic lights at the left of this
+ * strip, Windows draws its caption buttons over the right of it, and both
+ * expect the app to leave the room and to accept a drag there. The main
+ * window puts its toolbar in the same strip instead.
+ */
+function Frame({ children }: { children: React.ReactNode }): React.JSX.Element {
+  return (
+    <div className="relative h-full pt-[var(--titlebar-height)]">
+      <div className="titlebar absolute inset-x-0 top-0 h-[var(--titlebar-height)]" />
+      {children}
+    </div>
+  );
+}
+
 function CoreUnreachable({
   message,
   onRetry,
@@ -126,27 +256,27 @@ function CoreUnreachable({
   onRetry: () => void;
 }): React.JSX.Element {
   return (
-    <div className="grid h-full place-items-center p-8">
+    <div className="grid h-full place-items-center bg-surface p-8">
       <div className="max-w-md text-center">
-        <h1 className="text-lg font-semibold text-[--color-recording]">
+        <h1 className="font-display text-xl font-semibold text-recording">
           {t("core.unreachable.title")}
         </h1>
         {/* The recording is not lost when this window cannot reach the Core —
             the Core is a separate process and keeps going (ADR-0026). */}
-        <p className="mt-2 text-sm text-[--color-ink-muted]">
+        <p className="mt-2 text-sm text-ink-muted">
           {t("core.unreachable.hint")}
         </p>
         {/* The Core reports why by catalog key where it has one to give,
             so the sentence the Operator reads is translated rather than
             whatever English the main process happened to build. Anything
             else — an OS error, a socket path — is shown as it came. */}
-        <pre className="mt-4 overflow-x-auto rounded bg-[--color-surface-raised] p-3 text-left text-xs text-[--color-ink-muted]">
+        <pre className="mt-4 overflow-x-auto rounded bg-surface-raised p-3 text-left text-xs text-ink-muted">
           {isMessageKey(message) ? t(message) : message}
         </pre>
         <button
           type="button"
           onClick={onRetry}
-          className="mt-4 rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+          className="push-default mt-4"
         >
           {t("core.retry")}
         </button>
@@ -162,9 +292,6 @@ function Sidebar({
   onSelect,
   onRecord,
   onStop,
-  onSettings,
-  onRegistry,
-  onPosture,
 }: {
   meetings: Meeting[];
   activeId: string | null;
@@ -172,69 +299,49 @@ function Sidebar({
   onSelect: (id: string) => void;
   onRecord: () => void;
   onStop: () => void;
-  onSettings: () => void;
-  onRegistry: () => void;
-  onPosture: () => void;
 }): React.JSX.Element {
+  // The list's one Tab stop is the selected row, or the first row when the
+  // selection is a Meeting the list does not show — deleted elsewhere, or
+  // older than the page of Meetings it holds.
+  const tabStop = meetings.some((meeting) => meeting.id === activeId)
+    ? activeId
+    : meetings[0]?.id;
   return (
-    <aside className="flex h-full flex-col border-r border-[--color-line] bg-[--color-surface-raised]">
-      {/* Four controls in a 280px column, and their labels genuinely do not
-          fit on one line. `justify-between` alone pushed them to the edges
-          with nothing between, so they ran together — "EverTranscriptVoices
-          What it knows". Truncating the name instead just moved the damage:
-          it became "Eve…".
-          So the row wraps. Nothing is hidden and nothing collides, at any
-          width and in any translation — which matters here, because the
-          Chinese labels are a different length again. */}
-      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-[--color-line] px-4 py-3">
-        <button
-          type="button"
-          onClick={onSettings}
-          title={t("settings.open")}
-          className="whitespace-nowrap text-sm font-semibold hover:text-[--color-ink-muted]"
-        >
-          {t("app.title")}
-        </button>
-        <div className="flex shrink-0 items-center gap-2">
-        <button
-          type="button"
-          onClick={onRegistry}
-          title={t("registry.title")}
-          className="whitespace-nowrap text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
-        >
-          {t("registry.open")}
-        </button>
-        <button
-          type="button"
-          onClick={onPosture}
-          title={t("posture.title")}
-          className="whitespace-nowrap text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
-        >
-          {t("posture.open")}
-        </button>
+    <aside className="flex h-full flex-col border-r border-line">
+      {/* The sidebar's share of the toolbar strip. The traffic lights take
+          its leading end on macOS, so Record goes at the other. */}
+      <div className="titlebar toolbar">
         {recordingId ? (
-          <button
-            type="button"
-            onClick={onStop}
-            className="whitespace-nowrap rounded bg-[--color-recording] px-2.5 py-1 text-xs font-medium text-white"
-          >
+          <button type="button" onClick={onStop} className="tool">
+            <span aria-hidden className="size-2 bg-recording" />
             {t("action.stop")}
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={onRecord}
-            className="whitespace-nowrap rounded border border-[--color-line] px-2.5 py-1 text-xs font-medium hover:bg-[--color-surface]"
-          >
+          <button type="button" onClick={onRecord} className="tool">
+            <span aria-hidden className="size-2 rounded-full bg-recording" />
             {t("action.record")}
           </button>
         )}
-        </div>
-      </header>
+      </div>
 
-      <ul className="min-h-0 flex-1 overflow-y-auto">
+      {/* One stop for Tab, with the arrow keys moving the selection and the
+          keyboard with it — how a list behaves on both platforms, and what
+          lets the highlight double as the focus indicator. */}
+      <ul
+        className="min-h-0 flex-1 overflow-y-auto pb-2.5"
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          const index = meetings.findIndex((meeting) => meeting.id === activeId);
+          const next = index + (event.key === "ArrowDown" ? 1 : -1);
+          const target = meetings[next];
+          if (!target) return;
+          event.preventDefault();
+          onSelect(target.id);
+          event.currentTarget.children[next]?.querySelector("button")?.focus();
+        }}
+      >
         {meetings.length === 0 ? (
-          <li className="px-4 py-6 text-sm text-[--color-ink-muted]">
+          <li className="px-4 py-6 text-sm text-ink-muted">
             {t("meetings.empty")}
             <span className="mt-1 block text-xs">{t("meetings.emptyHint")}</span>
           </li>
@@ -244,17 +351,17 @@ function Sidebar({
               <button
                 type="button"
                 onClick={() => onSelect(meeting.id)}
-                className={`w-full border-b border-[--color-line] px-4 py-3 text-left ${
-                  meeting.id === activeId ? "bg-[--color-surface]" : ""
-                }`}
+                aria-current={meeting.id === activeId ? "true" : undefined}
+                tabIndex={meeting.id === tabStop ? 0 : -1}
+                className="row"
               >
                 <span className="block truncate text-sm">
                   {displayTitle(meeting)}
                 </span>
-                <span className="mt-0.5 flex items-center gap-1.5 text-xs text-[--color-ink-muted]">
+                <span className="mt-0.5 flex items-center gap-1.5 text-xs text-ink-muted">
                   {meeting.id === recordingId ? (
                     <>
-                      <span className="inline-block size-1.5 rounded-full bg-[--color-recording]" />
+                      <span className="inline-block size-1.5 rounded-full bg-recording" />
                       {t("meeting.recordingNow")}
                     </>
                   ) : (
@@ -287,7 +394,7 @@ function MeetingView({
 
   return (
     <>
-      <header className="border-b border-[--color-line] px-6 py-4">
+      <header className="border-b border-line px-6 py-4">
         {editing ? (
           <form
             onSubmit={(event) => {
@@ -295,21 +402,21 @@ function MeetingView({
               if (draft.trim()) onRetitle(draft.trim());
               setEditing(false);
             }}
-            className="flex gap-2"
+            className="flex items-center gap-2"
           >
             <input
               autoFocus
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              className="min-w-0 flex-1 rounded border border-[--color-line] bg-[--color-surface] px-2 py-1 text-lg"
+              className="field min-w-0 flex-1 font-display text-xl"
             />
-            <button type="submit" className="rounded border border-[--color-line] px-3 text-sm">
+            <button type="submit" className="push-default">
               {t("action.save")}
             </button>
             <button
               type="button"
               onClick={() => setEditing(false)}
-              className="rounded px-3 text-sm text-[--color-ink-muted]"
+              className="push"
             >
               {t("action.cancel")}
             </button>
@@ -317,10 +424,10 @@ function MeetingView({
         ) : (
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="truncate text-lg font-semibold">
+              <h1 className="truncate font-display text-xl font-semibold">
                 {displayTitle(meeting)}
               </h1>
-              <p className="mt-0.5 text-xs text-[--color-ink-muted]">
+              <p className="mt-0.5 text-xs text-ink-muted">
                 {formatStarted(meeting.startedAt)}
                 {meeting.durationSeconds !== undefined
                   ? ` · ${formatDuration(meeting.durationSeconds)}`
@@ -334,17 +441,26 @@ function MeetingView({
                   setDraft(meeting.title ?? "");
                   setEditing(true);
                 }}
-                className="rounded border border-[--color-line] px-2.5 py-1 text-xs"
+                className="push"
               >
                 {t("action.rename")}
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  // Deleting removes the audio too and cannot be undone.
-                  if (window.confirm(t("meeting.deleteConfirm"))) onDelete();
+                  // Deleting removes the audio too and cannot be undone, so
+                  // it is asked the way the OS asks it: a short question, the
+                  // act named on its own button, and Escape as the way out.
+                  void window.evertranscript
+                    .confirm({
+                      message: t("meeting.deleteConfirm"),
+                      detail: t("meeting.deleteConfirm.detail"),
+                      action: t("action.delete"),
+                      cancel: t("action.cancel"),
+                    })
+                    .then((confirmed) => confirmed && onDelete());
                 }}
-                className="rounded border border-[--color-line] px-2.5 py-1 text-xs text-[--color-recording]"
+                className="push text-recording"
               >
                 {t("action.delete")}
               </button>
@@ -357,11 +473,11 @@ function MeetingView({
           as the capture was. Without this, a meeting that recorded one side
           of a conversation looks like one where nobody else spoke. */}
       {meeting.audioNotes && meeting.audioNotes.length > 0 ? (
-        <div className="border-b border-[--color-line] bg-[--color-surface-raised] px-6 py-2 text-xs">
-          <p className="font-medium text-[--color-recording]">
+        <div className="border-b border-line bg-surface-raised px-6 py-2 text-xs">
+          <p className="font-medium text-recording">
             {t("meeting.incomplete")}
           </p>
-          <ul className="mt-1 list-disc pl-4 text-[--color-ink-muted]">
+          <ul className="mt-1 list-disc pl-4 text-ink-muted">
             {meeting.audioNotes.map((note) => (
               <li key={note}>{note}</li>
             ))}
@@ -370,18 +486,18 @@ function MeetingView({
       ) : null}
 
       {dropped > 0 ? (
-        <p className="border-b border-[--color-line] bg-[--color-surface-raised] px-6 py-2 text-xs text-[--color-ink-muted]">
+        <p className="border-b border-line bg-surface-raised px-6 py-2 text-xs text-ink-muted">
           {t("transcript.dropped")}
         </p>
       ) : null}
 
       <section className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {segments.length === 0 ? (
-          <p className="text-sm text-[--color-ink-muted]">
+          <p className="text-sm text-ink-muted">
             {live ? t("transcript.listening") : t("transcript.empty")}
           </p>
         ) : (
-          <ol className="space-y-3">
+          <ol className="max-w-[72ch] space-y-3 text-lg">
             {segments.map((segment) => (
               <Segment key={segment.id} segment={segment} />
             ))}
@@ -400,11 +516,11 @@ function Segment({ segment }: { segment: TranscriptSegment }): React.JSX.Element
   const speaker =
     segment.channel === "mic" ? t("speaker.you") : t("speaker.participants");
   return (
-    <li className="grid grid-cols-[auto_1fr] gap-3">
-      <span className="pt-0.5 font-mono text-xs text-[--color-ink-muted] tabular-nums">
+    <li className="grid grid-cols-[auto_1fr] items-baseline gap-3">
+      <span className="font-mono text-xs text-ink-muted tabular-nums">
         {formatTimestamp(segment.startMs)}
       </span>
-      <span className="text-sm">
+      <span>
         <span className="mr-2 font-medium">{speaker}</span>
         {segment.text}
       </span>
@@ -414,9 +530,36 @@ function Segment({ segment }: { segment: TranscriptSegment }): React.JSX.Element
 
 function EmptyState(): React.JSX.Element {
   return (
-    <div className="grid h-full place-items-center text-sm text-[--color-ink-muted]">
+    <div className="grid h-full place-content-center justify-items-center gap-3 text-sm text-ink-muted">
+      <Mark />
       {t("meeting.selectPrompt")}
     </div>
+  );
+}
+
+/**
+ * The seahorse, drawn from `brand/src/mark.svg`.
+ *
+ * Once, in the one place with nothing else to look at: everywhere else the
+ * window belongs to the record and to the OS around it.
+ */
+function Mark(): React.JSX.Element {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 256 256"
+      className="size-16 opacity-50"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={17}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M116,54 C104,56 92,62 82,74 C66,92 56,112 56,134 C56,162 60,187 72,202 C84,217 105,222 123,218 C142,214 156,205 159,191 C163,176 158,163 146,158 C136,154 125,158 122,168 C121,173 122,178 125,181" />
+      <path d="M116,54 C133,56 149,63 159,74 C166,81 169,87 170,93 C178,95 191,98 197,103 C202,108 202,115 197,119 C190,124 120,121 96,121 C84,121 78,132 74,150" />
+      <circle cx="135" cy="80" r="8" fill="currentColor" stroke="none" />
+      <circle cx="116" cy="39" r="9.5" fill="currentColor" stroke="none" />
+    </svg>
   );
 }
 
@@ -460,6 +603,20 @@ function formatTimestamp(milliseconds: number): string {
 }
 
 /**
+ * Settings in a window of their own, which is where a Mac keeps them
+ * (`settings.md › macOS`). The window's title names them, a change applies
+ * as it is made, and ⌘W closes it — so the pane drops its heading and its
+ * Done button here.
+ */
+export function SettingsWindow(): React.JSX.Element {
+  return (
+    <div className="h-full bg-surface">
+      <SettingsPanel onRerunSetup={() => window.evertranscript.rerunSetup()} />
+    </div>
+  );
+}
+
+/**
  * Settings: the single Auto-Record switch, and the Watchlist it governs.
  *
  * The Client had no settings surface until now, so this is also where the
@@ -470,7 +627,8 @@ function SettingsPanel({
   onClose,
   onRerunSetup,
 }: {
-  onClose: () => void;
+  /** Absent in the Mac's Settings window, which closes the way windows do. */
+  onClose?: () => void;
   onRerunSetup: () => void;
 }): React.JSX.Element {
   const { settings, watchlist, error, update, addWatched, removeWatched } =
@@ -479,19 +637,21 @@ function SettingsPanel({
 
   return (
     <div className="flex h-full flex-col overflow-y-auto p-6">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">{t("settings.title")}</h1>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
-        >
-          {t("settings.close")}
-        </button>
-      </header>
+      {onClose ? (
+        <header className="mb-6 flex items-center justify-between">
+          <h1 className="font-display text-xl font-semibold">{t("settings.title")}</h1>
+          <button
+            type="button"
+            onClick={onClose}
+            className="push"
+          >
+            {t("settings.close")}
+          </button>
+        </header>
+      ) : null}
 
       {error ? (
-        <p className="mb-4 text-sm text-[--color-recording]">{error}</p>
+        <p className="mb-4 text-sm text-recording">{error}</p>
       ) : null}
 
       <section className="mb-8">
@@ -508,7 +668,7 @@ function SettingsPanel({
             <span className="block text-sm font-medium">
               {t("settings.autoRecord")}
             </span>
-            <span className="block text-xs text-[--color-ink-muted]">
+            <span className="block text-xs text-ink-muted">
               {t("settings.autoRecord.hint")}
             </span>
           </span>
@@ -519,7 +679,7 @@ function SettingsPanel({
         <span className="block text-sm font-medium">
           {t("settings.chineseScript")}
         </span>
-        <span className="mb-2 block text-xs text-[--color-ink-muted]">
+        <span className="mb-2 block text-xs text-ink-muted">
           {t("settings.chineseScript.hint")}
         </span>
         <select
@@ -529,7 +689,7 @@ function SettingsPanel({
               chineseScript: changed.target.value as "simplified" | "traditional",
             })
           }
-          className="rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-sm"
+          className="push"
         >
           <option value="simplified">
             {t("settings.chineseScript.simplified")}
@@ -542,12 +702,12 @@ function SettingsPanel({
 
       <section>
         <h2 className="text-sm font-medium">{t("watchlist.title")}</h2>
-        <p className="mb-3 text-xs text-[--color-ink-muted]">
+        <p className="mb-3 text-xs text-ink-muted">
           {t("watchlist.hint")}
         </p>
 
         {watchlist && watchlist.entries.length === 0 ? (
-          <p className="mb-3 text-xs text-[--color-recording]">
+          <p className="mb-3 text-xs text-recording">
             {t("watchlist.empty")}
           </p>
         ) : null}
@@ -556,11 +716,11 @@ function SettingsPanel({
           {watchlist?.entries.map((entry) => (
             <li
               key={entry.id}
-              className="flex items-center justify-between border-b border-[--color-line] py-2"
+              className="flex items-center justify-between border-b border-line py-2"
             >
               <span>
                 <span className="block text-sm">{entry.name}</span>
-                <span className="block font-mono text-xs text-[--color-ink-muted]">
+                <span className="block font-mono text-xs text-ink-muted">
                   {entry.kind === "browserMeetings"
                     ? t("watchlist.browserMeetings")
                     : entry.id}
@@ -569,7 +729,7 @@ function SettingsPanel({
               <button
                 type="button"
                 onClick={() => void removeWatched(entry.id)}
-                className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                className="push"
               >
                 {t("watchlist.remove")}
               </button>
@@ -590,11 +750,11 @@ function SettingsPanel({
             value={draft}
             onChange={(changed) => setDraft(changed.target.value)}
             placeholder={t("watchlist.addPlaceholder")}
-            className="min-w-0 flex-1 rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-sm"
+            className="field min-w-0 flex-1"
           />
           <button
             type="submit"
-            className="rounded border border-[--color-line] px-3 py-1 text-sm hover:bg-[--color-surface-raised]"
+            className="push"
           >
             {t("watchlist.add")}
           </button>
@@ -602,19 +762,19 @@ function SettingsPanel({
 
         {watchlist && watchlist.suggestions.length > 0 ? (
           <>
-            <h3 className="text-xs font-medium text-[--color-ink-muted]">
+            <h3 className="text-xs font-medium text-ink-muted">
               {t("watchlist.suggested")}
             </h3>
             <ul>
               {watchlist.suggestions.map((entry) => (
                 <li key={entry.id} className="flex items-center justify-between py-2">
-                  <span className="text-sm text-[--color-ink-muted]">
+                  <span className="text-sm text-ink-muted">
                     {entry.name}
                   </span>
                   <button
                     type="button"
                     onClick={() => void addWatched(entry.id)}
-                    className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                    className="push"
                   >
                     {t("watchlist.add")}
                   </button>
@@ -638,7 +798,7 @@ function SettingsPanel({
           />
           <span>
             {t("updates.title")}
-            <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+            <span className="mt-0.5 block text-xs text-ink-muted">
               {t("updates.hint")}
             </span>
           </span>
@@ -649,7 +809,7 @@ function SettingsPanel({
         <button
           type="button"
           onClick={onRerunSetup}
-          className="mt-4 rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+          className="push mt-4"
         >
           {t("onboarding.reopen")}
         </button>
@@ -742,33 +902,33 @@ function RegistryPanel({
   return (
     <div className="flex h-full flex-col overflow-y-auto p-6">
       <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">{t("registry.title")}</h1>
+        <h1 className="font-display text-xl font-semibold">{t("registry.title")}</h1>
         <button
           type="button"
           onClick={onClose}
-          className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+          className="push"
         >
           {t("registry.close")}
         </button>
       </header>
 
-      <p className="mb-4 text-xs text-[--color-ink-muted]">
+      <p className="mb-4 text-xs text-ink-muted">
         {t("registry.hint")}
       </p>
 
       {error ? (
-        <p className="mb-4 text-sm text-[--color-recording]">{error}</p>
+        <p className="mb-4 text-sm text-recording">{error}</p>
       ) : null}
 
       {speakers && speakers.speakers.length === 0 ? (
-        <p className="text-xs text-[--color-ink-muted]">{t("registry.empty")}</p>
+        <p className="text-xs text-ink-muted">{t("registry.empty")}</p>
       ) : null}
 
       <ul>
         {speakers?.speakers.map((speaker) => (
           <li
             key={speaker.id}
-            className="border-b border-[--color-line] py-3"
+            className="border-b border-line py-3"
           >
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
@@ -785,15 +945,15 @@ function RegistryPanel({
                       autoFocus
                       value={draft}
                       onChange={(changed) => setDraft(changed.target.value)}
-                      className="min-w-0 rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-sm"
+                      className="field min-w-0"
                     />
-                    <button type="submit" className="rounded border border-[--color-line] px-2 text-xs">
+                    <button type="submit" className="push-default">
                       {t("action.save")}
                     </button>
                     <button
                       type="button"
                       onClick={() => setEditingId(null)}
-                      className="px-2 text-xs text-[--color-ink-muted]"
+                      className="push"
                     >
                       {t("action.cancel")}
                     </button>
@@ -801,7 +961,7 @@ function RegistryPanel({
                 ) : (
                   <span className="block truncate text-sm">{nameOf(speaker)}</span>
                 )}
-                <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+                <span className="mt-0.5 block text-xs text-ink-muted">
                   {voiceprintLabel(speaker)} ·{" "}
                   {/* The count answers "how many"; the Operator's next
                       question is "which ones", and it is the only fact on
@@ -812,7 +972,7 @@ function RegistryPanel({
                       onClick={() => void toggleMeetings(speaker.id)}
                       title={t("registry.showMeetings")}
                       aria-expanded={expandedId === speaker.id}
-                      className="underline decoration-dotted underline-offset-2 hover:text-[--color-ink]"
+                      className="underline decoration-dotted underline-offset-2 hover:text-ink"
                       data-testid="registry-meeting-count"
                     >
                       {speaker.meetingsSeenIn}{" "}
@@ -874,7 +1034,7 @@ function RegistryPanel({
                     type="button"
                     onClick={() => void togglePlay(speaker.id)}
                     aria-pressed={playingId === speaker.id}
-                    className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                    className="push"
                     data-testid="registry-play"
                   >
                     {playingId === speaker.id
@@ -888,7 +1048,7 @@ function RegistryPanel({
                     setDraft(speaker.displayName ?? "");
                     setEditingId(speaker.id);
                   }}
-                  className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                  className="push"
                 >
                   {t("registry.rename")}
                 </button>
@@ -896,7 +1056,7 @@ function RegistryPanel({
                   <button
                     type="button"
                     onClick={() => setConfirmingId(speaker.id)}
-                    className="rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised]"
+                    className="push"
                   >
                     {t("registry.forget")}
                   </button>
@@ -912,7 +1072,7 @@ function RegistryPanel({
                   // would need is a step with no purpose.
                   <audio controls autoPlay src={clip} className="h-8 w-full" />
                 ) : (
-                  <p className="text-xs text-[--color-ink-muted]">
+                  <p className="text-xs text-ink-muted">
                     {clipError ?? t("registry.sample.loading")}
                   </p>
                 )}
@@ -920,9 +1080,9 @@ function RegistryPanel({
             ) : null}
 
             {expandedId === speaker.id ? (
-              <ul className="mt-2 border-l border-[--color-line] pl-3">
+              <ul className="mt-2 border-l border-line pl-3">
                 {expanded === null ? (
-                  <li className="py-1 text-xs text-[--color-ink-muted]">
+                  <li className="py-1 text-xs text-ink-muted">
                     {t("core.connecting")}
                   </li>
                 ) : (
@@ -931,7 +1091,7 @@ function RegistryPanel({
                       <button
                         type="button"
                         onClick={() => onOpenMeeting(meeting.id)}
-                        className="flex w-full items-baseline justify-between gap-3 py-1 text-left text-xs text-[--color-ink-muted] hover:text-[--color-ink]"
+                        className="flex w-full items-baseline justify-between gap-3 py-1 text-left text-xs text-ink-muted hover:text-ink"
                         data-testid="registry-meeting-entry"
                       >
                         <span className="min-w-0 truncate">
@@ -952,7 +1112,7 @@ function RegistryPanel({
             ) : null}
 
             {editingId === speaker.id ? (
-              <p className="mt-2 text-xs text-[--color-ink-muted]">
+              <p className="mt-2 text-xs text-ink-muted">
                 {t("registry.rename.hint")}
               </p>
             ) : null}
@@ -961,8 +1121,8 @@ function RegistryPanel({
                 legible act, and the Operator has to know it costs
                 recognition and costs the record nothing. */}
             {confirmingId === speaker.id ? (
-              <div className="mt-3 rounded border border-[--color-line] p-3">
-                <p className="mb-2 text-xs text-[--color-ink-muted]">
+              <div className="mt-3 rounded border border-line p-3">
+                <p className="mb-2 text-xs text-ink-muted">
                   {t("registry.forget.hint")}
                 </p>
                 <div className="flex gap-2">
@@ -972,14 +1132,14 @@ function RegistryPanel({
                       void forgetVoice(speaker.id);
                       setConfirmingId(null);
                     }}
-                    className="rounded border border-[--color-recording] px-2 py-1 text-xs text-[--color-recording]"
+                    className="push text-recording"
                   >
                     {t("registry.forget.confirm")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmingId(null)}
-                    className="px-2 py-1 text-xs text-[--color-ink-muted]"
+                    className="push"
                   >
                     {t("action.cancel")}
                   </button>
@@ -1018,7 +1178,7 @@ function HeardIn({
   if (!meetingId) {
     return (
       <span
-        className="mt-0.5 block text-xs text-[--color-ink-muted]"
+        className="mt-0.5 block text-xs text-ink-muted"
         data-testid={testId}
       >
         {label}
@@ -1031,7 +1191,7 @@ function HeardIn({
       type="button"
       onClick={() => onOpenMeeting(meetingId)}
       title={tooltip}
-      className="mt-0.5 block max-w-full truncate text-left text-xs text-[--color-ink-muted] underline decoration-dotted underline-offset-2 hover:text-[--color-ink]"
+      className="mt-0.5 block max-w-full truncate text-left text-xs text-ink-muted underline decoration-dotted underline-offset-2 hover:text-ink"
       data-testid={testId}
     >
       {label}
@@ -1066,9 +1226,9 @@ function WritingPanel({ meetingId }: { meetingId: string }): React.JSX.Element {
   }, [draft, saveNotes]);
 
   return (
-    <div className="border-t border-[--color-line] px-6 py-4">
+    <div className="border-t border-line px-6 py-4">
       {error ? (
-        <p className="mb-3 text-xs text-[--color-recording]">{error}</p>
+        <p className="mb-3 text-xs text-recording">{error}</p>
       ) : null}
 
       <section className="mb-5">
@@ -1079,21 +1239,21 @@ function WritingPanel({ meetingId }: { meetingId: string }): React.JSX.Element {
               /* Above the Summary, not below it: what follows is only as
                  complete as the run that produced it, and a partial Summary
                  must not be read as a complete one first. */
-              <p className="mt-2 rounded border border-[--color-line] px-2 py-1 text-xs text-[--color-ink-muted]">
+              <p className="mt-2 rounded border border-line px-2 py-1 text-xs text-ink-muted">
                 <strong>{t("summary.incomplete")}</strong> {meeting.summaryGaps}
               </p>
             ) : null}
-            <SummaryProse className="mt-2 text-sm" text={meeting.summary} />
+            <SummaryProse className="mt-2 max-w-[68ch] text-sm" text={meeting.summary} />
             {meeting.summaryBackend ? (
               /* Story 38: which Backend actually ran, beside the thing it
                  produced rather than buried in Settings. */
-              <p className="mt-2 text-xs text-[--color-ink-muted]">
+              <p className="mt-2 text-xs text-ink-muted">
                 {t("summary.generatedBy")} {meeting.summaryBackend}
               </p>
             ) : null}
           </>
         ) : (
-          <p className="mt-1 text-xs text-[--color-ink-muted]">
+          <p className="mt-1 text-xs text-ink-muted">
             {t("summary.none")}
           </p>
         )}
@@ -1101,7 +1261,7 @@ function WritingPanel({ meetingId }: { meetingId: string }): React.JSX.Element {
           type="button"
           disabled={generating}
           onClick={() => void generate()}
-          className="mt-3 rounded border border-[--color-line] px-3 py-1 text-xs hover:bg-[--color-surface-raised] disabled:opacity-50"
+          className="push mt-3"
         >
           {generating ? t("summary.generating") : t("summary.generate")}
         </button>
@@ -1109,13 +1269,13 @@ function WritingPanel({ meetingId }: { meetingId: string }): React.JSX.Element {
 
       <section>
         <h2 className="text-sm font-medium">{t("notes.title")}</h2>
-        <p className="mb-2 text-xs text-[--color-ink-muted]">{t("notes.hint")}</p>
+        <p className="mb-2 text-xs text-ink-muted">{t("notes.hint")}</p>
         <textarea
           value={notes}
           onChange={(changed) => setDraft(changed.target.value)}
           placeholder={t("notes.placeholder")}
           rows={5}
-          className="w-full rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-sm"
+          className="field w-full"
         />
       </section>
     </div>
@@ -1138,32 +1298,32 @@ function BackendPanel(): React.JSX.Element {
   return (
     <section className="mt-8">
       <h2 className="text-sm font-medium">{t("backend.title")}</h2>
-      <p className="mb-3 text-xs text-[--color-ink-muted]">{t("backend.hint")}</p>
+      <p className="mb-3 text-xs text-ink-muted">{t("backend.hint")}</p>
 
       {error ? (
-        <p className="mb-3 text-sm text-[--color-recording]">{error}</p>
+        <p className="mb-3 text-sm text-recording">{error}</p>
       ) : null}
 
       {backends && !backends.chosen ? (
-        <p className="mb-3 text-xs text-[--color-recording]">
+        <p className="mb-3 text-xs text-recording">
           {t("summary.unchosen")}
         </p>
       ) : null}
 
       <ul className="mb-4">
         {backends?.options.map((option) => (
-          <li key={option.id} className="border-b border-[--color-line] py-3">
+          <li key={option.id} className="border-b border-line py-3">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <span className="block text-sm">
                   {option.displayName}
                   {option.id === "local" ? (
-                    <span className="ml-2 rounded bg-[--color-surface-raised] px-1.5 py-0.5 text-xs">
+                    <span className="ml-2 rounded bg-surface-raised px-1.5 py-0.5 text-xs">
                       {t("backend.recommended")}
                     </span>
                   ) : null}
                 </span>
-                <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+                <span className="mt-0.5 block text-xs text-ink-muted">
                   {option.leavesTheMachine
                     ? t("backend.leaves")
                     : t("backend.staysHere")}
@@ -1177,14 +1337,14 @@ function BackendPanel(): React.JSX.Element {
                     ? setConfirming(option.id)
                     : void choose(option.id, false)
                 }
-                className="shrink-0 rounded border border-[--color-line] px-2 py-1 text-xs hover:bg-[--color-surface-raised] disabled:opacity-40"
+                className="push shrink-0"
               >
                 {backends.chosen === option.id ? "✓" : "Use"}
               </button>
             </div>
 
             {option.dataHandling ? (
-              <p className="mt-2 text-xs text-[--color-ink-muted]">
+              <p className="mt-2 text-xs text-ink-muted">
                 {t("backend.trains")}: {String(option.dataHandling.trainsOnInputs)} ·{" "}
                 {t("backend.retention")}: {option.dataHandling.retention} ·{" "}
                 {t("backend.zeroRetention")}:{" "}
@@ -1201,7 +1361,7 @@ function BackendPanel(): React.JSX.Element {
 
             {option.leavesTheMachine ? (
               <div className="mt-2">
-                <p className="text-xs text-[--color-ink-muted]">
+                <p className="text-xs text-ink-muted">
                   {option.hasKey ? t("backend.key.stored") : t("backend.key.none")}
                 </p>
                 <div className="mt-1 flex gap-2">
@@ -1212,7 +1372,7 @@ function BackendPanel(): React.JSX.Element {
                       setKeyDraft({ ...keyDraft, [option.id]: changed.target.value })
                     }
                     placeholder={t("backend.key")}
-                    className="min-w-0 flex-1 rounded border border-[--color-line] bg-[--color-surface-raised] px-2 py-1 text-xs"
+                    className="field min-w-0 flex-1"
                   />
                   <button
                     type="button"
@@ -1220,7 +1380,7 @@ function BackendPanel(): React.JSX.Element {
                       void setKey(option.id, keyDraft[option.id] ?? "");
                       setKeyDraft({ ...keyDraft, [option.id]: "" });
                     }}
-                    className="rounded border border-[--color-line] px-2 py-1 text-xs"
+                    className="push"
                   >
                     {t("backend.key.save")}
                   </button>
@@ -1228,7 +1388,7 @@ function BackendPanel(): React.JSX.Element {
                     <button
                       type="button"
                       onClick={() => void setKey(option.id, null)}
-                      className="rounded px-2 py-1 text-xs text-[--color-ink-muted]"
+                      className="push"
                     >
                       {t("backend.key.clear")}
                     </button>
@@ -1240,9 +1400,9 @@ function BackendPanel(): React.JSX.Element {
             {/* The hard one-time warning (story 36), stated before the act
                 rather than after it. */}
             {confirming === option.id ? (
-              <div className="mt-3 rounded border border-[--color-recording] p-3">
+              <div className="mt-3 rounded border border-recording p-3">
                 <p className="text-sm font-medium">{t("backend.warning.title")}</p>
-                <p className="mt-1 text-xs text-[--color-ink-muted]">
+                <p className="mt-1 text-xs text-ink-muted">
                   {t("backend.warning.body")}
                 </p>
                 <div className="mt-2 flex gap-2">
@@ -1252,14 +1412,14 @@ function BackendPanel(): React.JSX.Element {
                       void choose(option.id, true);
                       setConfirming(null);
                     }}
-                    className="rounded border border-[--color-recording] px-2 py-1 text-xs text-[--color-recording]"
+                    className="push text-recording"
                   >
                     {t("backend.warning.accept")}
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirming(null)}
-                    className="px-2 py-1 text-xs text-[--color-ink-muted]"
+                    className="push"
                   >
                     {t("backend.warning.cancel")}
                   </button>
@@ -1278,7 +1438,7 @@ function BackendPanel(): React.JSX.Element {
         />
         <span>
           {t("backend.strict")}
-          <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+          <span className="mt-0.5 block text-xs text-ink-muted">
             {t("backend.strict.hint")}
           </span>
         </span>
@@ -1300,18 +1460,18 @@ function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
   return (
     <div className="flex h-full flex-col overflow-y-auto p-6">
       <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">{t("posture.title")}</h1>
+        <h1 className="font-display text-xl font-semibold">{t("posture.title")}</h1>
         <button
           type="button"
           onClick={onClose}
-          className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+          className="push"
         >
           {t("registry.close")}
         </button>
       </header>
 
       {error ? (
-        <p className="mb-4 text-sm text-[--color-recording]">{error}</p>
+        <p className="mb-4 text-sm text-recording">{error}</p>
       ) : null}
 
       {posture ? (
@@ -1319,21 +1479,21 @@ function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
           <section className="mb-6">
             <h2 className="text-sm font-medium">{t("posture.holds")}</h2>
             <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-              <dt className="text-[--color-ink-muted]">{t("posture.meetings")}</dt>
+              <dt className="text-ink-muted">{t("posture.meetings")}</dt>
               <dd>{posture.meetings}</dd>
-              <dt className="text-[--color-ink-muted]">{t("posture.speakers")}</dt>
+              <dt className="text-ink-muted">{t("posture.speakers")}</dt>
               <dd>{posture.speakers}</dd>
               {/* The biometric count, as a number rather than a category. */}
-              <dt className="text-[--color-ink-muted]">
+              <dt className="text-ink-muted">
                 {t("posture.voiceprints")}
               </dt>
               <dd>{posture.voiceprints}</dd>
-              <dt className="text-[--color-ink-muted]">{t("posture.models")}</dt>
+              <dt className="text-ink-muted">{t("posture.models")}</dt>
               <dd>{posture.models.join(", ") || "—"}</dd>
-              <dt className="text-[--color-ink-muted]">{t("posture.folder")}</dt>
+              <dt className="text-ink-muted">{t("posture.folder")}</dt>
               <dd className="truncate font-mono text-xs">{posture.historyDir}</dd>
             </dl>
-            <p className="mt-2 text-xs text-[--color-ink-muted]">
+            <p className="mt-2 text-xs text-ink-muted">
               {posture.calendarGranted
                 ? t("posture.calendar.granted")
                 : t("posture.calendar.withheld")}
@@ -1344,7 +1504,7 @@ function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
             <h2 className="text-sm font-medium">{t("posture.wire")}</h2>
             <p
               className={`mt-1 text-xs ${
-                posture.currentlySilent ? "" : "text-[--color-recording]"
+                posture.currentlySilent ? "" : "text-recording"
               }`}
             >
               {posture.currentlySilent
@@ -1353,17 +1513,17 @@ function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
             </p>
             <ul className="mt-2">
               {posture.traffic.map((entry) => (
-                <li key={entry.name} className="border-b border-[--color-line] py-2">
+                <li key={entry.name} className="border-b border-line py-2">
                   <span className="block text-sm">
                     {entry.name} —{" "}
-                    <span className="text-[--color-ink-muted]">
+                    <span className="text-ink-muted">
                       {entry.enabled ? t("posture.enabled") : t("posture.disabled")}
                     </span>
                   </span>
-                  <span className="block font-mono text-xs text-[--color-ink-muted]">
+                  <span className="block font-mono text-xs text-ink-muted">
                     {entry.host}
                   </span>
-                  <span className="mt-0.5 block text-xs text-[--color-ink-muted]">
+                  <span className="mt-0.5 block text-xs text-ink-muted">
                     {entry.whatItSends}
                   </span>
                 </li>
@@ -1377,7 +1537,7 @@ function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
               {posture.foreclosed.map((claim) => (
                 <li key={claim.capability} className="py-1.5">
                   <span className="block text-sm">{claim.capability}</span>
-                  <span className="block text-xs text-[--color-ink-muted]">
+                  <span className="block text-xs text-ink-muted">
                     {claim.proof}
                   </span>
                 </li>
@@ -1394,7 +1554,7 @@ function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
               {posture.amended.map((claim) => (
                 <li key={claim.capability} className="py-1.5">
                   <span className="block text-sm">{claim.capability}</span>
-                  <span className="block text-xs text-[--color-ink-muted]">
+                  <span className="block text-xs text-ink-muted">
                     {claim.proof}
                   </span>
                 </li>
@@ -1448,10 +1608,10 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
   const advance = () => (step + 1 < steps.length ? setStep(step + 1) : onDone());
 
   return (
-    <div className="flex h-full flex-col overflow-y-auto p-6">
+    <div className="flex h-full flex-col overflow-y-auto bg-surface p-6">
       <header className="mb-4">
-        <h1 className="text-lg font-semibold">{t("onboarding.title")}</h1>
-        <p className="text-xs text-[--color-ink-muted]">
+        <h1 className="font-display text-xl font-semibold">{t("onboarding.title")}</h1>
+        <p className="text-xs text-ink-muted">
           {t("onboarding.step")} {step + 1} {t("onboarding.of")} {steps.length}
         </p>
       </header>
@@ -1460,14 +1620,14 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
         {current === "briefing" ? (
           <section>
             <h2 className="text-sm font-medium">{t("onboarding.briefing.title")}</h2>
-            <pre className="mt-2 max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded border border-[--color-line] bg-[--color-surface-raised] p-3 font-sans text-sm">
+            <pre className="mt-2 max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded border border-line bg-surface-raised p-3 font-sans text-sm">
               {briefing?.text ?? ""}
             </pre>
             {briefing?.acknowledged ? null : (
               <button
                 type="button"
                 onClick={() => void acknowledge()}
-                className="mt-3 rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised]"
+                className="push mt-3"
               >
                 {t("onboarding.briefing.accept")}
               </button>
@@ -1480,7 +1640,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
             <h2 className="text-sm font-medium">
               {t("onboarding.permissions.title")}
             </h2>
-            <p className="mt-2 text-sm text-[--color-ink-muted]">
+            <p className="mt-2 text-sm text-ink-muted">
               {t("onboarding.permissions.body")}
             </p>
             <AudioCheckPanel />
@@ -1490,7 +1650,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
         {current === "models" ? (
           <section>
             <h2 className="text-sm font-medium">{t("onboarding.models.title")}</h2>
-            <p className="mt-2 text-sm text-[--color-ink-muted]">
+            <p className="mt-2 text-sm text-ink-muted">
               {t("onboarding.models.body")}
             </p>
             <ModelDownload />
@@ -1500,7 +1660,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
         {current === "folder" ? (
           <section>
             <h2 className="text-sm font-medium">{t("onboarding.folder.title")}</h2>
-            <p className="mt-2 text-sm text-[--color-ink-muted]">
+            <p className="mt-2 text-sm text-ink-muted">
               {t("onboarding.folder.body")}
             </p>
           </section>
@@ -1509,7 +1669,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
         {current === "backend" ? (
           <section>
             <h2 className="text-sm font-medium">{t("onboarding.backend.title")}</h2>
-            <p className="mt-2 text-sm text-[--color-ink-muted]">
+            <p className="mt-2 text-sm text-ink-muted">
               {t("onboarding.backend.body")}
             </p>
             <BackendPanel />
@@ -1519,10 +1679,10 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
         {current === "calendar" ? (
           <section>
             <h2 className="text-sm font-medium">{t("onboarding.calendar.title")}</h2>
-            <p className="mt-2 text-sm text-[--color-ink-muted]">
+            <p className="mt-2 text-sm text-ink-muted">
               {t("onboarding.calendar.body")}
             </p>
-            <p className="mt-2 text-xs text-[--color-ink-muted]">
+            <p className="mt-2 text-xs text-ink-muted">
               {t("onboarding.calendar.skipCost")}
             </p>
           </section>
@@ -1534,7 +1694,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
           type="button"
           disabled={blocked}
           onClick={advance}
-          className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised] disabled:opacity-40"
+          className="push-default"
         >
           {step + 1 === steps.length ? t("onboarding.done") : t("onboarding.next")}
         </button>
@@ -1542,7 +1702,7 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
           <button
             type="button"
             onClick={advance}
-            className="px-3 py-1.5 text-sm text-[--color-ink-muted]"
+            className="push"
           >
             {t("onboarding.skip")}
           </button>
@@ -1588,7 +1748,7 @@ function AudioCheckPanel(): React.ReactElement {
         type="button"
         disabled={checking}
         onClick={() => check()}
-        className="rounded border border-[--color-line] px-3 py-1.5 text-sm hover:bg-[--color-surface-raised] disabled:opacity-40"
+        className="push"
       >
         {checking
           ? t("onboarding.permissions.checking")
@@ -1598,17 +1758,17 @@ function AudioCheckPanel(): React.ReactElement {
       </button>
 
       {checking ? (
-        <p className="mt-2 text-xs text-[--color-ink-muted]">
+        <p className="mt-2 text-xs text-ink-muted">
           {t("onboarding.permissions.playSomething")}
         </p>
       ) : null}
 
       {error ? (
-        <p className="mt-2 text-xs text-[--color-danger]">{error}</p>
+        <p className="mt-2 text-xs text-recording">{error}</p>
       ) : null}
 
       {report ? (
-        <div className="mt-3 rounded border border-[--color-line] px-3 py-2 text-xs">
+        <div className="mt-3 rounded border border-line px-3 py-2 text-xs">
           {report.couldNotStart ? (
             <p className="mb-2">
               {t("onboarding.permissions.couldNotStart")} {report.couldNotStart}
@@ -1617,7 +1777,7 @@ function AudioCheckPanel(): React.ReactElement {
           <dl className="space-y-1">
             {report.legs.map((leg) => (
               <div key={leg.channel} className="flex justify-between gap-3">
-                <dt className="text-[--color-ink-muted]">
+                <dt className="text-ink-muted">
                   {legLabel(leg.channel)}
                 </dt>
                 <dd className="text-right">
@@ -1687,7 +1847,7 @@ function SummaryProse({
                         {block.header.map((cell, column) => (
                           <th
                             key={column}
-                            className="border-b border-[--color-line] px-2 py-1 font-medium"
+                            className="border-b border-line px-2 py-1 font-medium"
                           >
                             <Inline text={cell} />
                           </th>
@@ -1701,7 +1861,7 @@ function SummaryProse({
                         {row.map((cell, column) => (
                           <td
                             key={column}
-                            className="border-b border-[--color-line] px-2 py-1 align-top"
+                            className="border-b border-line px-2 py-1 align-top"
                           >
                             <Inline text={cell} />
                           </td>
@@ -1753,7 +1913,7 @@ function ModelDownload(): React.ReactElement | null {
       : 0;
   const megabytes = (bytes: number) => Math.round(bytes / 1_048_576);
   return (
-    <div className="mt-3 rounded border border-[--color-line] px-3 py-2 text-xs">
+    <div className="mt-3 rounded border border-line px-3 py-2 text-xs">
       <div className="flex items-center justify-between gap-3">
         <span>
           {t("models.downloading")} {active.displayName} — {percent}% (
@@ -1762,7 +1922,7 @@ function ModelDownload(): React.ReactElement | null {
         <button
           type="button"
           onClick={cancel}
-          className="underline underline-offset-2"
+          className="push"
         >
           {t("models.stop")}
         </button>
