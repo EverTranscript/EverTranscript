@@ -71,6 +71,10 @@ Not observed:
 Everything was removed afterwards, and the machine compared equal to a
 snapshot taken before the run (`DECISIONS.md` Q103).
 
+Since the run, a query that fails skips that poll instead of reading as an
+empty store (`DECISIONS.md` Q107). Only those failure branches changed. They
+typecheck for Windows but have not run there.
+
 ## What the store holds on Windows 11
 
 Before the test, zx8's appointment store held one calendar, the default

@@ -133,11 +133,24 @@ pub enum Access {
 
 #[cfg(target_os = "macos")]
 mod eventkit {
+    use std::panic::AssertUnwindSafe;
+
     use super::*;
+    use objc2::rc::Retained;
     use objc2_event_kit::EKAuthorizationStatus;
     use objc2_event_kit::EKEntityType;
     use objc2_event_kit::EKEventStore;
     use objc2_foundation::NSDate;
+    use tracing::warn;
+
+    thread_local! {
+        /// The polling thread's one store. Apple's header says it is
+        /// "generally best to hold onto a long-lived instance of an event
+        /// store", and anarlog keeps a single shared one
+        /// (`crates/apple-calendar/src/apple/handle.rs`). This one belongs to
+        /// the polling thread, the only reader, so it never crosses threads.
+        static STORE: Retained<EKEventStore> = unsafe { EKEventStore::new() };
+    }
 
     pub fn access() -> Access {
         // Asked, never assumed: the status is readable without prompting,
@@ -153,20 +166,35 @@ mod eventkit {
         }
     }
 
-    /// Events that began within the lookback.
-    pub fn read() -> Vec<Reading> {
+    /// Events that began within the lookback, or `None` when the store
+    /// could not be read this time.
+    pub fn read() -> Option<Vec<Reading>> {
         if access() != Access::Granted {
-            return Vec::new();
+            return Some(Vec::new());
         }
-        unsafe {
-            let store = EKEventStore::new();
-            let from = NSDate::dateWithTimeIntervalSinceNow(-LOOKBACK_SECS);
-            let until = NSDate::date();
-            let predicate =
-                store.predicateForEventsWithStartDate_endDate_calendars(&from, &until, None);
-            let events = store.eventsMatchingPredicate(&predicate);
+        STORE.with(|store| unsafe {
+            // These two calls can raise an Objective-C exception, and one
+            // that unwinds into Rust aborts the Core. anarlog catches the
+            // same two and takes the exception for a failed XPC connection
+            // to the calendar daemon, which it retries; here the next poll
+            // is the retry.
+            let store = AssertUnwindSafe(store);
+            let fetched = objc2::exception::catch(|| {
+                let from = NSDate::dateWithTimeIntervalSinceNow(-LOOKBACK_SECS);
+                let until = NSDate::date();
+                let predicate =
+                    store.predicateForEventsWithStartDate_endDate_calendars(&from, &until, None);
+                store.eventsMatchingPredicate(&predicate)
+            });
+            let events = match fetched {
+                Ok(events) => events,
+                Err(exception) => {
+                    warn!(?exception, "the calendar store could not be read");
+                    return None;
+                }
+            };
 
-            events
+            let readings = events
                 .iter()
                 .filter_map(|event| {
                     Some(Reading {
@@ -187,8 +215,9 @@ mod eventkit {
                         all_day: event.isAllDay(),
                     })
                 })
-                .collect()
-        }
+                .collect();
+            Some(readings)
+        })
     }
 }
 
@@ -294,16 +323,17 @@ mod eventkit {
         }
     }
 
-    /// Appointments that began within the lookback.
-    pub fn read() -> Vec<Reading> {
+    /// Appointments that began within the lookback, or `None` when the
+    /// store could not be read this time.
+    pub fn read() -> Option<Vec<Reading>> {
         // WinRT counts in 100 ns ticks.
         const TICKS_PER_SECOND: i64 = 10_000_000;
 
         let Some(store) = store() else {
-            return Vec::new();
+            return Some(Vec::new());
         };
         let Ok(options) = FindAppointmentsOptions::new() else {
-            return Vec::new();
+            return None;
         };
         // A query loads almost nothing it is not asked for
         // (`FindAppointmentsAsync`'s remarks), and an appointment read
@@ -334,10 +364,10 @@ mod eventkit {
             )
             .and_then(block_on)
         else {
-            return Vec::new();
+            return None;
         };
         let seconds = |ticks: i64| ticks as f64 / TICKS_PER_SECOND as f64;
-        found
+        let readings = found
             .into_iter()
             .filter_map(|appointment| {
                 let start = appointment.StartTime().ok()?.UniversalTime;
@@ -364,7 +394,8 @@ mod eventkit {
                     all_day: appointment.AllDay().unwrap_or(false),
                 })
             })
-            .collect()
+            .collect();
+        Some(readings)
     }
 }
 
@@ -376,8 +407,8 @@ mod eventkit {
         Access::Withheld
     }
 
-    pub fn read() -> Vec<Reading> {
-        Vec::new()
+    pub fn read() -> Option<Vec<Reading>> {
+        Some(Vec::new())
     }
 }
 
@@ -420,8 +451,14 @@ impl DetectionSource for CalendarSource {
 
                     while !stop.load(Ordering::Relaxed) {
                         let now = DetectionInstant(started.elapsed().as_millis() as u64);
-                        for change in changes(&mut announced, eventkit::read(), now) {
-                            let _ = events.blocking_send(change);
+                        // A store that could not be read says nothing about
+                        // which meetings are on. Reading it as empty would
+                        // end every one and arm them all again at the next
+                        // poll, so they stay armed until it can be read.
+                        if let Some(readings) = eventkit::read() {
+                            for change in changes(&mut announced, readings, now) {
+                                let _ = events.blocking_send(change);
+                            }
                         }
                         std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
                     }

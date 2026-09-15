@@ -1416,3 +1416,17 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 Granola 7.515.1 never waits longer after a release; within 5 minutes of the scheduled end it skips its LLM check and stops. Nobody can answer a prompt here, so the prompt's wait becomes window. A hold until the end would record the room after every meeting that ends early, the reason ADR-0036 turned down capture at the scheduled time. The longer wait is for browsers only because no anarlog version gave native apps more than the short wait. Checked by `a_browser_meeting_that_goes_quiet_early_has_longer_to_come_back`, which fails if the extension is missing, applies near the end, or applies to a native app.
 **Outcome:** assumed
 **Ref:** (pending)
+
+## Q107 — m2-auto-record/07 — deviation
+
+**Question:** The Mac calendar reader now keeps one EventKit store and catches Objective-C exceptions, as anarlog's does, so a poll can fail without taking the Core down. What should a failed poll mean?
+**Options considered:** read it as an empty store, as both readers treated a failure before / skip the poll and leave what was announced alone (chosen)
+**Chosen:**
+- The polling thread keeps one store for its life.
+- The two EventKit calls that fetch events run inside `objc2::exception::catch`. That needs objc2's `exception` feature, which adds `objc2-exception-helper`, a small C shim that links no framework.
+- On both platforms `read` returns `None` when the store could not be read, and the thread skips that poll. No access still reads as an empty store, so revoking access ends what was armed.
+- On Windows only the two query-failure branches changed. They typecheck for Windows from the Mac and have not run there.
+**Decided-by:** agent
+**Justification:** An empty reading ends every announced meeting, and the next good poll announces them again. The policy then re-arms them and can raise "never started" for meetings that did start. Before this change an exception reaching Rust aborted the Core, so a failed EventKit poll could not happen; catching it makes that the likeliest failure. anarlog catches the same calls and retries three times at 100 ms (`crates/apple-calendar/src/apple/handle.rs`, since #2485). Here the next poll, 30 s later, is the retry. A store that stays unreadable keeps its meetings armed, so a later recording could take a stale title; that case is not handled. The guarantee suite still passes, including the framework audit.
+**Outcome:** applied
+**Ref:** (pending)
