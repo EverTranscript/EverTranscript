@@ -23,6 +23,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SESSION=ete2e
+# The debugging port the test's own Electron listens on. Not 9222, which is
+# where a developer's everyday Chrome listens when debugging is on; set this if
+# the default is taken too.
+PORT="${EVERTRANSCRIPT_E2E_CDP_PORT:-9333}"
 RUNTIME=/tmp/ete2e-run
 ROOT=/tmp/ete2e
 CORE="$PWD/target/debug/evertranscript"
@@ -37,7 +41,7 @@ export EVERTRANSCRIPT_BIN="$CORE"
 
 cleanup() {
   playwright-cli -s="$SESSION" detach >/dev/null 2>&1 || true
-  pkill -f "electron .* --remote-debugging-port=9222" >/dev/null 2>&1 || true
+  pkill -f "electron .* --remote-debugging-port=$PORT" >/dev/null 2>&1 || true
   [ -n "${DAEMON_PID:-}" ] && kill "$DAEMON_PID" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
@@ -53,11 +57,11 @@ cleanup
 # clears in a moment; a stranger's DevTools session does not, and driving it
 # would pass or fail against a page that has nothing to do with this repo.
 for _ in $(seq 20); do
-  curl -sf http://127.0.0.1:9222/json/version >/dev/null || break
+  curl -sf http://127.0.0.1:$PORT/json/version >/dev/null || break
   sleep 0.2
 done
-if curl -sf http://127.0.0.1:9222/json/version >/dev/null; then
-  echo "REFUSING: something else is already debugging on 9222"
+if curl -sf http://127.0.0.1:$PORT/json/version >/dev/null; then
+  echo "REFUSING: something else is already debugging on $PORT"
   exit 1
 fi
 rm -rf "$ROOT" "$RUNTIME"
@@ -88,10 +92,10 @@ echo "== seed =="
 sqlite3 "$EVERTRANSCRIPT_HISTORY_DIR/.data/EverTranscript.db" < scripts/e2e-registry.sql
 
 echo "== drive =="
-(cd clients/electron && npx electron . --remote-debugging-port=9222 \
+(cd clients/electron && npx electron . --remote-debugging-port=$PORT \
   > "$ROOT/electron.log" 2>&1 &)
-until curl -sf http://127.0.0.1:9222/json/version >/dev/null; do sleep 0.3; done
-playwright-cli -s="$SESSION" attach --cdp=http://127.0.0.1:9222 >/dev/null
+until curl -sf http://127.0.0.1:$PORT/json/version >/dev/null; do sleep 0.3; done
+playwright-cli -s="$SESSION" attach --cdp=http://127.0.0.1:$PORT >/dev/null
 playwright-cli -s="$SESSION" click "getByRole('button', { name: 'Voices' })" >/dev/null
 
 rendered=$(playwright-cli -s="$SESSION" --raw eval \
