@@ -112,6 +112,19 @@ probed afterwards, the bundle's own Core binary started as a launchd job
 outside the bundle read `false`. TCC keys the grant on the app bundle, not
 on which process spawned the Core.
 
+That holds only while the bundle's signature seals the Core, and the
+release did not. tccd logs the subject it decides each request on, so a
+second run read that instead of a grant, on HEAD packaged by
+electron-builder. With a seal, ad hoc included, a Core the Client spawns
+and one started as a launchd job are both `com.evertranscript.client`.
+Without one, which is what electron-builder makes when it has no
+certificate and what v1.0.1 shipped, they are
+`Contents/MacOS/EverTranscript` and `Contents/Resources/evertranscript`:
+two apps to macOS, for the Microphone and System Audio as well as the
+calendar. Frank's install is signed with an Apple Development certificate,
+which is why his grant carried. The package job now seals the Mac bundle
+ad hoc when it has no certificate (`DECISIONS.md` Q113).
+
 Still never observed: a Meeting *named* by an appointment, which needs a
 real capture during an armed event.
 

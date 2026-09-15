@@ -11,6 +11,9 @@ name: Package
 # Unsigned unless the signing secrets are present. A fork, or this
 # repository before its certificates exist, gets working unsigned artifacts
 # and a log line saying so — never something that looks signed and is not.
+# The one exception is the Mac bundle, which is sealed ad hoc (see Package).
+# An ad hoc signature names no one, and Gatekeeper rejects it as it rejects
+# no signature at all.
 
 on:
   push:
@@ -104,13 +107,23 @@ jobs:
       # electron-builder signs when it finds an identity and says so when it
       # does not. Both cases produce a usable artifact rather than a failed
       # job.
+      #
+      # **With no certificate, the Mac bundle is still sealed, ad hoc.**
+      # Unsealed, macOS judges each binary in it by its own path: the Core the
+      # login item starts is then a different app, to privacy permissions,
+      # from the Core the Client starts, and the Microphone, System Audio and
+      # Calendars grants given through the window do not reach it. v1.0.1
+      # shipped that way. With a seal, even an ad hoc one, both Cores are the
+      # app (DECISIONS Q113).
       - name: Package
         shell: bash
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             pnpm -C clients/electron exec electron-builder --win --publish never
-          else
+          elif [[ -n "${CSC_LINK:-}" ]]; then
             pnpm -C clients/electron exec electron-builder --mac --publish never
+          else
+            pnpm -C clients/electron exec electron-builder --mac --publish never -c.mac.identity=-
           fi
 
       # **electron-builder skips a missing `extraResources` source in
@@ -148,6 +161,14 @@ jobs:
             echo "there. Check extraResources in clients/electron/package.json"
             echo "against the names the staging step wrote."
             exit 1
+          fi
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            # Checked in the zip, as an Operator unpacks it: the seal is what
+            # makes the login-item Core the app to macOS (see Package).
+            unpacked="$(mktemp -d)"
+            ditto -x -k packaging/out/installers/*-mac.zip "$unpacked"
+            codesign --verify --deep --strict "$unpacked/EverTranscript.app"
+            echo "  sealed: EverTranscript.app"
           fi
 
       # **The updater downloads by name, so the names have to agree.**
