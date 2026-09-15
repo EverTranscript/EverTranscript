@@ -8,9 +8,10 @@
 //!
 //! What it may do is bounded on purpose. At a scheduled start it emits
 //! [`DetectionEvent::CalendarEventStarted`], which arms detection and names
-//! the Meeting; the scheduled end feeds the auto-stop window. Capture still
-//! begins only on the Watchlist-and-microphone trigger: the calendar knows
-//! *when*, only the microphone knows *that*.
+//! the Meeting. The event carries its scheduled end as well, which nothing
+//! reads yet: the auto-stop window does not use it. Capture still begins
+//! only on the Watchlist-and-microphone trigger: the calendar knows *when*,
+//! only the microphone knows *that*.
 //!
 //! An event title is content, and this is the one place the product reads
 //! any — under a grant the Operator may decline, which ADR-0036 made the
@@ -36,8 +37,88 @@ use super::DetectionSource;
 /// milliseconds: this arms a meeting, it does not decide anything.
 const POLL_MS: u64 = 30_000;
 
-/// How far ahead to look.
-const HORIZON_SECS: f64 = 60.0 * 60.0;
+/// How far back a reading reaches. Longer than any meeting, so one that
+/// began before the Core did still arms, and a store that matches a range
+/// by start time rather than by overlap cannot end a meeting early.
+const LOOKBACK_SECS: f64 = 12.0 * 60.0 * 60.0;
+
+/// An event as one reading of the store found it, before anything decides
+/// what it means. Times are seconds from the moment of reading.
+struct Reading {
+    id: String,
+    title: String,
+    attendees: Vec<String>,
+    starts_in: f64,
+    ends_in: f64,
+    all_day: bool,
+}
+
+/// What changed since the last reading: a meeting in progress is announced
+/// once, and one that is over, or gone from the store, is announced as
+/// ended.
+///
+/// A reading holds more than the meetings in progress — meetings already
+/// over, and whatever a store's range returns — so this is the one place
+/// that decides a meeting has started.
+fn changes(
+    announced: &mut BTreeSet<String>,
+    readings: Vec<Reading>,
+    now: DetectionInstant,
+) -> Vec<DetectionEvent> {
+    let mut changed = Vec::new();
+    let mut live = BTreeSet::new();
+    for reading in readings {
+        // A day, not a meeting: a holiday or an out-of-office would
+        // otherwise arm at midnight and name whatever is recorded that day.
+        // anarlog skips them on every path that acts on an event.
+        if reading.all_day || reading.starts_in > 0.0 || reading.ends_in <= 0.0 {
+            continue;
+        }
+        live.insert(reading.id.clone());
+        if announced.insert(reading.id.clone()) {
+            debug!(event = reading.id, "a scheduled meeting has started");
+            changed.push(DetectionEvent::CalendarEventStarted {
+                at: now,
+                event: CalendarEvent {
+                    id: reading.id,
+                    // The store's own fallback, so an untitled event still
+                    // names its Meeting something.
+                    title: if reading.title.trim().is_empty() {
+                        "Untitled event".to_string()
+                    } else {
+                        reading.title
+                    },
+                    attendees: reading.attendees,
+                    // On the detection clock rather than as a wall time:
+                    // it is the clock the continuity window counts on.
+                    scheduled_end: Some(now.plus_millis((reading.ends_in * 1000.0) as u64)),
+                },
+            });
+        }
+    }
+    announced.retain(|id| {
+        let over = !live.contains(id);
+        if over {
+            changed.push(DetectionEvent::CalendarEventEnded {
+                at: now,
+                id: id.clone(),
+            });
+        }
+        !over
+    });
+    changed
+}
+
+/// Wall time as Windows keeps it, which is what a WinRT `DateTime` holds:
+/// 100 ns ticks since 1601.
+#[cfg(any(target_os = "windows", test))]
+fn winrt_ticks(time: std::time::SystemTime) -> i64 {
+    const UNIX_EPOCH_TICKS: i64 = 116_444_736_000_000_000;
+    let since = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    UNIX_EPOCH_TICKS + (since.as_nanos() / 100) as i64
+}
 
 /// Whether this machine will let us read the calendar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,15 +152,15 @@ mod eventkit {
         }
     }
 
-    /// Events starting within the horizon, as the policy understands them.
-    pub fn upcoming(now: DetectionInstant) -> Vec<CalendarEvent> {
+    /// Events that began within the lookback.
+    pub fn read() -> Vec<Reading> {
         if access() != Access::Granted {
             return Vec::new();
         }
         unsafe {
             let store = EKEventStore::new();
-            let from = NSDate::date();
-            let until = NSDate::dateWithTimeIntervalSinceNow(HORIZON_SECS);
+            let from = NSDate::dateWithTimeIntervalSinceNow(-LOOKBACK_SECS);
+            let until = NSDate::date();
             let predicate =
                 store.predicateForEventsWithStartDate_endDate_calendars(&from, &until, None);
             let events = store.eventsMatchingPredicate(&predicate);
@@ -87,36 +168,22 @@ mod eventkit {
             events
                 .iter()
                 .filter_map(|event| {
-                    let id = event.eventIdentifier()?.to_string();
-                    let title = {
-                        let title = event.title().to_string();
-                        // The store's own fallback, so an untitled event
-                        // still names its Meeting something.
-                        if title.trim().is_empty() {
-                            "Untitled event".to_string()
-                        } else {
-                            title
-                        }
-                    };
-                    let attendees = event
-                        .attendees()
-                        .map(|list| {
-                            list.iter()
-                                .filter_map(|attendee| attendee.name().map(|name| name.to_string()))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    // The end, expressed on the detection clock rather than
-                    // as a wall time, because that is what the window reads.
-                    let scheduled_end = {
-                        let seconds = event.endDate().timeIntervalSinceNow().max(0.0);
-                        Some(now.plus_millis((seconds * 1000.0) as u64))
-                    };
-                    Some(CalendarEvent {
-                        id,
-                        title,
-                        attendees,
-                        scheduled_end,
+                    Some(Reading {
+                        id: event.eventIdentifier()?.to_string(),
+                        title: event.title().to_string(),
+                        attendees: event
+                            .attendees()
+                            .map(|list| {
+                                list.iter()
+                                    .filter_map(|attendee| {
+                                        attendee.name().map(|name| name.to_string())
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        starts_in: event.startDate().timeIntervalSinceNow(),
+                        ends_in: event.endDate().timeIntervalSinceNow(),
+                        all_day: event.isAllDay(),
                     })
                 })
                 .collect()
@@ -132,14 +199,28 @@ mod eventkit {
 /// consulted from a polling thread every thirty seconds, so a bounded spin
 /// is honest here rather than a runtime to yield to.
 ///
-/// **Typechecked against `x86_64-pc-windows-msvc`, never executed.** Same
-/// status as the Windows detector, and for the same reason.
+/// **Verification status.** Run once, on Windows 11 Pro 26200 on
+/// 2026-09-15, with the Core given package identity by a signed sparse
+/// package declaring the `appointments` capability. That was a test
+/// package; nothing ships one yet (`DECISIONS.md` Q100, Q103). Against a
+/// calendar of test appointments, one already in progress armed on the
+/// first poll, and one that began about five minutes into the run armed on
+/// the first poll after its start. One later that day and an all-day one did not arm. The
+/// Core logged each title, and a test binary asking for the same properties
+/// read the invitees. The store matches a range by overlap and keeps start
+/// times to the whole minute.
+///
+/// Never observed: a Meeting named by an appointment, which needs a real
+/// capture, and an appointment anyone actually scheduled. That machine's
+/// store held none until the test added some.
 #[cfg(target_os = "windows")]
 mod eventkit {
     use super::*;
     use windows::ApplicationModel::Appointments::AppointmentManager;
+    use windows::ApplicationModel::Appointments::AppointmentProperties;
     use windows::ApplicationModel::Appointments::AppointmentStore;
     use windows::ApplicationModel::Appointments::AppointmentStoreAccessType;
+    use windows::ApplicationModel::Appointments::FindAppointmentsOptions;
     use windows::Foundation::DateTime;
     use windows::Foundation::TimeSpan;
     use windows::Win32::Foundation::APPMODEL_ERROR_NO_PACKAGE;
@@ -212,45 +293,75 @@ mod eventkit {
         }
     }
 
-    pub fn upcoming(now: DetectionInstant) -> Vec<CalendarEvent> {
+    /// Appointments that began within the lookback.
+    pub fn read() -> Vec<Reading> {
+        // WinRT counts in 100 ns ticks.
+        const TICKS_PER_SECOND: i64 = 10_000_000;
+
         let Some(store) = store() else {
             return Vec::new();
         };
-        let from = DateTime { UniversalTime: 0 };
-        let horizon = TimeSpan {
-            // WinRT counts in 100 ns ticks.
-            Duration: (HORIZON_SECS as i64) * 10_000_000,
+        let Ok(options) = FindAppointmentsOptions::new() else {
+            return Vec::new();
         };
+        // A query loads almost nothing it is not asked for
+        // (`FindAppointmentsAsync`'s remarks), and an appointment read
+        // without these has no time to arm at and no title to name.
+        if let Ok(fetch) = options.FetchProperties() {
+            for name in [
+                AppointmentProperties::Subject(),
+                AppointmentProperties::StartTime(),
+                AppointmentProperties::Duration(),
+                AppointmentProperties::AllDay(),
+                AppointmentProperties::Invitees(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let _ = fetch.Append(&name);
+            }
+        }
+        let now = winrt_ticks(std::time::SystemTime::now());
+        let lookback = (LOOKBACK_SECS as i64) * TICKS_PER_SECOND;
         let Ok(found) = store
-            .FindAppointmentsAsync(from, horizon)
+            .FindAppointmentsAsyncWithOptions(
+                DateTime {
+                    UniversalTime: now - lookback,
+                },
+                TimeSpan { Duration: lookback },
+                &options,
+            )
             .and_then(block_on)
         else {
             return Vec::new();
         };
+        let seconds = |ticks: i64| ticks as f64 / TICKS_PER_SECOND as f64;
         found
             .into_iter()
-            .map(|appointment| {
-                let title = appointment
-                    .Subject()
-                    .map(|subject| subject.to_string())
-                    .unwrap_or_default();
-                let seconds = appointment
-                    .Duration()
-                    .map(|duration| duration.Duration as f64 / 10_000_000.0)
-                    .unwrap_or(0.0);
-                CalendarEvent {
-                    id: appointment
-                        .LocalId()
-                        .map(|id| id.to_string())
+            .filter_map(|appointment| {
+                let start = appointment.StartTime().ok()?.UniversalTime;
+                let end = start + appointment.Duration().ok()?.Duration;
+                Some(Reading {
+                    id: appointment.LocalId().ok()?.to_string(),
+                    title: appointment
+                        .Subject()
+                        .map(|subject| subject.to_string())
                         .unwrap_or_default(),
-                    title: if title.trim().is_empty() {
-                        "Untitled event".to_string()
-                    } else {
-                        title
-                    },
-                    attendees: Vec::new(),
-                    scheduled_end: Some(now.plus_millis((seconds.max(0.0) * 1000.0) as u64)),
-                }
+                    attendees: appointment
+                        .Invitees()
+                        .map(|invitees| {
+                            invitees
+                                .into_iter()
+                                .filter_map(|invitee| invitee.DisplayName().ok())
+                                .map(|name| name.to_string())
+                                .filter(|name| !name.trim().is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                    starts_in: seconds(start - now),
+                    ends_in: seconds(end - now),
+                    all_day: appointment.AllDay().unwrap_or(false),
+                })
             })
             .collect()
     }
@@ -264,7 +375,7 @@ mod eventkit {
         Access::Withheld
     }
 
-    pub fn upcoming(_now: DetectionInstant) -> Vec<CalendarEvent> {
+    pub fn read() -> Vec<Reading> {
         Vec::new()
     }
 }
@@ -308,28 +419,9 @@ impl DetectionSource for CalendarSource {
 
                     while !stop.load(Ordering::Relaxed) {
                         let now = DetectionInstant(started.elapsed().as_millis() as u64);
-                        let upcoming = eventkit::upcoming(now);
-                        let live: BTreeSet<String> =
-                            upcoming.iter().map(|event| event.id.clone()).collect();
-
-                        for event in upcoming {
-                            if announced.insert(event.id.clone()) {
-                                debug!(event = event.id, "a scheduled meeting has started");
-                                let _ =
-                                    events.blocking_send(DetectionEvent::CalendarEventStarted {
-                                        at: now,
-                                        event,
-                                    });
-                            }
+                        for change in changes(&mut announced, eventkit::read(), now) {
+                            let _ = events.blocking_send(change);
                         }
-
-                        // Gone from the window means over.
-                        for id in announced.difference(&live).cloned().collect::<Vec<_>>() {
-                            announced.remove(&id);
-                            let _ = events
-                                .blocking_send(DetectionEvent::CalendarEventEnded { at: now, id });
-                        }
-
                         std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
                     }
                 })?,
@@ -375,5 +467,77 @@ mod tests {
             .expect("starting without access is not an error");
         source.stop();
         assert!(rx.try_recv().is_err(), "nothing should have been emitted");
+    }
+
+    fn reading(id: &str, starts_in: f64, ends_in: f64) -> Reading {
+        Reading {
+            id: id.to_string(),
+            title: "Standup".to_string(),
+            attendees: Vec::new(),
+            starts_in,
+            ends_in,
+            all_day: false,
+        }
+    }
+
+    #[test]
+    fn a_meeting_arms_when_it_starts_not_when_it_is_first_seen() {
+        let mut announced = BTreeSet::new();
+        let at = DetectionInstant;
+
+        // Fifty-five minutes out. Arming now would name the next hour's
+        // recordings after it and follow up two minutes later.
+        assert!(changes(&mut announced, vec![reading("e", 3300.0, 5100.0)], at(0)).is_empty());
+
+        let started = changes(&mut announced, vec![reading("e", -10.0, 1790.0)], at(1000));
+        assert!(
+            matches!(
+                &started[..],
+                [DetectionEvent::CalendarEventStarted { event, .. }]
+                    if event.id == "e" && event.scheduled_end == Some(at(1_791_000))
+            ),
+            "{started:?}"
+        );
+        assert!(
+            changes(
+                &mut announced,
+                vec![reading("e", -40.0, 1760.0)],
+                at(31_000)
+            )
+            .is_empty(),
+            "announced once, however many readings still hold it"
+        );
+
+        // Over, whether the store still lists it or has dropped it.
+        let mut dropped = announced.clone();
+        let over = changes(
+            &mut announced,
+            vec![reading("e", -1800.0, -1.0)],
+            at(1_800_000),
+        );
+        let gone = changes(&mut dropped, Vec::new(), at(1_800_000));
+        for ended in [over, gone] {
+            assert!(
+                matches!(&ended[..], [DetectionEvent::CalendarEventEnded { id, .. }] if id == "e"),
+                "{ended:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_all_day_entry_is_not_a_meeting() {
+        let holiday = Reading {
+            all_day: true,
+            ..reading("holiday", -3600.0, 72_000.0)
+        };
+        assert!(changes(&mut BTreeSet::new(), vec![holiday], DetectionInstant(0)).is_empty());
+    }
+
+    #[test]
+    fn windows_time_counts_from_1601() {
+        // 2000-01-01T00:00:00Z, worked out from the calendar rather than
+        // from the constant under test.
+        let y2k = std::time::UNIX_EPOCH + std::time::Duration::from_secs(946_684_800);
+        assert_eq!(winrt_ticks(y2k), 125_911_584_000_000_000);
     }
 }

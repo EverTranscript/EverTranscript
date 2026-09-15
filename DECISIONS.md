@@ -1330,3 +1330,63 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Ref:** (pending)
 **Supersedes:** Q65's "a standing rule was rejected" — the rule stands with the exemplar clause; the one-time prune it made was still right for the rows it took.
 
+
+## Q99 — m2-auto-record/07 — gate-resolution
+
+**Question:** Reading the calendar code before testing it on windows-zx8 found bugs that would make a test meaningless. The source announced every event its reader returned, and both readers return events up to an hour ahead, so a meeting armed as soon as it was first seen, got its "never started" follow-up two minutes later, and gave its name to whatever Auto-Record started in that hour. The Windows reader asked for the hour after 1 January 1601 instead of the current one, took an event's length for its end, and read no invitees. Separately, none of Granola, anarlog or Meetily reads the Windows appointment store (anarlog and Granola use cloud calendars there), Mail & Calendar was retired at the end of 2024, and the new Outlook is reported not to fill that store. How far should the calendar work on windows-zx8 go?
+**Options considered:** fix the bugs with tests on the Mac, then on zx8 look at what the store holds and watch a throwaway appointment arm a test Core that cannot record (chosen) / fix the bugs only, leaving zx8 untouched / record the findings only
+**Chosen:** Fix, then test on zx8.
+**Decided-by:** human
+**Justification:** Frank, answering the scope question.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q100 — m2-auto-record/07 — gate-resolution
+
+**Question:** The appointment store answers only a process with package identity. How should the test Core on windows-zx8 get one?
+**Options considered:** Developer Mode on for the test and an unsigned package registered from a folder / a self-signed certificate trusted on zx8 and a signed package (chosen)
+**Chosen:** A signed package, with the certificate and package removed afterwards. Made a sparse package ("packaging with external location"), so the Core keeps running from its own folder with the package lending it identity and the appointments capability: that part is the agent's reading, because the Windows installer is NSIS and a sparse package is how an installed exe gets identity without becoming an MSIX.
+**Decided-by:** human
+**Justification:** Frank chose the signed package over the recommended Developer Mode, as closer to how an installer could ship it.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q101 — m2-auto-record/07 — deviation
+
+**Question:** How should the calendar decide that a meeting has started?
+**Options considered:** keep announcing whatever a reader returns and narrow each reader's range / readers return what the store holds and one function decides (chosen)
+**Chosen:** Each reader returns the events that began in the last 12 hours as plain readings: id, title, attendees, seconds until start and until end, and whether it is all-day. `changes` announces an event once when its start has passed and its end has not, and announces the end once it is over or gone from the store; the "Untitled event" fallback moves there from both readers. On Windows the query now starts 12 hours before now and asks for Subject, StartTime, Duration, AllDay and Invitees, since `FindAppointmentsAsync` loads almost nothing it is not asked for (its remarks say so); the end is start plus duration, and invitees give their display names. On the Mac a meeting now arms within one 30-second poll after its scheduled start instead of up to an hour before it.
+**Decided-by:** agent
+**Justification:** One tested function holds the decision both platforms feed, so a reader cannot bring the bug back. The lookback is there because neither EventKit nor WinRT documents whether a range matches events by overlap or by start time: matched by start time over a short range, a meeting would leave the reading minutes after it began and end early, losing its name. Checked with `a_meeting_arms_when_it_starts_not_when_it_is_first_seen`. The module also typechecks and passes clippy for x86_64-pc-windows-msvc from a scratch crate on the Mac, which proves the calls exist and nothing more; zx8 is for whether they work.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q102 — m2-auto-record/07 — gate-resolution
+
+**Question:** Should an all-day calendar entry arm detection and name a Meeting? ADR-0036 does not say.
+**Options considered:** treat it like any other event / skip it (chosen)
+**Chosen:** All-day entries are skipped.
+**Decided-by:** agent
+**Justification:** anarlog skips all-day events on every path that acts on one: event notifications (`apps/desktop/src/services/event-notification/index.ts`), the sidebar's upcoming meeting (`apps/desktop/src/sidebar/timeline/upcoming-meeting.ts`) and calendar-based auto-stop (`apps/desktop/src/stt/auto-stop.ts`). An all-day entry is usually a holiday, an out-of-office or a birthday, and armed it would name the first Meeting recorded that day.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q103 — m2-auto-record/07 — irreversible-action
+
+**Question:** The Windows calendar test needed changes on windows-zx8 that are hard to undo and sit outside the repo: a trusted certificate, a registered package, a consent setting and a calendar in soulm's own appointment store. What was done, and what was put back?
+**Options considered:** snapshot everything the run could touch, then remove it and compare (chosen) / clean up from a list of what was changed, with no comparison
+**Chosen:** The snapshot came first. It covered the LocalMachine TrustedPeople and My certificate stores and CurrentUser My, installed packages, appointments consent keys, package data folders, et-e2e tasks, and in the repo its worktrees, HEAD and status, its binaries' hashes and the entry counts in `target\debug`. The run then fetched origin in the zx8 repo and added a worktree detached at 7befb41 with this change applied. It built the Core into the repo's target, with its `evertranscript.exe`, `.pdb` and `.d` backed up and put back, and built a test binary inside the test folder. A self-signed certificate for CN=EverTranscript Calendar Test was made in LocalMachine\My and signed the package; its public half was trusted in LocalMachine\TrustedPeople and the private key deleted. The sparse package was registered from a console-session task, and its appointments consent set to Allow the way Settings sets it, so no prompt could appear in front of whoever was using the machine. The test binary made a calendar, "EverTranscript calendar test", holding four appointments. The Core ran from the test folder with its data folders under it and Auto-Record on over an empty Watchlist. Put back: the test binary deleted its calendar, leaving the store with its one calendar and no appointments as before. Unregistering the package took its data folder and consent key with it. The certificate was removed from TrustedPeople, 16 tasks were unregistered, the worktree was removed, and the 72 build entries created since the snapshot and the test folder were deleted. All twelve snapshot keys then compared equal. A sweep afterwards found one more copy of the certificate, in LocalMachine\CA: New-SelfSignedCertificate puts one there too, and the snapshot did not cover that store. It was removed by thumbprint, and no store then held a certificate naming EverTranscript. The same sweep found no consent entry naming the test, nothing written to `%APPDATA%\EverTranscript` since the run began, no Run key value and no crates newly downloaded into the cargo cache. The fetch's updated remote-tracking refs in the zx8 repo were left. Results are in issue 07.
+**Decided-by:** agent
+**Justification:** Frank chose the test on zx8 (Q99) and the signed package (Q100), with the certificate and package removed afterwards. The snapshot comparison is what shows the machine was left as found. The copy in the CA store is why a sweep by subject has to follow the comparison.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q104 — m2-auto-record/07 — gate-resolution
+
+**Question:** ADR-0036 has Windows read calendars from the local appointment store and never from a cloud API. It turned cloud calendars down because the OS store "already carries" the calendars. The reader now works under package identity (Q103), but on a current Windows 11 machine that store is probably empty. zx8's held no appointments. Its new Outlook is reported not to fill the store, and Mail and Calendar, whose accounts did, was retired at the end of 2024. None of Granola, anarlog or Meetily reads the store. What should calendar arming on Windows be?
+**Options considered:** keep the local reader and ship identity through a signed sparse package that the NSIS installer registers (it works, as zx8 showed, but needs a code-signing certificate plus install and uninstall steps, and still finds only what the store holds) / amend ADR-0036 to read a cloud calendar on Windows, as anarlog and Granola do (OAuth, a token lifecycle and new Sanctioned Traffic, reversing "never a cloud calendar API") / ship Windows without calendar arming for now, keeping the reader dormant: that is already the posture of an unpackaged install and of an Operator who declines the grant
+**Chosen:** —
+**Decided-by:** —
+**Justification:** Each option changes a product promise or a cost only Frank can weigh. The first spends on a signing certificate and installer work for a store that may be empty. The second reverses a privacy line ADR-0036 drew on purpose. The third leaves the Windows ship gate with one ambient sense instead of two. The evidence is one machine's store plus reports about the new Outlook, so it is worth confirming against a Windows machine whose calendar is actually in use before choosing.
+**Outcome:** escalated
+**Ref:** .scratch/m2-auto-record/issues/07-calendar-arming.md
