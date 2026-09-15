@@ -1,8 +1,8 @@
 # Kept audio: reopening the codec behind ADR-0032
 
-Status: ready-for-agent
+Status: done — landed in `1f79b4f` (2026-09-05)
 
-**Decided 2026-09-05 and written into ADR-0032, which now reads "Kept audio is one MP3 per Meeting, encoded in-process by LAME".** This file is the working record behind that ADR — the evidence, the options weighed, and the recommendation that was not taken. Implementation has not started.
+**Decided 2026-09-05 and written into ADR-0032, which now reads "Kept audio is one MP3 per Meeting, encoded in-process by LAME".** This file is the working record behind that ADR — the evidence, the options weighed, and the recommendation that was not taken. It was implemented the same day in `1f79b4f`, so the sections below are the record from before it landed.
 
 Sources of truth: ADR-0032 (kept audio is stereo AAC via bundled ffmpeg — **reopened**, this is its review), ADR-0019 (meeting audio persists by default; the record is the transcript, audio is the bonus), ADR-0029 (dual-channel, mic is the Operator), ADR-0031 (the sidecar boundary and why it exists), ADR-0026 (the Core is the record's only writer), `CONTEXT.md`. Where this spec and an ADR disagree, the ADR wins.
 
