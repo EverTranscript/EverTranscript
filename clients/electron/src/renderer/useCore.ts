@@ -280,15 +280,25 @@ export function useRegistry() {
   }, [refresh]);
 
   const rename = useCallback(
-    async (id: string, displayName: string) => {
-      await window.evertranscript.request<SpeakerResponse>("speaker/rename", {
-        id,
-        displayName,
-      });
-      // Refetched rather than patched in place: a rename is retroactive
-      // across every Meeting, so the counts beside every other row can
-      // change too.
-      await refresh();
+    async (
+      id: string,
+      displayName: string,
+      join = false,
+    ): Promise<SpeakerResponse> => {
+      const response = await window.evertranscript.request<SpeakerResponse>(
+        "speaker/rename",
+        { id, displayName, join },
+      );
+      // Nothing moved when the name is already held and nobody has said to
+      // merge yet, so the list is still true — and refetching would drop
+      // the confirmation the caller is about to draw.
+      if (!response.joinRequired) {
+        // Refetched rather than patched in place: a rename is retroactive
+        // across every Meeting, so the counts beside every other row can
+        // change too.
+        await refresh();
+      }
+      return response;
     },
     [refresh],
   );

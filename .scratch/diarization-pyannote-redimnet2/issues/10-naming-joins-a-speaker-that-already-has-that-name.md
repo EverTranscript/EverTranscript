@@ -20,10 +20,10 @@ behind a second control.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Naming onto an existing name produces one Speaker holding both sets of appearances, after a confirmation that states what merges
-- [ ] Named-into-named is refused with a legible reason
-- [ ] Corrections and exemplars follow the segments, so the joined Speaker keeps what both were taught
-- [ ] Declining the confirmation leaves both Speakers untouched
-- [ ] Mirrors and the Registry reflect the join, and the Transcript's own text is unchanged (ADR-0009)
+- [x] Naming onto an existing name produces one Speaker holding both sets of appearances, after a confirmation that states what merges
+- [x] Named-into-named is refused with a legible reason
+- [x] Corrections and exemplars follow the segments, so the joined Speaker keeps what both were taught
+- [x] Declining the confirmation leaves both Speakers untouched
+- [x] Mirrors and the Registry reflect the join, and the Transcript's own text is unchanged (ADR-0009)

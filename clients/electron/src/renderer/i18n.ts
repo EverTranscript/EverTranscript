@@ -227,6 +227,12 @@ const en = {
   "registry.rename": "Name this voice",
   "registry.rename.hint":
     "Naming relabels every past appearance, and confirms the Voiceprint for future matching.",
+  "registry.join.held": "is already a Speaker here, heard in",
+  "registry.join.hint":
+    "Naming this voice the same folds the two together: its",
+  "registry.join.hint.tail":
+    "and everything it was taught move onto that Speaker, and this row goes away. Nothing in any Transcript changes.",
+  "registry.join.confirm": "Join them",
   "registry.forget": "Delete Voiceprint",
   "registry.forget.hint":
     "The app stops recognizing this voice. Nothing in the record changes — the Speaker, the name, and every word attributed to them stay exactly as they are.",
@@ -461,6 +467,11 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "registry.voiceprint.unconfirmed": "声纹 · 未确认",
     "registry.rename": "为这个声音命名",
     "registry.rename.hint": "命名会重新标注该讲话人过去的全部记录，并确认其声纹以用于后续匹配。",
+    "registry.join.held": "在这里已经是一位讲话人，出现于",
+    "registry.join.hint": "把这个声音命名为该名称会将两者合并：它的",
+    "registry.join.hint.tail":
+      "以及它学到的一切都会转移到那位讲话人名下，本行随之消失。任何转录文本都不会改变。",
+    "registry.join.confirm": "合并",
     "registry.forget": "删除声纹",
     "registry.forget.hint":
       "本应用将不再识别这个声音。记录本身不受影响——讲话人、名称，以及归属于其名下的每一个字都原样保留。",

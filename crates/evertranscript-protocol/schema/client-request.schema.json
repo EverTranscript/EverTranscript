@@ -970,6 +970,13 @@
         },
         "id": {
           "type": "string"
+        },
+        "join": {
+          "description": "Consent to fold this Speaker into the one already holding the name.\n\nAbsent or false, a rename onto a name History already holds does\nnothing and comes back describing what a join would merge, so the\nClient can ask. Combining two identities should be a decision, not a\nside effect of typing (ADR-0037).",
+          "type": [
+            "boolean",
+            "null"
+          ]
         }
       },
       "required": [

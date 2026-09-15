@@ -235,8 +235,16 @@ enum SpeakerCommand {
         json: bool,
     },
     /// Name a Speaker. Every past appearance is relabelled, and the name
-    /// also confirms the Voiceprint for future matching.
-    Rename { id: String, name: String },
+    /// also confirms the Voiceprint for future matching. Naming a voice
+    /// with a name someone already holds folds the two together, which is
+    /// asked about first.
+    Rename {
+        id: String,
+        name: String,
+        /// Skip the confirmation prompt when the name is already held.
+        #[arg(long)]
+        join: bool,
+    },
     /// Delete a Speaker's Voiceprint. The app stops recognizing that voice;
     /// nothing in the record changes.
     Forget {
@@ -1421,13 +1429,46 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
                 }
             }
         }
-        SpeakerCommand::Rename { ref id, ref name } => {
-            let response: SpeakerResponse = client
+        SpeakerCommand::Rename {
+            ref id,
+            ref name,
+            join,
+        } => {
+            let mut response: SpeakerResponse = client
                 .request(
                     "speaker/rename",
-                    Some(serde_json::json!({ "id": id, "displayName": name })),
+                    Some(serde_json::json!({ "id": id, "displayName": name, "join": join })),
                 )
                 .await?;
+            // Combining two identities is a decision, not a side effect of
+            // typing a name someone already holds.
+            if let Some(ref preview) = response.join_required {
+                println!(
+                    "{name} is already a Speaker here, heard in {} {}. Naming this voice \
+                     {name} folds the two together: its {} {} and everything it was taught \
+                     move onto that Speaker, and this row goes away.\nNothing in any \
+                     Transcript changes.\n",
+                    preview.into_meetings,
+                    plural(preview.into_meetings, "Meeting", "Meetings"),
+                    preview.from_meetings,
+                    plural(preview.from_meetings, "Meeting", "Meetings"),
+                );
+                eprint!("join them? [y/N] ");
+                use std::io::Write;
+                std::io::stderr().flush().ok();
+                let mut answer = String::new();
+                std::io::stdin().read_line(&mut answer)?;
+                if !matches!(answer.trim(), "y" | "Y" | "yes") {
+                    println!("left alone — both Speakers are as they were");
+                    return Ok(());
+                }
+                response = client
+                    .request(
+                        "speaker/rename",
+                        Some(serde_json::json!({ "id": id, "displayName": name, "join": true })),
+                    )
+                    .await?;
+            }
             println!(
                 "Renamed to {}. Every past appearance now reads that way, and the Voiceprint is \
                  confirmed for future matching.",
@@ -1517,6 +1558,10 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
 /// to match, so it keeps the leading form.
 fn short(id: &str) -> String {
     evertranscript_core::ids::short(id)
+}
+
+fn plural(count: i64, one: &'static str, many: &'static str) -> &'static str {
+    if count == 1 { one } else { many }
 }
 
 fn display_name_of(speaker: &evertranscript_protocol::Speaker) -> String {
