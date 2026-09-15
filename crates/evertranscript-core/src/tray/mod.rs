@@ -9,7 +9,7 @@
 //! **The state machine lives here, the platform code does not.** Everything
 //! in this module is ordinary Rust with tests: which label the menu shows,
 //! when the item is clickable, how a transition resolves, what happens when
-//! a start fails. [`macos`] is a thin shell that renders a [`TrayView`] and
+//! a start fails. `macos` is a thin shell that renders a [`TrayView`] and
 //! forwards clicks back. That split is deliberate — menu-bar code cannot be
 //! asserted on by a test suite, so as little behaviour as possible lives
 //! inside it.

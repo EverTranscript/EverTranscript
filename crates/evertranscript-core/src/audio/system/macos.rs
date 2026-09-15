@@ -731,7 +731,7 @@ type OSStatusCompat = i32;
 /// refused, and offers no way to tell the two apart until something plays.
 /// What this rules out is the rest: too old an OS, no output device, a
 /// format we cannot read. The refused-permission case is caught during
-/// capture by [`note_level`] instead, which is the only place the evidence
+/// capture by `note_level` instead, which is the only place the evidence
 /// exists.
 pub fn available() -> std::result::Result<(), String> {
     match create_tap() {

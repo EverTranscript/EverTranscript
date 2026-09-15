@@ -12,7 +12,7 @@
 //!   `confirmed`, because the Operator putting a name to a voice is the
 //!   strongest signal the system will ever get about it.
 //! - **Corrections append, never overwrite** (ADR-0009 as amended). A
-//!   re-assignment writes an [`attribution_hints`] row; the machine's
+//!   re-assignment writes an `attribution_hints` row; the machine's
 //!   conclusion stays on the segment underneath, which is what keeps the
 //!   record auditable and re-diarization possible.
 
@@ -649,9 +649,10 @@ pub struct Appearances {
 }
 
 /// A Meeting a voice was heard in, carrying just enough for a Client to name
-/// it. Deliberately not a whole [`super::meetings::Meeting`]: the Registry
-/// wants a label and a way in, and a Speaker heard in fifty Meetings would
-/// otherwise drag fifty Summaries and fifty sets of Notes across the socket.
+/// it. Deliberately not a whole [`Meeting`](evertranscript_protocol::Meeting):
+/// the Registry wants a label and a way in, and a Speaker heard in fifty
+/// Meetings would otherwise drag fifty Summaries and fifty sets of Notes
+/// across the socket.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HeardMeeting {
     pub started_at: String,

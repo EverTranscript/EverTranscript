@@ -166,7 +166,7 @@ impl AutoRecord {
     /// The Operator pressed Stop while a detected Meeting was recording.
     ///
     /// Suppression lasts until the meeting it belongs to is over — see
-    /// [`Self::trigger_present`] for what ends it. A timer alone would
+    /// `trigger_present` for what ends it. A timer alone would
     /// either overrule the Operator (too short) or silently miss the next
     /// meeting in the same app (too long); the meeting's own end is the only
     /// honest boundary.
