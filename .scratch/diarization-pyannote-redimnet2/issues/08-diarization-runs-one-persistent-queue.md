@@ -21,11 +21,17 @@ a restart, and a refusal is something the caller is told.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A Meeting that ends during a long run is processed rather than dropped, and goes ahead of queued bulk work
-- [ ] A Meeting already in line is refused, and the caller is told rather than the refusal being logged
-- [ ] Status reports the running job and the queue; the running job stays visible and cancellable when a second request arrives
-- [ ] The queue survives a Core restart
-- [ ] The existing slot guard keeps one run at a time and still releases on panic
-- [ ] `diarize/status` gains no breaking change (ADR-0028 additive-only)
+- [x] A Meeting that ends during a long run is processed rather than dropped, and goes ahead of queued bulk work
+- [x] A Meeting already in line is refused, and the caller is told rather than the refusal being logged
+- [x] Status reports the running job and the queue; the running job stays visible and cancellable when a second request arrives
+- [x] The queue survives a Core restart
+- [x] The existing slot guard keeps one run at a time and still releases on panic
+- [x] `diarize/status` gains no breaking change (ADR-0028 additive-only)
+
+Found while building this: the enqueue belonged in `stop_meeting`, not in the
+`meeting/stop` handler. Three paths stop a Meeting — the handler, Auto-Record's driver,
+and the tray — and only the handler ever diarized what it stopped, so an auto-recorded
+Meeting was never attributed at all. Cancelling a Meeting that is still waiting now also
+takes it out of the line.

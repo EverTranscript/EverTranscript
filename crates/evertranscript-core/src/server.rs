@@ -86,6 +86,7 @@ use crate::models;
 use crate::paths;
 use crate::settings::Settings;
 use crate::store::Store;
+use crate::store::diarize_queue;
 use crate::store::meetings;
 use crate::summary;
 use crate::transport::ConnectionId;
@@ -108,6 +109,10 @@ pub struct Core {
     store: Store,
     mirror: MirrorWriter,
     mirror_wake: Arc<Notify>,
+    /// Nudges the Diarization worker when something joins the queue. The
+    /// worker also wakes on a timer, so a missed notify costs a delay
+    /// rather than a dropped Meeting.
+    diarize_wake: Arc<Notify>,
     /// The recording in progress, if any. The Meeting owns it; capture
     /// streams inside it come and go (ADR-0029 as amended).
     recorder: Mutex<Option<audio::recorder::Recorder>>,
@@ -429,6 +434,7 @@ impl Core {
             store,
             mirror,
             mirror_wake: Arc::new(Notify::new()),
+            diarize_wake: Arc::new(Notify::new()),
             recorder: Mutex::new(None),
             source_factory: Mutex::new(live_source_factory()),
             notifications: broadcast::channel(NOTIFICATION_CAPACITY).0,
@@ -1411,6 +1417,15 @@ impl Core {
             return Ok(0);
         }
 
+        // Claimed before the job entry is written, not inside the spawned
+        // task. M3 had it the other way round, and a refused second run
+        // therefore overwrote the running job's entry and then cleared it on
+        // the way out — the running job became invisible to `diarize/status`
+        // and uncancellable. Refusing before anything is written is the
+        // whole fix.
+        let slot =
+            diarize::runner::Slot::claim(meeting_id).map_err(|busy| anyhow::anyhow!("{busy}"))?;
+
         let cancel = diarize::Cancel::new();
         *self.diarization.lock().await = Some(DiarizeJob {
             meeting_id: meeting_id.to_string(),
@@ -1424,8 +1439,11 @@ impl Core {
         // The models are CPU-bound C++; keeping them off the async runtime is
         // what stops a long Meeting from stalling every Client request.
         let outcome = tokio::task::spawn_blocking(move || -> Result<_> {
-            let _slot = diarize::runner::Slot::claim(&id_for_progress)
-                .map_err(|busy| anyhow::anyhow!("{busy}"))?;
+            // Moved in so it is released when the blocking task ends,
+            // including by a panic out of the ONNX runtime: a slot that
+            // stayed claimed would turn one bad Meeting into a permanently
+            // broken feature.
+            let _slot = slot;
             let mut decoded = diarize::runner::decode(&audio_path)?;
             // The far end comes back through the speakers into the
             // microphone, and diarization heard it there as strangers: on
@@ -1550,14 +1568,49 @@ impl Core {
         Ok(written)
     }
 
-    /// Starts Diarization for a finished Meeting without waiting for it.
+    /// Works the Diarization queue until shutdown.
     ///
-    /// Detached on purpose. Attribution arriving minutes later is the design
-    /// (ADR-0009's join exists because the Transcript is already published),
-    /// and anything that made stopping wait for two neural models would make
-    /// the one act the Operator performs by hand feel broken.
-    pub fn diarize_in_background(self: std::sync::Arc<Self>, meeting_id: String) {
-        tokio::spawn(async move {
+    /// One worker, so the "at most one run at a time" policy is a property
+    /// of the shape rather than of a lock that every caller has to remember
+    /// to take. `runner::Slot` stays underneath it: it is what releases on a
+    /// panic out of the ONNX runtime, and what a direct call to
+    /// `diarize_meeting` in a test still honours.
+    ///
+    /// A Meeting is taken out of the line only once its run is over, so a
+    /// Core killed mid-run comes back owing it. That does mean a Meeting
+    /// whose audio reliably panics the runtime would be retried on every
+    /// start; it is bounded by `run_guarded` catching the panic and the run
+    /// then finishing, unattributed, which takes it out of the line.
+    pub async fn run_diarization_queue(
+        self: std::sync::Arc<Self>,
+        shutdown: tokio_util::sync::CancellationToken,
+    ) {
+        loop {
+            let next = self
+                .store
+                .read(crate::store::diarize_queue::peek)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "could not read the Diarization queue");
+                    None
+                });
+
+            let Some(meeting_id) = next else {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = self.diarize_wake.notified() => continue,
+                    // A timer as well as the notify: a wake that arrives
+                    // while this loop is between selects is lost, and the
+                    // cost of that should be a delay rather than a Meeting
+                    // that waits until the next restart.
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => continue,
+                }
+            };
+
+            if shutdown.is_cancelled() {
+                break;
+            }
+
             match self.diarize_meeting(&meeting_id).await {
                 Ok(0) => {}
                 Ok(attributed) => {
@@ -1569,23 +1622,90 @@ impl Core {
                     tracing::warn!(meeting = %meeting_id, %error, "Diarization did not complete")
                 }
             }
-        });
+
+            let done = meeting_id.clone();
+            if let Err(error) = self
+                .store
+                .write(move |connection| crate::store::diarize_queue::finish(connection, &done))
+                .await
+            {
+                // Left in the queue, so it is retried. Better than dropping
+                // it, and the alternative — spinning on a Meeting whose row
+                // cannot be deleted — needs the write path to be broken,
+                // which is a bigger problem than this loop.
+                tracing::warn!(meeting = %meeting_id, %error, "could not clear the Diarization queue");
+            }
+        }
+        tracing::debug!("diarization worker finished");
     }
 
-    /// What Diarization is doing.
+    /// Puts a Meeting in line to be diarized. Answers whether it joined.
+    ///
+    /// Queued rather than run here, and queued in the record rather than in
+    /// memory. Attribution arriving minutes later is the design (ADR-0009's
+    /// join exists because the Transcript is already published), and
+    /// anything that made stopping wait for two neural models would make the
+    /// one act the Operator performs by hand feel broken.
+    ///
+    /// `false` means the Meeting was already in line. That is a refusal, and
+    /// it is the caller's to report: M3's version refused inside the spawned
+    /// task and only logged it, so the caller was told a run had started
+    /// when none had.
+    pub async fn enqueue_diarization(
+        &self,
+        meeting_id: &str,
+        priority: crate::store::diarize_queue::Priority,
+    ) -> Result<bool> {
+        let id = meeting_id.to_string();
+        let added = self
+            .store
+            .write(move |connection| {
+                crate::store::diarize_queue::enqueue(connection, &id, priority)
+            })
+            .await?;
+        self.diarize_wake.notify_one();
+        Ok(added)
+    }
+
+    /// Whether a Meeting is running or waiting right now.
+    pub async fn diarization_holds(&self, meeting_id: &str) -> Result<bool> {
+        let id = meeting_id.to_string();
+        self.store
+            .read(move |connection| crate::store::diarize_queue::holds(connection, &id))
+            .await
+    }
+
+    /// What Diarization is doing, and what it owes.
     pub async fn diarize_status(&self) -> DiarizeStatusResponse {
+        // Read before the running job, so a queue drained between the two
+        // reads cannot produce a status that shows neither.
+        let queued = self
+            .store
+            .read(crate::store::diarize_queue::list)
+            .await
+            .unwrap_or_default();
         match self.diarization.lock().await.as_ref() {
             Some(job) => DiarizeStatusResponse {
                 state: DiarizeState::Running,
                 meeting_id: Some(job.meeting_id.clone()),
                 done_ms: job.done_ms as i64,
                 total_ms: job.total_ms as i64,
+                queued,
             },
             None => DiarizeStatusResponse {
-                state: DiarizeState::Idle,
-                meeting_id: None,
+                state: if queued.is_empty() {
+                    DiarizeState::Idle
+                } else {
+                    // Work is owed and the worker has not picked it up yet.
+                    // Reported as running rather than idle: an Operator who
+                    // asked for a re-run and saw "idle" would reasonably
+                    // conclude nothing happened.
+                    DiarizeState::Running
+                },
+                meeting_id: queued.first().cloned(),
                 done_ms: 0,
                 total_ms: 0,
+                queued,
             },
         }
     }
@@ -1602,6 +1722,19 @@ impl Core {
             && job.meeting_id == meeting_id
         {
             job.cancel.cancel();
+        }
+        // Out of the line as well as stopped. Cancelling a Meeting that is
+        // still waiting has to mean it does not run — otherwise "cancel"
+        // means "cancel, then run anyway in four minutes", which is not a
+        // word anyone would choose for that. The running job is taken out by
+        // the worker when its run ends, cancelled or not.
+        let queued = meeting_id.clone();
+        if let Err(error) = self
+            .store
+            .write(move |connection| crate::store::diarize_queue::finish(connection, &queued))
+            .await
+        {
+            warn!(meeting = %meeting_id, %error, "could not take a Meeting out of the Diarization queue");
         }
         self.diarize_status().await
     }
@@ -1774,6 +1907,10 @@ impl Core {
         Arc::clone(&self.mirror_wake)
     }
 
+    pub fn diarize_wake(&self) -> Arc<Notify> {
+        Arc::clone(&self.diarize_wake)
+    }
+
     pub fn uptime_seconds(&self) -> u64 {
         self.started_at.elapsed().as_secs()
     }
@@ -1937,6 +2074,26 @@ impl Core {
         self.wake_mirror();
         // Persisting means the Mirror exists too, not just the rows.
         self.mirror.rebuild_pending().await?;
+
+        // Queued here rather than in the `meeting/stop` handler, because
+        // three paths stop a Meeting and only one of them went through that
+        // handler: Auto-Record's driver and the tray both call this
+        // directly, and neither ever diarized what it stopped. This is where
+        // all three converge.
+        //
+        // At the front: somebody just finished a call, and an overnight
+        // re-run of History must not put them behind sixteen others. After
+        // the audio is merged and on disk, because the run needs it.
+        //
+        // A failure to queue is not a failure to stop. The Operator pressed
+        // a button; attribution is the part that can be asked for again.
+        if let Err(error) = self
+            .enqueue_diarization(&meeting.id, diarize_queue::Priority::Front)
+            .await
+        {
+            warn!(meeting = %meeting.id, %error, "could not queue Diarization for a stopped Meeting");
+        }
+
         self.get_meeting(&meeting.id)
             .await?
             .map(|(meeting, _)| meeting)
@@ -2798,13 +2955,12 @@ impl Server {
             }
 
             ClientRequest::MeetingStop(_) => {
+                // Diarization is queued inside `stop_meeting`, where every
+                // path that stops a Meeting converges, and worked by its own
+                // task. Stopping must return at once — the Operator pressed
+                // a button — and a model that fails or takes four minutes
+                // must not be able to make stopping fail or feel slow.
                 let meeting = self.core.stop_meeting().await?;
-                // Diarization runs *after* the Meeting is safely persisted
-                // and detached from this response. Stopping must return at
-                // once — the Operator pressed a button — and a model that
-                // fails or takes four minutes must not be able to make
-                // stopping fail or feel slow.
-                self.core.clone().diarize_in_background(meeting.id.clone());
                 self.announce(MeetingChangeKind::Stopped, &meeting).await;
                 self.broadcast(ServerNotification::CoreStateChanged(
                     CoreStateChangedParams {
@@ -2995,9 +3151,24 @@ impl Server {
             }
 
             ClientRequest::DiarizeRun(params) => {
-                self.core
-                    .clone()
-                    .diarize_in_background(params.meeting_id.clone());
+                let meeting_id = self
+                    .core
+                    .resolve_meeting(&params.meeting_id)
+                    .await?
+                    .unwrap_or_else(|| params.meeting_id.clone());
+                // Told, not logged. M3 refused inside the spawned task and
+                // wrote a line nobody reads, so the caller saw a status
+                // saying a run had started when none had.
+                if !self
+                    .core
+                    .enqueue_diarization(&meeting_id, diarize_queue::Priority::Front)
+                    .await?
+                {
+                    anyhow::bail!(
+                        "{meeting_id} is already being diarized or waiting its turn; \
+                         `diarize status` says where it is in line"
+                    );
+                }
                 Ok(serde_json::to_value(self.core.diarize_status().await)?)
             }
 

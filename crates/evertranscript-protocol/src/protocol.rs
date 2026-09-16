@@ -1486,6 +1486,15 @@ pub struct DiarizeStatusResponse {
     pub done_ms: i64,
     #[ts(type = "number")]
     pub total_ms: i64,
+    /// The Meetings waiting their turn, in the order they will be worked,
+    /// the running one first.
+    ///
+    /// Additive, so a Client that does not read it sees the running job
+    /// exactly as it did before (ADR-0028). Empty rather than absent when
+    /// nothing is queued: a Client drawing a backlog should not have to tell
+    /// "nothing waiting" from "a Core too old to have a queue".
+    #[serde(default)]
+    pub queued: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]

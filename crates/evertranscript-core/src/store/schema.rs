@@ -352,6 +352,35 @@ const MIGRATIONS: &[&str] = &[
     UPDATE speakers SET voiceprint = NULL WHERE voiceprint IS NOT NULL;
     DELETE FROM speaker_exemplars;
     "#,
+    // 12 — Diarization waits its turn instead of being turned away.
+    //
+    // M3's policy was refuse-don't-queue, which was right while the only
+    // producer was a Meeting ending: a backlog competing for the machine is
+    // worse than none, and a refused Meeting can be re-run on the Operator's
+    // say-so. A model change re-runs all of History, and under that policy
+    // every Meeting that ended during the re-run would be dropped on the
+    // floor with only a log line about it.
+    //
+    // In the record rather than in memory because the queue has to outlive
+    // the process: a Core killed mid-backlog that forgot its remaining work
+    // would leave a History half-attributed, which reads exactly like
+    // diarization being unreliable.
+    //
+    // `priority` is small-number-first, so a just-ended Meeting or an
+    // Operator's request (0) goes ahead of bulk work (1) whatever the
+    // arrival order, and `enqueued_at` keeps it FIFO within a priority.
+    // ON DELETE CASCADE because a queued Meeting the Operator deletes is not
+    // work to do later.
+    r#"
+    CREATE TABLE diarize_queue (
+        meeting_id   TEXT PRIMARY KEY NOT NULL
+                     REFERENCES meetings(id) ON DELETE CASCADE,
+        priority     INTEGER NOT NULL CHECK (priority IN (0, 1)),
+        enqueued_at  TEXT NOT NULL
+    ) STRICT;
+
+    CREATE INDEX diarize_queue_order ON diarize_queue (priority, enqueued_at);
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.
