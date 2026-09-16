@@ -1808,3 +1808,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Supersedes:** Q143 — escalation resolved by the user.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q145 — diarization-pyannote-redimnet2/06 — finding
+
+**Question:** Acting on Frank's "land it and reopen turn placement as its own work" (answering Q135), what does `origin/main` actually contain, and does the merge still mean what the decision assumed?
+**Options considered:** (a finding, not a choice) — recorded before merging rather than after
+**Chosen:** Not merged. `origin/main` has moved, and three of the premises Q135 was argued on no longer hold.
+**Decided-by:** agent
+**Justification:** `origin/main` is seven commits ahead, one of which (e235858, its Q115 and Q116) independently fixed the embedding front end and rebuilt turn placement. Three consequences. First, the comparison offered when Q135 was answered was stale: main is at 26.3% AMI test DER, not the 49.7% quoted, which came from a scratch harness main has since deleted. The branch is ahead by 6.3 points, not 29.7. Second, main's Q115 states that `fbank.rs` did not compute the features WeSpeaker was trained under, and that "Q111's bake-off compared three models through the same wrong front end, which is why WeSpeaker looked so much worse than the ReDimNets there" — with the corrected recipe WeSpeaker scores 0.0% EER on clean windows where the bake-off put it at 10.3%. The evidence ADR-0037 cited for replacing it is therefore evidence about our feature extraction, not about the model. Third, Frank had already answered the same question on that line of work — Q116 records "fix turn placement first, skip the embedding swap" — so "reopen turn placement as its own work" is in part already done, at an oracle of 19.8/19.5 against this branch's 19.19. Mechanically the merge is also not routine: seven conflicts, including `fbank.rs` deleted on this branch and fixed on main, and a `DECISIONS.md` that forked at Q115 with nine entries on one side and thirty on the other claiming the same numbers. Returned to Frank rather than resolved by picking a side, because which pipeline ships is the question underneath all three.
+**Outcome:** escalated
+**Ref:** (pending)
+
+## Q146 — diarization/07 — deviation
+
+**Question:** Ticket 07 reported cross-meeting EER of 35.82%/35.09% and "ten to eleven Voiceprints per speaker" over every cluster the diarizer left standing. Production mints a Speaker only above `MIN_SPEAKER_MS`. Does the number survive the floor?
+**Options considered:** leave the unfiltered figure as the headline / add the floor as a control and report both / replace the unfiltered figure
+**Chosen:** Report both, with the filtered figure as the honest one. Past a ten-window floor the corpus yields 233 voices on test and 228 on dev — about three to four per speaker rather than ten to eleven — at 27.18% and 27.75% EER with the nearest voice right 68.2% and 55.7% of the time.
+**Decided-by:** agent
+**Justification:** The first pass scored every cluster including slivers holding a second or two, which production discards, so it measured a fragmentation the product does not ship. The correction cuts the effect to roughly a third: EER 35.8% to 27.2%, nearest-right 41.0% to 68.2%. The conclusion survives — 27% against a 1% bar is still dominated by fragmentation, and the oracle still shows the embedding clearing the bar — but the unfiltered number overstated it and should not be quoted alone. Window count stands in for voiced milliseconds, which the cache does not carry, and is named as a proxy where it is used.
+**Outcome:** applied
+**Ref:** (pending)

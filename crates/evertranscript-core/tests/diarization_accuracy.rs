@@ -410,6 +410,12 @@ fn cached_windows() -> Vec<(String, Labelled)> {
 /// what it does to recognition, and that means rebuilding the voices at each
 /// candidate rather than measuring the ones 0.60 happened to make.
 fn voices_at(windows: &Labelled, threshold: f32) -> (Labelled, Quality) {
+    let (voices, quality) = voices_at_with_sizes(windows, threshold, 0);
+    (voices, quality)
+}
+
+/// [`voices_at`], dropping any group holding fewer than `floor` windows.
+fn voices_at_with_sizes(windows: &Labelled, threshold: f32, floor: usize) -> (Labelled, Quality) {
     let provisional: BTreeMap<diarize::Cluster, diarize::Embedding> = windows
         .iter()
         .enumerate()
@@ -438,6 +444,9 @@ fn voices_at(windows: &Labelled, threshold: f32) -> (Labelled, Quality) {
             let mut votes: BTreeMap<&str, usize> = BTreeMap::new();
             for index in &group {
                 *votes.entry(windows[*index].0.as_str()).or_default() += 1;
+            }
+            if group.len() < floor {
+                return None;
             }
             let (who, best) = votes.into_iter().max_by_key(|(_, count)| *count)?;
             let who = who.to_string();
@@ -933,6 +942,63 @@ fn the_pipeline_scores_what_the_record_says_it_scores() {
                 } else {
                     ""
                 }
+            );
+        }
+
+        // The same rebuild, but only the voices that would survive
+        // `MIN_SPEAKER_MS` and become Speakers.
+        //
+        // **This is the control for the headline EER, and it has to be run
+        // before that number means what it looks like it means.** The
+        // measurement above scores every cluster the diarizer left standing,
+        // including slivers holding a second or two; production mints a
+        // Speaker only from a cluster with ten seconds of voice in it. If
+        // the cross-meeting EER is being paid by fragments the product
+        // already throws away, then the fragmentation is the harness's and
+        // not the pipeline's, and the fix belongs in neither.
+        //
+        // Window count stands in for voiced milliseconds, which the cache
+        // does not carry: windows advance a second at a time, so ten of them
+        // span about ten seconds. A proxy, and named as one.
+        const FLOOR_WINDOWS: usize = 10;
+        let kept: Vec<(String, Labelled)> = windows
+            .iter()
+            .map(|(name, rows)| {
+                let (voices, _) = voices_at_with_sizes(rows, MERGE_THRESHOLD, FLOOR_WINDOWS);
+                ((*name).clone(), voices)
+            })
+            .collect();
+        let kept_candidates: Vec<score::Candidate> = kept
+            .iter()
+            .flat_map(|(name, rows)| {
+                rows.iter().map(|(speaker, vector)| score::Candidate {
+                    speaker,
+                    group: name,
+                    vector,
+                })
+            })
+            .collect();
+        let kept_pairs = cross_meeting_pairs(&kept);
+        println!(
+            "\nvoices past the {FLOOR_WINDOWS}-window floor  {} of {} — what production would mint",
+            kept_candidates.len(),
+            windows
+                .iter()
+                .map(|(_, rows)| voices_at(rows, MERGE_THRESHOLD).0.len())
+                .sum::<usize>()
+        );
+        match score::equal_error_rate(&kept_pairs) {
+            Some((rate, at)) => println!("  cross-meeting EER {:.2}% at {at:.3}", rate * 100.0),
+            None => println!("  cross-meeting EER not computable"),
+        }
+        match score::nearest_is_right(&kept_candidates) {
+            Some(rate) => println!("  nearest voice     {:.1}% right", rate * 100.0),
+            None => println!("  nearest voice     not askable"),
+        }
+        if let Some(rate) = score::false_accept_rate_at(&kept_pairs, MATCH_FLOOR) {
+            println!(
+                "  different colleagues above MATCH_FLOOR {MATCH_FLOOR}: {:.2}%",
+                rate * 100.0
             );
         }
 

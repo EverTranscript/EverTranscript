@@ -60,11 +60,30 @@ per person, every window they actually own — and score the identical pairing:
 | oracle floor admitting nobody | 0.661, refusing 0.00% | 0.916, refusing 25.93% |
 
 **The bar is reachable and the embedding already reaches it.** ReDimNet2-B3 separates these
-speakers essentially perfectly on test and well on dev. The 35% is paid entirely by the
-in-meeting clustering: it produces ~45 voices per test meeting and ~41 per dev meeting for
-about four real people — **ten to eleven Voiceprints per speaker**. Most cross-meeting trials
-are therefore one person's shards being compared with another person's shards, and the EER
-measures the fragmentation rather than the model.
+speakers essentially perfectly on test and well on dev. The rest is paid by the in-meeting
+clustering, which splits each speaker into several voices, so most cross-meeting trials are
+one person's shards against another person's shards and the EER measures the fragmentation
+rather than the model.
+
+**How much of it is real, though, needed a control the first pass did not run.** The harness
+scores every cluster the diarizer leaves standing — about 45 per test meeting — but
+production mints a Speaker only from a cluster holding ten seconds of voice
+(`MIN_SPEAKER_MS`), so most of those slivers never become Voiceprints. Rebuilding only the
+voices that clear that floor:
+
+| | test | dev |
+|---|---|---|
+| voices past the floor | 233 of 3840 (14.6/meeting) | 228 of 4505 (12.7/meeting) |
+| cross-meeting EER | **27.18%** at 0.190 | **27.75%** at 0.179 |
+| nearest voice is right | **68.2%** | **55.7%** |
+| different colleagues above the floor | 0.12% | 0.15% |
+
+So the honest figures for what a user would actually see are 27% EER and about **three to four
+Voiceprints per speaker**, not ten to eleven. The fragmentation is real and still the
+dominant cost — 27% against a 1% bar — but it is a third of what the unfiltered number
+implied, and the unfiltered number should not be quoted on its own. (Window count stands in
+for voiced milliseconds, which the cache does not carry; windows advance a second at a time,
+so ten of them span about ten seconds.)
 
 That makes this ticket's own instrument the wrong lever. No value of the three constants
 fixes a partition; the fix is in the clustering, which is ticket 06's and ADR-0037's
