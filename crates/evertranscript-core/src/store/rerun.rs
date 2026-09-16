@@ -155,6 +155,20 @@ pub fn begin(connection: &Connection, model: &str, model_version: &str) -> Resul
         rows.collect::<rusqlite::Result<_>>()?
     };
 
+    // A new model needs its own oldest-first walk, and a row that survived
+    // the previous backlog still carries that backlog's `enqueued_at` — so
+    // re-enqueuing only the Meetings that had finished would leave them
+    // behind the ones that had not, whatever their dates. The re-run's own
+    // `Back` rows go back in the line below, in order. A Meeting somebody
+    // promoted to `Front` is left exactly where it is, and work this backlog
+    // never owned keeps its place ahead of the new one.
+    for meeting_id in &owned {
+        transaction.execute(
+            "DELETE FROM diarize_queue WHERE meeting_id = ?1 AND priority = ?2",
+            params![meeting_id, diarize_queue::Priority::Back as i64],
+        )?;
+    }
+
     let mut mine: Vec<&String> = Vec::new();
     for meeting_id in &meetings {
         let joined =
@@ -541,6 +555,12 @@ mod tests {
         assert_eq!(begin(&connection, "redimnet2-b3", "2").expect("second"), 3);
         let again = state(&connection).expect("state").expect("a row");
         assert_eq!((again.total, again.remaining, again.done()), (3, 3, 0));
+        assert_eq!(
+            diarize_queue::list(&connection).expect("list"),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()],
+            "the new model gets its own oldest-first walk, not the leftovers \
+             of the old one's with the requeued Meeting behind them"
+        );
 
         assert_eq!(
             cancel(&connection).expect("cancel"),
