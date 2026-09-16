@@ -63,12 +63,36 @@ version built some of them itself:
   carrying the model it was started for is what makes resume-not-restart
   structural rather than a flag somebody clears.
 
-**Still to build, and absent from `main`:** `store::rerun` (the single backlog
-row: model identity, original size, what cancelling abandoned),
-`cluster::claims`, `cluster::relearn`, the optional `rerun` block on
-`diarize/status`, and the `diarize/rerunCancel` method. Both protocol changes
-are additive (ADR-0028) and a Core with no re-run must encode byte-identically
-to today's shape.
+**Two of those seams have since been written, unwired** (re-checked
+2026-09-16). `store::rerun` exists — `Rerun`, `state`, `begin`,
+`begin_if_the_model_changed`, `cancel`, the last enqueuing at
+`Priority::Back` oldest-first — with its tables out of `MIGRATIONS`, so every
+function fails on a current History by design. `cluster::Claims` and
+`cluster::claims` exist too, reading the standing attribution before
+`reconcile::apply` overwrites it, and abstaining where a cluster's segments do
+not all belong to one eligible Speaker. Nothing calls either.
+
+**Still to build, and absent from `main`:**
+
+1. `cluster::relearn` — the only missing store/cluster piece: turn a `Claims`
+   into new exemplars and a Voiceprint for each named, unforgotten Speaker
+   from *their own* segments' windows, with negatives rebuilt from corrections
+   that took a segment away. `Claims::denials` is the field nothing writes yet.
+2. The wiring. `reconcile::apply` takes no `Claims`, so nothing threads one
+   from the read to the write, and no caller reaches `rerun::begin_if_the_model_changed`
+   at startup. Until that exists the re-run cannot start, pause, resume or
+   report, whatever the store can already express.
+3. The protocol, additively (ADR-0028): an optional `rerun` block on
+   `DiarizeStatusResponse` — which today carries `state`, `meetingId`,
+   `doneMs`, `totalMs`, `queued` and nothing about a bulk run — and a
+   `diarize/rerunCancel` method. A Core with no re-run must encode
+   byte-identically to today's shape.
+4. The Registry's progress, pause and cancel affordances. Nothing in
+   `clients/electron/src` reads a re-run; the existing `rerunSetup` is
+   onboarding and unrelated.
+
+A stray gitignored `client-request.schema.json.actual` from 2026-09-15 mentions
+`diarize/rerunCancel`; it is stale test output, not a committed schema.
 
 ## Acceptance criteria
 
