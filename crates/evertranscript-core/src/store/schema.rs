@@ -324,6 +324,34 @@ const MIGRATIONS: &[&str] = &[
        AND id NOT IN (SELECT replaced_speaker_id FROM attribution_hints
                        WHERE replaced_speaker_id IS NOT NULL);
     "#,
+    // 11 — the embedding changed, so every stored vector is unreadable
+    // (ADR-0037).
+    //
+    // A cosine between a 256-dimension vector and a 192-dimension one is not
+    // a lower score, it is a meaningless one — and two 192-dimension models
+    // are worse, because the arithmetic succeeds and returns a number nobody
+    // should act on. There is no migration of the vectors themselves: the
+    // exemplars record *where* each was cut, and those cuts were the old
+    // model's windowing, where the Operator's naming was a statement about a
+    // whole cluster rather than about three particular seconds. Re-embedding
+    // them would preserve the old model's mistakes in the new model's space.
+    //
+    // So the vectors go and everything the Operator would notice losing
+    // stays: every Speaker row, every name, the Operator flag, every segment
+    // attribution, every correction hint. A named Speaker holding no
+    // Voiceprint is an ordinary state after this, and not a new one — story
+    // 31 has always allowed it — so nothing downstream needs a new case.
+    //
+    // `voiceprint_model` is deliberately left set on a row whose vector is
+    // now NULL. It is the only evidence of *why* the Registry shows a name
+    // with nothing behind it, and a Registry that cannot answer that
+    // question reads as data loss rather than as a model upgrade. The
+    // matching path already requires a vector, so the stale name misleads
+    // nobody: `speakers::voiceprints` filters on `voiceprint IS NOT NULL`.
+    r#"
+    UPDATE speakers SET voiceprint = NULL WHERE voiceprint IS NOT NULL;
+    DELETE FROM speaker_exemplars;
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.
@@ -432,6 +460,122 @@ mod tests {
             })
             .expect("count");
         assert_eq!(exemplars, 0, "and its Voiceprint evidence with it");
+    }
+
+    #[test]
+    fn the_model_change_takes_the_vectors_and_leaves_the_record() {
+        // Over a file, closed and reopened: the claim is about what the next
+        // Core opens, not about what one in-memory connection did.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("history.sqlite3");
+
+        let before_wipe = 10;
+        {
+            let mut connection = Connection::open(&path).expect("open");
+            configure(&connection).expect("configure");
+            for migration in &MIGRATIONS[..before_wipe] {
+                connection.execute_batch(migration).expect("migrate");
+            }
+            connection
+                .pragma_update(None, "user_version", before_wipe as i64)
+                .expect("user_version");
+            connection
+                .execute_batch(
+                    "INSERT INTO meetings (id, started_at, created_at, updated_at)
+                     VALUES ('m', 'now', 'now', 'now');
+                     INSERT INTO speakers
+                         (id, display_name, is_operator, voiceprint, voiceprint_model,
+                          voiceprint_model_version, confirmed, created_at)
+                     VALUES ('alice', 'Alice', 0, x'0011', 'old', '1', 1, 'now'),
+                            ('you', NULL, 1, x'2233', 'old', '1', 0, 'now'),
+                            ('stranger', NULL, 0, x'4455', 'old', '1', 0, 'now');
+                     INSERT INTO transcript_segments
+                         (id, meeting_id, sequence, channel, start_ms, end_ms, text, speaker_id)
+                     VALUES ('s1', 'm', 0, 'mic', 0, 1, 'hi', 'alice'),
+                            ('s2', 'm', 1, 'mic', 1, 2, 'hi', 'stranger');
+                     INSERT INTO attribution_hints
+                         (id, segment_id, speaker_id, replaced_speaker_id, created_at)
+                     VALUES ('h', 's2', 'stranger', 'alice', 'now');
+                     INSERT INTO speaker_exemplars
+                         (id, speaker_id, embedding, model, model_version, voiced_ms,
+                          source, created_at)
+                     VALUES ('e', 'alice', x'00', 'old', '1', 30000, 'operator', 'now');",
+                )
+                .expect("seed");
+            migrate(&mut connection).expect("migrate the rest");
+        }
+
+        let mut connection = Connection::open(&path).expect("reopen");
+        configure(&connection).expect("configure");
+        migrate(&mut connection).expect("a second pass changes nothing");
+
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user_version");
+        assert_eq!(version as usize, MIGRATIONS.len());
+
+        let mut statement = connection
+            .prepare(
+                "SELECT id, display_name, is_operator, voiceprint IS NULL, voiceprint_model
+                   FROM speakers ORDER BY id",
+            )
+            .expect("prepare");
+        let rows: Vec<(String, Option<String>, i64, i64, Option<String>)> = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(
+            rows,
+            [
+                (
+                    "alice".to_string(),
+                    Some("Alice".to_string()),
+                    0,
+                    1,
+                    Some("old".to_string())
+                ),
+                ("stranger".to_string(), None, 0, 1, Some("old".to_string())),
+                ("you".to_string(), None, 1, 1, Some("old".to_string())),
+            ],
+            "every Speaker, name and flag survives; no vector does, and the \
+             model that made each one stays as the reason there is nothing there"
+        );
+
+        let exemplars: i64 = connection
+            .query_row("SELECT count(*) FROM speaker_exemplars", [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(exemplars, 0, "every exemplar goes with the vectors");
+
+        let attributed: Vec<Option<String>> = connection
+            .prepare("SELECT speaker_id FROM transcript_segments ORDER BY sequence")
+            .expect("prepare")
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(
+            attributed,
+            [Some("alice".to_string()), Some("stranger".to_string())],
+            "the record still says who said what"
+        );
+
+        let hints: i64 = connection
+            .query_row("SELECT count(*) FROM attribution_hints", [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(hints, 1, "and still remembers the correction");
     }
 
     #[test]

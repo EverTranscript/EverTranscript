@@ -903,7 +903,14 @@ function RegistryPanel({
   };
 
   const voiceprintLabel = (speaker: Speaker): string => {
-    if (!speaker.hasVoiceprint) return t("registry.voiceprint.none");
+    // A name with nothing behind it reads as data loss unless the Registry
+    // says why. The model that made the old vector outlives the vector for
+    // exactly this sentence (ADR-0037).
+    if (!speaker.hasVoiceprint) {
+      return speaker.voiceprintModel
+        ? t("registry.voiceprint.cleared")
+        : t("registry.voiceprint.none");
+    }
     return speaker.confirmed
       ? t("registry.voiceprint.confirmed")
       : t("registry.voiceprint.unconfirmed");

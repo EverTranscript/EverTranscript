@@ -22,10 +22,13 @@ in-memory state.
 
 **Blocked by:** 04.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A History carrying old-model Voiceprints migrates with every Speaker, name, flag, attribution and correction intact and no exemplar left
-- [ ] Tested over a file-backed database, closed and reopened
-- [ ] The Registry states the reason a named Speaker holds no Voiceprint
-- [ ] Migrations stay idempotent and the schema version advances by one
-- [ ] Mirrors are byte-identical across the migration, since nothing an Operator reads has changed
+- [x] A History carrying old-model Voiceprints migrates with every Speaker, name, flag, attribution and correction intact and no exemplar left
+- [x] Tested over a file-backed database, closed and reopened
+- [x] The Registry states the reason a named Speaker holds no Voiceprint
+- [x] Migrations stay idempotent and the schema version advances by one
+- [x] Mirrors are byte-identical across the migration, since nothing an Operator reads has changed
+  — structural, not tested: `mirror::render` takes segments and a `SpeakerName` of
+  `display_name` + `is_operator`, and the migration touches none of the three. A test here
+  would assert that a function cannot read a field it has no access to.
