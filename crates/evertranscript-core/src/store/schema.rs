@@ -474,6 +474,54 @@ mod tests {
     }
 
     #[test]
+    fn a_database_already_carrying_the_diarization_mark_still_gets_the_queue() {
+        // The real upgrade path for anyone who ran the build that shipped
+        // migration 11. Two branches appended migrations after the same base
+        // and both wanted position 11; `diarized_at` kept it because it was
+        // already pushed, and the queue moved to 12 (DECISIONS Q134).
+        //
+        // Had the order gone the other way, a database sitting at
+        // user_version 11 would have counted `diarize_queue` as already
+        // applied and skipped it for good — surfacing much later, and far
+        // from here, as a table that does not exist.
+        let mut connection = Connection::open_in_memory().expect("open");
+        configure(&connection).expect("configure");
+        let shipped = 11;
+        for migration in &MIGRATIONS[..shipped] {
+            connection.execute_batch(migration).expect("migrate");
+        }
+        connection
+            .pragma_update(None, "user_version", shipped as i64)
+            .expect("user_version");
+
+        migrate(&mut connection).expect("migrate the rest");
+
+        let queue: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'diarize_queue'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query");
+        assert_eq!(queue, 1, "diarize_queue was skipped by the upgrade");
+        // And the columns either side of the boundary are both present.
+        for (table, column) in [
+            ("meetings", "diarized_at"),
+            ("speakers", "forgotten"),
+            ("meetings", "mic_isolated"),
+        ] {
+            let found: i64 = connection
+                .query_row(
+                    &format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
+                    [column],
+                    |row| row.get(0),
+                )
+                .expect("query");
+            assert_eq!(found, 1, "{table}.{column} is missing after the upgrade");
+        }
+    }
+
+    #[test]
     fn the_diarization_mark_is_backfilled_from_the_evidence_not_guessed() {
         // Migration 11 decides which existing Meetings the retry picks up on
         // the first start after an upgrade. A Meeting with an attributed
