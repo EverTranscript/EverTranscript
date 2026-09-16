@@ -1575,3 +1575,43 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Frank said "publish". Creating an organization is not exposed by the API — `POST /api/organizations` answers 403 for a classic write token and `/api/orgs` does not exist — so the namespace Q116 named cannot be reached from here, and the choice was between the wrong namespace now and nothing. The deviation is cheap to undo: Hugging Face transfers repositories between owners and leaves a redirect, and no build pins this URL yet because the model registry entry is deliberately not written until the pipeline uses it. Verified after upload: an anonymous fetch of `…/resolve/main/redimnet2-b3-vox2-lm.onnx` returns 200 and 18,045,013 bytes whose SHA-256 is `dcecdce7d52bbd4739b24d0874359ec564d43f4b3a392f0104f505593b566d41`, matching the export report. The file is the only thing published; nothing from any Meeting, Transcript or History left the machine.
 **Outcome:** applied
 **Ref:** https://huggingface.co/soulmachine/evertranscript-redimnet2-b3-vox2-lm
+
+## Q122 — diarization-pyannote-redimnet2/03 — gate-resolution
+
+**Question:** Ticket 03 asks for "per-window identity stitched across the overlap rather than discarded". Stitch by permuting local speaker slots between neighbouring windows, or let the embeddings carry identity?
+**Options considered:** a permutation pass mapping window N's slots onto window N-1's on their shared frames / no slot stitching at all, with every (window, local speaker) embedded and clustered globally
+**Chosen:** No slot stitching. Every (window, local speaker) becomes its own provisional cluster, and `agglomerate` decides which are the same person.
+**Decided-by:** agent
+**Justification:** This is the recipe the ticket's own target number comes from — pyannote 3.x clusters masked per-chunk embeddings and does not permute slots for its final output — so it is the arrangement the published 18.8% is measured on. A permutation pass would be a second answer to a question clustering already has to settle, weaker because it sees only two windows at a time, and it drifts irrecoverably whenever a speaker falls silent for a whole window. `a_local_slot_is_not_an_identity_across_windows` fails if anyone later stitches by index.
+**Outcome:** applied
+**Ref:** ba1f517
+
+## Q123 — diarization-pyannote-redimnet2/03 — tradeoff
+
+**Question:** The 1.5 s minimum governs what a Voiceprint is built from. What governs whether a window's local speaker gets a vector at all, given a sub-second interjection must still be attributed?
+**Options considered:** reuse the 1.5 s minimum / a second, much lower floor for clustering only / no floor, embedding whatever the model accepts
+**Chosen:** A second floor, `MIN_EMBED_MS` = 250 ms, for clustering only. Their ordering is a `const` assertion beside the constants rather than a test.
+**Decided-by:** agent
+**Justification:** Reusing the 1.5 s minimum is exactly the conflation the ticket exists to remove — it is how a short interjection lost its speaker — and the ticket names keeping the two apart as an acceptance criterion. No floor at all risks the embedding model erroring on an input too short, which would fail a whole Meeting rather than skip one window. 250 ms is about 25 filterbank frames; verified against the shipped WeSpeaker export in `a_stretch_short_enough_to_be_an_interjection_still_embeds`, which is model-gated so it fails loudly on a machine that has the models and silently skips where it cannot prove anything. A compile-time assertion because there is no build in which the floors should be allowed to converge.
+**Outcome:** applied
+**Ref:** ba1f517
+
+## Q124 — diarization-pyannote-redimnet2/03 — assumption
+
+**Question:** Four of ticket 03's seven acceptance criteria need the AMI corpus — the DER improvement, the corpus half of the overlap criterion, the single-digit oracle floor at scale, and the 2 s step experiment. Run the corpus now or leave it owed?
+**Options considered:** fetch the corpus and run it as part of this ticket / implement fully, measure the mechanism on fixtures, and leave the corpus run owed
+**Chosen:** Left owed, with the mechanism measured in CI instead. `scripts/fetch-ami.sh` is about 5 GB and an hour, and scoring sixteen meetings for a baseline, the new placement, and a 2 s step is a few hours of compute on top.
+**Decided-by:** agent
+**Justification:** The corpus run is a scheduled activity, not a code change, and ticket 01 already left the same run owed for its own four numbers, so this adds nothing new to the queue. What could be measured without it was: `perfect_clustering_now_leaves_almost_nothing_on_the_table` takes the old placement's oracle floor from 25.3% to zero on a timeline carrying both hard shapes, and an end-to-end run against the registry's own two models put every boundary within one 10 ms grid cell of the truth on two alternating voices. `SEGMENT_STEP` is one constant, so the 2 s experiment is one edit and one harness run once the corpus is on disk. Flagged at handoff.
+**Outcome:** assumed
+**Ref:** ba1f517
+
+## Q125 — diarization-pyannote-redimnet2/03 — tradeoff
+
+**Question:** Two local speakers in the same window are different people by construction. Should `agglomerate` be given a cannot-link constraint so it can never merge them?
+**Options considered:** add same-window cannot-link to `merge_closest_first` now / ship without it and watch for overlap collapsing on the corpus
+**Chosen:** Without it, for now.
+**Decided-by:** agent
+**Justification:** The constraint would change `agglomerate`'s signature and the 34 tests around it, to guard against something the masking is supposed to prevent: each local speaker is embedded from its own frames with the others removed, so two genuinely different voices should not land close. It cannot be falsified by the fixtures, whose vectors are orthogonal, so only the corpus can say whether it is needed. Recorded in the ticket as the thing to watch for in that run; the fix is cheap if it is needed, because each group already carries its members.
+**Outcome:** assumed
+**Ref:** ba1f517
