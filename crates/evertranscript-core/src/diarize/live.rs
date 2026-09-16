@@ -60,6 +60,20 @@ use super::fbank::SAMPLE_RATE;
 /// Window the segmentation model was trained on: 10 s at 16 kHz.
 pub const SEGMENT_WINDOW: usize = 10 * SAMPLE_RATE as usize;
 
+/// How far the window advances between segmentation runs.
+///
+/// A full window, so windows tile the recording and every instant is seen
+/// once. pyannote's own recipe advances a tenth of a window and votes on
+/// the overlap, and its published 18.8% DER is measured that way — but it
+/// is also ten times the segmentation inference, and whether it buys
+/// anything on top of what this pipeline already does is a measurement,
+/// not a preference. Until that measurement says otherwise the cheap
+/// geometry stands.
+///
+/// [`LiveDiarizer::with_step`] is how the harness varies it. Production
+/// takes this constant.
+pub const SEGMENT_STEP: usize = SEGMENT_WINDOW;
+
 /// Powerset classes for three speakers: none, three singles, three pairs.
 pub const POWERSET_CLASSES: usize = 7;
 
@@ -92,6 +106,14 @@ pub const MAX_SPAN_MS: u64 = 10_000;
 
 /// Gaps shorter than this do not end a turn (catalog: 400 ms merge gap).
 pub const MERGE_GAP_MS: u64 = 400;
+
+/// Grid the reconstruction aggregates onto.
+///
+/// The model's frame is ~17 ms and 589 of them do not divide evenly into a
+/// window, let alone into a step that is a fraction of one. A running frame
+/// index would drift a fraction of a frame per window and put that drift
+/// into every timestamp it produced. A fixed grid cannot drift.
+pub const GRID_MS: u64 = 10;
 
 /// The embedding model, as every vector it produces is labelled.
 pub const EMBEDDING_MODEL: &str = "wespeaker-voxceleb-resnet34-LM";
@@ -221,6 +243,7 @@ impl Embedder {
 pub struct LiveDiarizer {
     segmentation: Session,
     embedder: Embedder,
+    step: usize,
 }
 
 /// One local speaker of one chunk: what it said, where, and how it sounds.
@@ -245,6 +268,52 @@ impl Observation {
     }
 }
 
+/// Everything one pass of the models saw.
+pub struct Observed {
+    pub observations: Vec<Observation>,
+    /// Every window the segmentation model ran, as `(channel, start, end)`
+    /// on the capture clock.
+    ///
+    /// **Kept even where a window produced no observation**, which is the
+    /// whole reason this is carried separately rather than read off the
+    /// observations. A window that looked and found nobody is a vote for
+    /// silence, and a majority is not defined without the votes on both
+    /// sides. Derived from the observations alone, a silent window would
+    /// simply be absent and the instants around it would be held on a
+    /// minority of the windows that actually saw them.
+    pub windows: Vec<(AudioChannel, u64, u64)>,
+}
+
+/// The two channels, in the order everything in this module walks them.
+///
+/// They are separate recordings with their own windows, so a tally of who
+/// was seen when cannot be shared between them.
+const CHANNELS: [AudioChannel; 2] = [AudioChannel::Mic, AudioChannel::System];
+
+/// Which half of a per-channel tally this channel owns.
+fn slot(channel: AudioChannel) -> usize {
+    usize::from(channel == AudioChannel::System)
+}
+
+/// The grid cells a span covers, clamped to what exists.
+///
+/// **Both edges round to the nearest cell rather than outward.** Flooring
+/// the start and ceiling the end would widen every span by up to a cell at
+/// each edge, and that error has a sign: a meeting's worth of turns would
+/// each grow by up to 20 ms and the total would read as false alarm the
+/// pipeline never produced. Rounding is unbiased, so quantising onto the
+/// grid costs nothing on average — which is what lets the vote replace the
+/// union without moving the score.
+///
+/// No run reaches this shorter than a cell: a local speaker needs
+/// [`MIN_EMBED_FRAMES`] of about 150 ms to be embedded at all.
+fn cells_of(start_ms: u64, end_ms: u64, cells: usize) -> std::ops::Range<usize> {
+    let round = |ms: u64| (((ms + GRID_MS / 2) / GRID_MS) as usize).min(cells);
+    let from = round(start_ms);
+    let to = round(end_ms);
+    from.min(to)..to
+}
+
 impl LiveDiarizer {
     /// Loads both models. Failure here is [`DiarizeError::Unavailable`] at
     /// the call site, never a lost Meeting.
@@ -254,12 +323,23 @@ impl LiveDiarizer {
 
     /// As [`load`](Self::load), choosing which front end the embedding wants.
     /// The measurement harness is the caller; production takes the default.
+    /// How far the window advances, in milliseconds.
+    ///
+    /// For the harness, so the step can be measured without a rebuild;
+    /// production keeps [`SEGMENT_STEP`]. Zero would not advance, so it is
+    /// clamped to one sample rather than left to panic inside `step_by`.
+    pub fn with_step(mut self, step_ms: u64) -> Self {
+        self.step = ((step_ms * SAMPLE_RATE as u64 / 1000) as usize).max(1);
+        self
+    }
+
     pub fn load_with(
         segmentation: &Path,
         embedding: &Path,
         frontend: Frontend,
     ) -> Result<Self, DiarizeError> {
         Ok(Self {
+            step: SEGMENT_STEP,
             segmentation: open(segmentation)?,
             embedder: Embedder::load_with(embedding, frontend)?,
         })
@@ -309,7 +389,7 @@ impl LiveDiarizer {
         audio: MeetingAudio<'_>,
         progress: &mut dyn FnMut(Progress),
         cancel: &Cancel,
-    ) -> Result<Vec<Observation>, DiarizeError> {
+    ) -> Result<Observed, DiarizeError> {
         if audio.sample_rate != SAMPLE_RATE {
             return Err(DiarizeError::Unavailable(format!(
                 "diarization needs {SAMPLE_RATE} Hz audio, was given {}",
@@ -319,12 +399,13 @@ impl LiveDiarizer {
 
         let total_ms = audio.duration_ms();
         let mut observations = Vec::new();
+        let mut windows = Vec::new();
 
         for (channel, samples) in [
             (AudioChannel::Mic, audio.mic),
             (AudioChannel::System, audio.system),
         ] {
-            for start in (0..samples.len()).step_by(SEGMENT_WINDOW) {
+            for start in (0..samples.len()).step_by(self.step) {
                 if cancel.is_cancelled() {
                     return Err(DiarizeError::Cancelled);
                 }
@@ -344,6 +425,11 @@ impl LiveDiarizer {
                 let masks = &masks[..covered.min(masks.len())];
                 let chunk_start_ms = start as u64 * 1000 / SAMPLE_RATE as u64;
                 let to_ms = |frame: usize| chunk_start_ms + (frame as f64 * frame_ms) as u64;
+
+                // Recorded before anything is known about who is in it: a
+                // window that finds nobody still voted on every instant it
+                // covered.
+                windows.push((channel, chunk_start_ms, to_ms(masks.len())));
 
                 // Features over the audio actually present, so the mean
                 // that is subtracted is the mean of speech, not of speech
@@ -411,7 +497,10 @@ impl LiveDiarizer {
                 });
             }
         }
-        Ok(observations)
+        Ok(Observed {
+            observations,
+            windows,
+        })
     }
 }
 
@@ -540,27 +629,105 @@ fn merge_adjacent(mut turns: Vec<Turn>) -> Vec<Turn> {
 ///
 /// `canonical` maps each observation's provisional cluster to its voice;
 /// an observation it does not mention is a voice of its own.
-pub fn assemble(
-    observations: &[Observation],
-    canonical: &BTreeMap<Cluster, Cluster>,
-) -> Diarization {
-    let mut turns = Vec::new();
+///
+/// **Turn coverage is settled by vote, not by union.** Every window that
+/// covered an instant said whether a voice held it, and the instant belongs
+/// to that voice when at least half of them agree. A boundary the model
+/// wobbles on in one window is then stable in the answer.
+///
+/// Where windows do not overlap each instant has exactly one voter, so the
+/// vote returns whatever that single window said and this *is* the union.
+/// The rule only begins doing work once the step is smaller than
+/// [`SEGMENT_WINDOW`] — which is the point of introducing it separately:
+/// at today's step the output is unchanged, so a later difference is
+/// attributable to the step and not to this rewrite.
+///
+/// The union cannot survive overlapping windows. Two windows disagreeing
+/// about who holds an instant would both be believed, and the disagreement
+/// reported as two people speaking at once.
+pub fn assemble(observed: &Observed, canonical: &BTreeMap<Cluster, Cluster>) -> Diarization {
     let mut clean = Vec::new();
     let mut grouped: BTreeMap<Cluster, Vec<(Vec<f32>, i64, bool)>> = BTreeMap::new();
-    for observation in observations {
+
+    // How many windows looked at each instant, per channel.
+    let mut width = [0_usize; CHANNELS.len()];
+    for (channel, _, end) in &observed.windows {
+        let cells = end.div_ceil(GRID_MS) as usize;
+        width[slot(*channel)] = width[slot(*channel)].max(cells);
+    }
+    let mut covers = [vec![0_u16; width[0]], vec![0_u16; width[1]]];
+    for (channel, start, end) in &observed.windows {
+        let row = &mut covers[slot(*channel)];
+        let cells = row.len();
+        for cell in cells_of(*start, *end, cells) {
+            row[cell] += 1;
+        }
+    }
+
+    // And how many of them put each voice there.
+    let mut held: BTreeMap<(usize, Cluster), Vec<u16>> = BTreeMap::new();
+    for observation in &observed.observations {
         let voice = canonical
             .get(&observation.cluster)
             .copied()
             .unwrap_or(observation.cluster);
-        let turn =
-            |(start, end): &(u64, u64)| Turn::new(observation.channel, *start, *end, voice.index());
-        turns.extend(observation.runs.iter().map(turn));
-        clean.extend(observation.clean_runs.iter().map(turn));
+        let cells = width[slot(observation.channel)];
+        let counts = held
+            .entry((slot(observation.channel), voice))
+            .or_insert_with(|| vec![0_u16; cells]);
+        for (start, end) in &observation.runs {
+            for cell in cells_of(*start, *end, cells) {
+                counts[cell] += 1;
+            }
+        }
+        // Where to play a voice back from is a different question from
+        // where it held the floor, and it keeps the union: a stretch this
+        // voice had to itself is worth hearing whatever the neighbouring
+        // windows made of the instant.
+        clean.extend(
+            observation
+                .clean_runs
+                .iter()
+                .map(|(start, end)| Turn::new(observation.channel, *start, *end, voice.index())),
+        );
         grouped.entry(voice).or_default().push((
             observation.vector.clone(),
             observation.voiced_ms() as i64,
             false,
         ));
+    }
+
+    let mut turns = Vec::new();
+    for ((which, voice), counts) in &held {
+        let row = &covers[*which];
+        let channel = &CHANNELS[*which];
+        let mut open: Option<usize> = None;
+        for cell in 0..counts.len() {
+            // A cell nobody looked at is outside the recording; a cell ten
+            // windows looked at needs five of them.
+            let active = row[cell] > 0 && u32::from(counts[cell]) * 2 >= u32::from(row[cell]);
+            match (active, open) {
+                (true, None) => open = Some(cell),
+                (false, Some(from)) => {
+                    turns.push(Turn::new(
+                        *channel,
+                        from as u64 * GRID_MS,
+                        cell as u64 * GRID_MS,
+                        voice.index(),
+                    ));
+                    open = None;
+                }
+                _ => {}
+            }
+        }
+        if let Some(from) = open {
+            turns.push(Turn::new(
+                *channel,
+                from as u64 * GRID_MS,
+                counts.len() as u64 * GRID_MS,
+                voice.index(),
+            ));
+        }
     }
 
     // Consecutive frames, chunks and local speakers of one voice are one
@@ -619,11 +786,12 @@ impl Diarizer for LiveDiarizer {
         progress: &mut dyn FnMut(Progress),
         cancel: &Cancel,
     ) -> Result<Diarization, DiarizeError> {
-        let observations = self.observe(audio, progress, cancel)?;
+        let observed = self.observe(audio, progress, cancel)?;
 
         // Every observation starts as its own cluster; grouping them is
         // what turns local speakers into voices.
-        let provisional: BTreeMap<Cluster, Embedding> = observations
+        let provisional: BTreeMap<Cluster, Embedding> = observed
+            .observations
             .iter()
             .map(|observation| {
                 (
@@ -638,7 +806,7 @@ impl Diarizer for LiveDiarizer {
             })
             .collect();
         let canonical = super::cluster::agglomerate(&provisional);
-        let result = assemble(&observations, &canonical);
+        let result = assemble(&observed, &canonical);
 
         let total_ms = audio.duration_ms();
         progress(Progress {
@@ -673,6 +841,78 @@ mod tests {
             runs: runs.to_vec(),
             clean_runs: clean.to_vec(),
         }
+    }
+
+    /// A run whose windows did not overlap: one window per channel,
+    /// spanning everything that channel saw.
+    ///
+    /// Every instant then has exactly one voter, which is the geometry
+    /// production uses today and the one every test below was written
+    /// against. `assemble`'s vote returns the union under it, so these
+    /// tests are also the evidence that introducing the vote changed
+    /// nothing at the current step.
+    fn observed(observations: Vec<Observation>) -> Observed {
+        let windows = CHANNELS
+            .into_iter()
+            .filter_map(|channel| {
+                let end = observations
+                    .iter()
+                    .filter(|observation| observation.channel == channel)
+                    .flat_map(|observation| {
+                        observation.runs.iter().chain(observation.clean_runs.iter())
+                    })
+                    .map(|(_, end)| *end)
+                    .max()?;
+                Some((channel, 0, end))
+            })
+            .collect();
+        Observed {
+            observations,
+            windows,
+        }
+    }
+
+    #[test]
+    fn a_minority_of_windows_does_not_carry_an_instant() {
+        // The property a union cannot express, and the whole reason a
+        // sliding step needs a vote. Three windows covered this second;
+        // all three put voice 0 there and only one put voice 1 there.
+        // Under a union that single dissenting window would have been
+        // believed and the second reported as two people talking at once.
+        let observed = Observed {
+            observations: vec![
+                observation(AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
+                observation(AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
+                observation(AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
+                observation(AudioChannel::Mic, 1, &[(1_000, 2_000)], &[]),
+            ],
+            windows: vec![(AudioChannel::Mic, 0, 3_000); 3],
+        };
+        let result = assemble(&observed, &BTreeMap::new());
+        assert_eq!(
+            result.turns.len(),
+            1,
+            "only the voice a majority heard holds the floor: {:?}",
+            result.turns
+        );
+        assert_eq!(result.turns[0].cluster, Cluster(0));
+    }
+
+    #[test]
+    fn half_the_windows_are_enough() {
+        // Two of four is a majority for this purpose: a boundary the model
+        // puts inside a window as often as outside it should land, not
+        // vanish. The threshold is `>=`, and this is the case that says so.
+        let observed = Observed {
+            observations: vec![
+                observation(AudioChannel::Mic, 0, &[(0, 1_000)], &[]),
+                observation(AudioChannel::Mic, 0, &[(0, 1_000)], &[]),
+            ],
+            windows: vec![(AudioChannel::Mic, 0, 1_000); 4],
+        };
+        let result = assemble(&observed, &BTreeMap::new());
+        assert_eq!(result.turns.len(), 1, "{:?}", result.turns);
+        assert_eq!(result.turns[0].duration_ms(), 1_000);
     }
 
     #[test]
@@ -794,7 +1034,7 @@ mod tests {
             observation(AudioChannel::Mic, 0, &[(0, 5_000)], &[(0, 3_000)]),
             observation(AudioChannel::Mic, 1, &[(3_000, 8_000)], &[(5_000, 8_000)]),
         ];
-        let result = assemble(&observations, &BTreeMap::new());
+        let result = assemble(&observed(observations), &BTreeMap::new());
         assert_eq!(result.turns.len(), 2);
         assert_eq!(result.turns[0].end.millis(), 5_000);
         assert_eq!(
@@ -816,7 +1056,7 @@ mod tests {
             &[(1_000, 1_200)],
             &[(1_000, 1_200)],
         )];
-        let result = assemble(&observations, &BTreeMap::new());
+        let result = assemble(&observed(observations), &BTreeMap::new());
         assert_eq!(result.turns.len(), 1);
         assert_eq!(result.turns[0].duration_ms(), 200);
         assert!(
@@ -841,7 +1081,7 @@ mod tests {
         let canonical = [(Cluster(0), Cluster(0)), (Cluster(1), Cluster(0))]
             .into_iter()
             .collect();
-        let result = assemble(&observations, &canonical);
+        let result = assemble(&observed(observations), &canonical);
         assert_eq!(result.turns.len(), 1);
         assert_eq!(
             (result.turns[0].start.millis(), result.turns[0].end.millis()),
@@ -865,7 +1105,7 @@ mod tests {
             &[(0, 10_000)],
             &[(0, 1_000), (4_000, 7_000)],
         )];
-        let result = assemble(&observations, &BTreeMap::new());
+        let result = assemble(&observed(observations), &BTreeMap::new());
         let sample = result.embeddings[&Cluster(0)].sample.expect("playable");
         assert_eq!((sample.start.millis(), sample.end.millis()), (4_000, 7_000));
     }

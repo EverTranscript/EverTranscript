@@ -139,6 +139,24 @@ fn embedding_under_test() -> (String, PathBuf, diarize::live::Frontend) {
     }
 }
 
+/// How far the segmentation window advances, in milliseconds.
+///
+/// `EVERTRANSCRIPT_SEGMENT_STEP_MS` overrides it; unset is
+/// `diarize::live::SEGMENT_STEP`, what production uses. The step is the
+/// one thing that moves in a turn-placement comparison, so the harness
+/// prints what it believes it holds — the same discipline
+/// `EVERTRANSCRIPT_EMBEDDING` gets, and for the same reason.
+fn step_under_test() -> u64 {
+    let default = diarize::live::SEGMENT_STEP as u64 * 1000 / diarize::fbank::SAMPLE_RATE as u64;
+    match std::env::var("EVERTRANSCRIPT_SEGMENT_STEP_MS") {
+        Err(_) => default,
+        Ok(value) if value.is_empty() => default,
+        Ok(value) => value
+            .parse()
+            .unwrap_or_else(|_| panic!("EVERTRANSCRIPT_SEGMENT_STEP_MS={value}: expected ms")),
+    }
+}
+
 fn models() -> (PathBuf, PathBuf) {
     let dir = std::env::var_os("EVERTRANSCRIPT_MODELS_DIR")
         .map(PathBuf::from)
@@ -147,6 +165,7 @@ fn models() -> (PathBuf, PathBuf) {
     let (name, file, _) = embedding_under_test();
     let embedding = dir.join(&file);
     println!("embedding under test: {name} ({})", file.display());
+    println!("segmentation step: {} ms", step_under_test());
     assert!(
         segmentation.exists() && embedding.exists(),
         "the diarization models are not in {}. Fetch them with \
@@ -314,7 +333,8 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
 
     let mut diarizer =
         diarize::live::LiveDiarizer::load_with(segmentation, embedding, embedding_under_test().2)
-            .expect("load models");
+            .expect("load models")
+            .with_step(step_under_test());
     let audio = diarize::MeetingAudio {
         mic: &samples,
         system: &[],
@@ -345,6 +365,7 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
             &diarize::Cancel::new(),
         )
         .expect("observe")
+        .observations
         .into_iter()
         .filter_map(|observation| {
             let who = dominant_speaker(&observation.runs, &reference)?;

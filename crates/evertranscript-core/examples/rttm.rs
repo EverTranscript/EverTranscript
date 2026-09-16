@@ -86,7 +86,7 @@ fn main() {
     )
     .expect("models load");
     let started = Instant::now();
-    let observations = diarizer
+    let observed = diarizer
         .observe(
             MeetingAudio {
                 mic: &mic,
@@ -97,9 +97,10 @@ fn main() {
             &Cancel::new(),
         )
         .expect("observes");
+    let observations = &observed.observations;
     if let Ok(dump) = std::env::var("EVERTRANSCRIPT_RTTM_DUMP") {
         let mut file = std::fs::File::create(&dump).expect("create dump");
-        for observation in &observations {
+        for observation in observations {
             let line = serde_json::json!({
                 "channel": observation.channel.as_str(),
                 "runs": observation.runs,
@@ -123,7 +124,7 @@ fn main() {
             )
         })
         .collect();
-    let result = assemble(&observations, &agglomerate(&provisional));
+    let result = assemble(&observed, &agglomerate(&provisional));
     eprintln!(
         "{uri}: {:.0} s of audio, {} observations, {} turns, {} voices, {} with a Voiceprint, in {:.1} s",
         mic.len() as f64 / SAMPLE_RATE as f64,
