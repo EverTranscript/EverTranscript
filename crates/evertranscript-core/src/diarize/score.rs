@@ -344,7 +344,7 @@ fn greedy_assignment(matrix: &[Vec<u64>], columns: usize) -> Vec<(usize, usize)>
             }
         }
     }
-    cells.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+    cells.sort_unstable_by_key(|(weight, _, _)| std::cmp::Reverse(*weight));
 
     let mut used_rows = vec![false; matrix.len()];
     let mut used_columns = vec![false; columns];

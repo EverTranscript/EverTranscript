@@ -570,7 +570,10 @@ mod tests {
                    FROM speakers ORDER BY id",
             )
             .expect("prepare");
-        let rows: Vec<(String, Option<String>, i64, i64, Option<String>)> = statement
+        /// id, display name, operator flag, whether the vector is gone, and
+        /// the model that made it.
+        type SpeakerRow = (String, Option<String>, i64, i64, Option<String>);
+        let rows: Vec<SpeakerRow> = statement
             .query_map([], |row| {
                 Ok((
                     row.get(0)?,

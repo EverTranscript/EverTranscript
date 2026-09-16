@@ -90,7 +90,7 @@ fn corpus() -> Option<Vec<Meeting>> {
             }
             let name = path.file_stem()?.to_string_lossy().to_string();
             let audio = audio_dir.join(format!("{name}.wav"));
-            audio.exists().then(|| Meeting {
+            audio.exists().then_some(Meeting {
                 name,
                 audio,
                 reference: path,
@@ -111,7 +111,7 @@ fn corpus() -> Option<Vec<Meeting>> {
 fn models() -> (PathBuf, PathBuf) {
     let dir = std::env::var_os("EVERTRANSCRIPT_MODELS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| evertranscript_core::paths::models_dir());
+        .unwrap_or_else(evertranscript_core::paths::models_dir);
     let segmentation = dir.join("diarize-segmentation.onnx");
     let embedding = dir.join("diarize-embedding.onnx");
     assert!(

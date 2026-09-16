@@ -11,14 +11,14 @@
 //! and a worker draining an empty-model queue in microseconds would make
 //! every one of those assertions a race.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 
 use evertranscript_core::server::Core;
 use evertranscript_core::store::diarize_queue::Priority;
 
-async fn core(history_dir: &PathBuf) -> Arc<Core> {
-    Core::with_history_dir_acknowledged(history_dir.clone()).expect("core")
+async fn core(history_dir: &Path) -> Arc<Core> {
+    Core::with_history_dir_acknowledged(history_dir.to_path_buf()).expect("core")
 }
 
 /// A finished Meeting with no audio: enough to be queued, and it runs to
@@ -144,7 +144,10 @@ async fn a_deleted_meeting_leaves_the_line() {
     let core = core(&history_dir).await;
 
     let id = finished_meeting(&core).await;
-    assert_eq!(core.diarize_status().await.queued, [id.clone()]);
+    assert_eq!(
+        core.diarize_status().await.queued,
+        std::slice::from_ref(&id)
+    );
 
     core.delete_meeting(&id).await.expect("delete");
     assert!(
