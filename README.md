@@ -11,6 +11,6 @@ Transcribed locally with whisper.cpp, saved as plain markdown you own.
 
 ## Private by construction
 
-**Your meetings never leave your machine — unless you turn on cloud summaries.**
+**100% local by default. Your meetings never leave your machine — unless you turn on cloud summaries.**
 
 Verified against the shipped binary in [`crates/evertranscript/tests/guarantees.rs`](crates/evertranscript/tests/guarantees.rs).
