@@ -201,71 +201,86 @@ a problem to resolve by averaging. They measure different things.
 
 ### What is not measured, and what is not ours to decide
 
-**The split-model option is half measured on dev** (Q171, corrected by Q174 and
-Q176). The user authorised the measurement; nothing is adopted. Eight cells —
-each model's partition crossed with each model's vectors, in both clustering
-arms — over the 32-point matcher grid, with turn placement held fixed by
-construction so every cell's DER equals its clustering control's.
+**The split-model option is measured on corrected dev** (Q180). The user
+authorised the measurement; nothing is adopted. Eight cells — each model's
+partition crossed with each model's vectors, in both clustering arms — over the
+32-point matcher grid, 256 replays on two inference passes, each cell a **left
+join** of identity vectors onto its clustering pass's own observations,
+canonical map and turns. A track the identity pass never produced keeps its
+timing and its cluster and lends no vector; a cluster left with none gets no
+identity embedding, so `assemble`'s `filter_map` drops it from `embeddings`
+while its turns survive and the scorer reads it as `unattributed:no-embedding`
+rather than the `unexpected` the validity gate watches. Nothing is padded,
+fabricated or borrowed from a neighbour.
 
-Half of that grid is withdrawn, for a reason that was measured rather than
-reasoned about. The two passes disagree about nine observations of 12,649, all
-WeSpeaker-only and all 84–85ms; the first grid handled that by running every
-cell on the tracks *both* passes produced, and that restriction is a different
-experiment, not a rounding of the same one. Dropping nine observations changes
-what WeSpeaker's clusterer sees, and its partition moves with it: at constrained
-0.62/0.08 wrong-returning time falls 63.960s, correct-new rises 28.650s and
-false attachment falls 29.240s, with 212 per-event differences across the
-constrained WeSpeaker control grid. So the earlier claims that the restriction
-"moved nothing" and that the controls "reproduce the record" were wrong — they
-held for the two figures then printed and not for the ledger.
+**Validity, checked before any result was read.** Both diagonals are
+event-for-event identical to the standalone single-model ledgers — 6738 events
+WeSpeaker-constrained, 6573 ReDimNet2-constrained — against 212 differences
+under the withdrawn shared-track restriction. Denominators 22182.515s returning
+and 7816.070s new in all eight cells at all 32 points (`unscorable` 1560.070s
+excluded); no duplicate rows; `unattributed:unexpected` zero everywhere; all
+four DER millisecond tallies equal within each clustering row, asserted by the
+rig. DER back to the record: unconstrained 29.13% / 26.01%, constrained 22.48%
+— the restriction's 22.46% is gone — and 23.79%. Coverage per pass: ReDimNet2
+supplies vectors for 6320 of WeSpeaker's 6329 observations (99.858%, 9
+unvectored, 0.8s voiced); WeSpeaker for all 6320 of ReDimNet2's; 9 WeSpeaker
+observations have no place in ReDimNet2's partition. **The restriction's damage
+is scoped exactly: only the constrained WeSpeaker row moved**, both cells at all
+32 points — 64 of 256 replays. The unconstrained WeSpeaker row and all four
+ReDimNet2 cells are identical before and after.
 
-The asymmetry decides what survives. All nine differences are WeSpeaker-only, so
-ReDimNet2's observations are a subset of WeSpeaker's and the intersection *is*
-ReDimNet2's own track set. **The ReDimNet2-clustering row therefore ran on its
-complete original inputs and stands as measured**: its control matches the
-recorded totals once the two abstention subtypes are combined, and substituting
-WeSpeaker's identity vectors under ReDimNet2's partition moves the recognition
-ledger by at most 60s of 22182.515s at constrained 0.80/0.00 — and by nothing at
-all at unconstrained 0.45/0.00, where all four quantities are identical to the
-second. That null is the retained result.
+**The identity embedding is not close to inert.** That summary was an artefact
+of quoting one point. At the shipped matcher point, constrained 0.62/0.08:
 
-**The WeSpeaker-clustering row is a diagnostic and not a verdict.** It includes
-the single dominance the grid found — constrained 0.30/0.00, WeSpeaker
-clustering with ReDimNet2 identity — which is therefore unverified, on top of
-already being a dominance over two badly calibrated controls. Its DER of 22.46%
-is the restricted partition's; the original is 22.48%.
+| constrained 0.62/0.08 | ret.correct | ret.wrong | new.correct | false-attach |
+|---|---|---|---|---|
+| We clust / We ident *(control)* | 14030.130 | 2204.195 | 7578.540 | 62.410 |
+| We clust / **Re ident** | **16006.440** | 2332.195 | 7524.790 | 116.160 |
+| Re clust / **We ident** | 14888.530 | 2165.625 | 7589.680 | 50.720 |
+| Re clust / Re ident *(control)* | 16213.960 | 2361.655 | 7565.090 | 75.680 |
 
-The harness no longer restricts. A cell is now a **left join** of identity
-vectors onto the clustering pass's own observations, canonical map and turns: a
-track the identity pass never produced keeps its timing and its cluster and
-lends no vector, and a cluster left with no vectors at all gets no identity
-embedding, so `assemble`'s existing `filter_map` drops it from `embeddings`
-while keeping its turns and the scorer's real abstention path handles it as
-`unattributed:no-embedding` rather than as the `unexpected` the validity gate
-watches. Nothing is padded, fabricated or borrowed from a neighbour. Coverage is
-reported per model as that pass's own matched fraction; the earlier 0.0012%
-double-counted the common tracks by summing both passes into its denominator.
+Substituting ReDimNet2's identity vectors under WeSpeaker's partition is worth
+**+1976.310s** of correct returning, 8.9% of the denominator, against +128.000s
+wrong, −53.750s correct-new and +53.750s false attachment. A trade, and a large
+one in the direction that matters most. At the same point Re-clustering with
+We-identity **dominates the WeSpeaker control on all four** while trading
+against the ReDimNet2 control.
 
-**The reading rule is corrected too.** Dominating both same-model controls on
-all four recognition quantities is *sufficient* evidence of a recognition
-benefit. It is **not necessary** for a split to be worth having: those four are
-the recognition column alone and say nothing about DER, about inference cost, or
-about carrying two models and two vector spaces. "No split pays" was a product
-verdict the data do not establish, and it is withdrawn. What the dev grid
-supports is narrower and still worth stating: under ReDimNet2's partition the
-identity embedding is close to inert, while swapping the partition moves correct
-returning by 193–311s.
+**The one dominance over both controls survives on complete inputs** and is no
+longer a diagnostic: constrained 0.30/0.00, We clustering with Re identity,
+18119.570 / 2801.145 / 7361.380 / 279.570 against controls of 16130.530 /
+4426.535 / 6042.470 / 1598.480 and 16680.550 / 4128.995 / 7231.080 / 411.180.
+Still the only one in 128 off-diagonal comparisons, and both controls are still
+badly calibrated there — WeSpeaker's own best correct returning anywhere in the
+constrained arm is the same 18119.570 — so it is a dominance over two poorly
+chosen configurations, which is a fact about those configurations rather than
+about the models.
 
-Cost, which any recommendation has to price and no ledger column carries: a
-second model in the bundle and a second inference pass per meeting, 594s and
-603s for these 18 meetings. A recommendation is a separate statement from a
-measurement, and the adoption bar the user left undecided is what it would need.
+**The exact null is real, and it belongs to an arm, not to a partition.**
+Re-clustering with We-identity ties its control on all four quantities to the
+second at unconstrained 0.80/0.00, 0.62/0.08, 0.45/0.00 and 0.80/0.15 — four
+points. Under the constraint the same swap costs 1325.430s at 0.62/0.08.
+Separately, We-clustering/Re-identity beats its own control on all four
+unconstrained at 0.80/0.00, 0.62/0.08 and 0.80/0.15, each by tens of seconds,
+each a trade against the ReDimNet2 control.
 
-Held-out points (Q172) stay **provisional**; they were calibrated from the
-withdrawn half and are re-chosen once the corrected WeSpeaker row exists.
+**No recommendation follows from this, and none is made.** These four are the
+recognition column. The measured cost of a split is two models in the bundle and
+two inference passes per meeting — 1597s of wall clock for this grid — and a
+split does *not* entail two persisted identity spaces per Speaker, since
+clustering vectors can stay meeting-local and never be stored against a Speaker.
+The DER column is a separate reading. Dominating both same-model controls is
+sufficient evidence of a recognition benefit and **not necessary** for a split to
+be worth having; "no split pays" was a product verdict the data never
+established and is withdrawn.
 
-**One decision is the user's and is outstanding:** whether ≥ 2.0 points of DER
-is the adoption bar. **Separately unresolved, and not a substitute for either:** the rate of
+**Held-out candidates are predeclared and unrun** (Q181): constrained 0.30/0.00
+and 0.62/0.08, unconstrained 0.80/0.00, all four cells at each — twelve cells,
+re-chosen from these corrected curves rather than carried from Q172.
+
+**One decision is the user's and is deliberately held open by them:** whether
+≥ 2.0 points of DER is the adoption bar. They were asked and chose to leave it
+undecided; it is not an unanswered question. **Separately unresolved, and not a substitute for either:** the rate of
 exchange between a correct and a wrong attributed second, without which the
 recognition column cannot be collapsed to one ranking. Nothing here assigns any
 of the three. Q152's rule holds throughout: measurements, mechanism hypotheses

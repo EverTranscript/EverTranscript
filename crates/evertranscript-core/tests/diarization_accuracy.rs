@@ -435,31 +435,54 @@ struct Inferred {
     seconds: f64,
 }
 
-/// A fingerprint of a model file: its length and an FNV-1a digest of its bytes.
+/// SHA-256 of a file, hex.
 ///
-/// Not a cryptographic hash and not offered as one. It answers the only
-/// question a reused inference pass has to answer — which artifact produced
-/// these vectors — and the trap it exists for happened here: a ReDimNet2
-/// export once sat under WeSpeaker's filename, and anything that trusted the
-/// name would have compared a model with itself.
-fn fingerprint(path: &Path) -> String {
-    static MEMO: std::sync::OnceLock<std::sync::Mutex<BTreeMap<PathBuf, String>>> =
-        std::sync::OnceLock::new();
-    let memo = MEMO.get_or_init(Default::default);
-    if let Some(found) = memo.lock().expect("fingerprint memo").get(path) {
-        return found.clone();
-    }
+/// Never memoized by path: a snapshot's whole job is to notice that an input
+/// changed, and a memo keyed on the name would answer for the file that used
+/// to be there. Hashing a model or a WAV costs a fraction of a second against
+/// an inference pass that costs ten minutes.
+fn digest(path: &Path) -> String {
+    use sha2::{Digest, Sha256};
+
     let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    let mut digest: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in &bytes {
-        digest ^= u64::from(*byte);
-        digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+    format!("{:x}", Sha256::digest(&bytes))
+}
+
+/// One pass's observations as they go to disk.
+///
+/// Harness-local and deliberately dull: `Observation` is production's type and
+/// is not serialisable, and making it so for a scratch file would be a change
+/// to production for a test's convenience.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Record {
+    stamp: String,
+    windows: Vec<(u8, u64, u64)>,
+    tracks: Vec<Track>,
+    audio_seconds: f64,
+    seconds: f64,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Track {
+    channel: u8,
+    cluster: u32,
+    window: usize,
+    local: u8,
+    vector: Vec<f32>,
+    runs: Vec<(u64, u64)>,
+    clean_runs: Vec<(u64, u64)>,
+}
+
+fn channel_of(slot: u8) -> evertranscript_protocol::AudioChannel {
+    if slot == 0 {
+        evertranscript_protocol::AudioChannel::Mic
+    } else {
+        evertranscript_protocol::AudioChannel::System
     }
-    let out = format!("{}:{digest:016x}", bytes.len());
-    memo.lock()
-        .expect("fingerprint memo")
-        .insert(path.to_path_buf(), out.clone());
-    out
+}
+
+fn slot_of(channel: evertranscript_protocol::AudioChannel) -> u8 {
+    u8::from(channel == evertranscript_protocol::AudioChannel::System)
 }
 
 /// One meeting's inference, on disk, so a repair to the evaluator does not
@@ -469,14 +492,38 @@ fn fingerprint(path: &Path) -> String {
 /// written and every run infers as it always did. This is not a cache
 /// framework and should not become one: no eviction, no index, no sharing
 /// between machines. One file per meeting per embedding, and a provenance
-/// line that has to match exactly — corpus, meeting, both model files by
-/// fingerprint, the front end and the step. Anything else and the file is
-/// ignored out loud and the meeting re-inferred, because silently reusing a
-/// pass from different inputs is the one failure a snapshot can cause that
-/// the numbers downstream would not show.
+/// stamp that has to match exactly — the audio and both model files **by
+/// content**, the corpus and meeting they were found under, the embedding's
+/// identity, the front end and the step. Anything else, or a file that will
+/// not parse, and the snapshot is ignored out loud and the meeting
+/// re-inferred, because silently reusing a pass made from different inputs is
+/// the one failure a snapshot can cause that the numbers downstream would not
+/// show.
 struct Snapshot {
     dir: PathBuf,
     stamp: String,
+}
+
+/// Everything that could make two passes over one meeting differ.
+///
+/// Content, not names. A path says where a file was looked for and nothing
+/// about what was there: a re-cut WAV keeps its name, and a ReDimNet2 export
+/// once sat under WeSpeaker's filename in this project, which a name-keyed
+/// stamp would have read as the same model twice.
+fn provenance(meeting: &Meeting, segmentation: &Path, embedding: &Which) -> String {
+    format!(
+        "evertranscript-observations 2\tcorpus={}\tmeeting={}\taudio={}\tsegmentation={}\t\
+         model={}\tversion={}\tembedding={}\tfrontend={:?}\tstep_ms={}",
+        meeting.audio.parent().unwrap_or(Path::new("")).display(),
+        meeting.name,
+        digest(&meeting.audio),
+        digest(segmentation),
+        embedding.id.model,
+        embedding.id.version,
+        digest(&embedding.path),
+        embedding.frontend,
+        step_under_test(),
+    )
 }
 
 impl Snapshot {
@@ -484,135 +531,99 @@ impl Snapshot {
         let dir = PathBuf::from(std::env::var_os("EVERTRANSCRIPT_OBSERVATIONS")?);
         std::fs::create_dir_all(&dir).ok()?;
         Some(Self {
-            stamp: format!(
-                "evertranscript-observations 1\tcorpus={}\tmeeting={}\tsegmentation={}\t\
-                 model={}\tversion={}\tembedding={}\tfrontend={:?}\tstep_ms={}",
-                meeting.audio.parent().unwrap_or(Path::new("")).display(),
-                meeting.name,
-                fingerprint(segmentation),
-                embedding.id.model,
-                embedding.id.version,
-                fingerprint(&embedding.path),
-                embedding.frontend,
-                step_under_test(),
-            ),
+            stamp: provenance(meeting, segmentation, embedding),
             dir,
         })
     }
 
     fn path(&self, meeting: &Meeting, embedding: &Which) -> PathBuf {
         self.dir.join(format!(
-            "{}.{}.{}.obs",
+            "{}.{}.{}.observations.json",
             meeting.name, embedding.id.model, embedding.id.version
         ))
     }
 
     fn load(&self, path: &Path) -> Option<(diarize::live::Observed, f64, f64)> {
         let bytes = std::fs::read(path).ok()?;
-        let split = bytes.iter().position(|byte| *byte == b'\n')?;
-        let found = std::str::from_utf8(&bytes[..split]).ok()?;
-        if found != self.stamp {
+        // Truncated, half-written or hand-edited all land here, and all mean
+        // the same thing: infer again, and say why.
+        let record: Record = match serde_json::from_slice(&bytes) {
+            Ok(record) => record,
+            Err(error) => {
+                println!("  ignoring {}: {error}", path.display());
+                return None;
+            }
+        };
+        if record.stamp != self.stamp {
             println!(
                 "  ignoring {}: it was made from different inputs",
                 path.display()
             );
             return None;
         }
-        let mut at = split + 1;
-        let u8_ = |at: &mut usize| -> u8 {
-            let value = bytes[*at];
-            *at += 1;
-            value
-        };
-        let u32_ = |at: &mut usize| -> u32 {
-            let value = u32::from_le_bytes(bytes[*at..*at + 4].try_into().expect("u32"));
-            *at += 4;
-            value
-        };
-        let u64_ = |at: &mut usize| -> u64 {
-            let value = u64::from_le_bytes(bytes[*at..*at + 8].try_into().expect("u64"));
-            *at += 8;
-            value
-        };
-        let channel = |slot: u8| {
-            if slot == 0 {
-                evertranscript_protocol::AudioChannel::Mic
-            } else {
-                evertranscript_protocol::AudioChannel::System
-            }
-        };
-        let f32_ = |at: &mut usize| -> f32 {
-            let value = f32::from_le_bytes(bytes[*at..*at + 4].try_into().expect("f32"));
-            *at += 4;
-            value
-        };
-        let spans = |at: &mut usize| -> Vec<(u64, u64)> {
-            (0..u32_(at)).map(|_| (u64_(at), u64_(at))).collect()
-        };
-        let windows = (0..u32_(&mut at))
-            .map(|_| (channel(u8_(&mut at)), u64_(&mut at), u64_(&mut at)))
-            .collect();
-        let observations = (0..u32_(&mut at))
-            .map(|_| diarize::live::Observation {
-                channel: channel(u8_(&mut at)),
-                cluster: diarize::Cluster(u32_(&mut at)),
-                window: u32_(&mut at) as usize,
-                local: u8_(&mut at),
-                vector: (0..u32_(&mut at)).map(|_| f32_(&mut at)).collect(),
-                runs: spans(&mut at),
-                clean_runs: spans(&mut at),
-            })
-            .collect();
-        let audio_seconds = f64::from_bits(u64_(&mut at));
-        let seconds = f64::from_bits(u64_(&mut at));
         Some((
             diarize::live::Observed {
-                observations,
+                observations: record
+                    .tracks
+                    .into_iter()
+                    .map(|track| diarize::live::Observation {
+                        channel: channel_of(track.channel),
+                        cluster: diarize::Cluster(track.cluster),
+                        window: track.window,
+                        local: track.local,
+                        vector: track.vector,
+                        runs: track.runs,
+                        clean_runs: track.clean_runs,
+                    })
+                    .collect(),
                 embedding: diarize::live::EMBEDDING_IDENTITY,
-                windows,
+                windows: record
+                    .windows
+                    .into_iter()
+                    .map(|(channel, start, end)| (channel_of(channel), start, end))
+                    .collect(),
             },
-            audio_seconds,
-            seconds,
+            record.audio_seconds,
+            record.seconds,
         ))
     }
 
     fn save(&self, path: &Path, one: &Inferred) {
-        let mut out = self.stamp.clone().into_bytes();
-        out.push(b'\n');
-        let put32 = |out: &mut Vec<u8>, value: u32| out.extend_from_slice(&value.to_le_bytes());
-        let put64 = |out: &mut Vec<u8>, value: u64| out.extend_from_slice(&value.to_le_bytes());
-        put32(&mut out, one.observed.windows.len() as u32);
-        for (channel, start, end) in &one.observed.windows {
-            out.push(u8::from(
-                *channel == evertranscript_protocol::AudioChannel::System,
-            ));
-            put64(&mut out, *start);
-            put64(&mut out, *end);
-        }
-        put32(&mut out, one.observed.observations.len() as u32);
-        for observation in &one.observed.observations {
-            out.push(u8::from(
-                observation.channel == evertranscript_protocol::AudioChannel::System,
-            ));
-            put32(&mut out, observation.cluster.index());
-            put32(&mut out, observation.window as u32);
-            out.push(observation.local);
-            put32(&mut out, observation.vector.len() as u32);
-            for value in &observation.vector {
-                out.extend_from_slice(&value.to_le_bytes());
-            }
-            for spans in [&observation.runs, &observation.clean_runs] {
-                put32(&mut out, spans.len() as u32);
-                for (start, end) in spans {
-                    put64(&mut out, *start);
-                    put64(&mut out, *end);
-                }
-            }
-        }
-        put64(&mut out, one.audio_seconds.to_bits());
-        put64(&mut out, one.seconds.to_bits());
-        if let Err(error) = std::fs::write(path, out) {
+        let record = Record {
+            stamp: self.stamp.clone(),
+            windows: one
+                .observed
+                .windows
+                .iter()
+                .map(|(channel, start, end)| (slot_of(*channel), *start, *end))
+                .collect(),
+            tracks: one
+                .observed
+                .observations
+                .iter()
+                .map(|observation| Track {
+                    channel: slot_of(observation.channel),
+                    cluster: observation.cluster.index(),
+                    window: observation.window,
+                    local: observation.local,
+                    vector: observation.vector.clone(),
+                    runs: observation.runs.clone(),
+                    clean_runs: observation.clean_runs.clone(),
+                })
+                .collect(),
+            audio_seconds: one.audio_seconds,
+            seconds: one.seconds,
+        };
+        // Written beside the target and renamed over it, so an interrupted run
+        // leaves no half-file for the next one to read as real.
+        let partial = path.with_extension("partial");
+        let written = serde_json::to_vec(&record)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| std::fs::write(&partial, bytes).map_err(|error| error.to_string()))
+            .and_then(|()| std::fs::rename(&partial, path).map_err(|error| error.to_string()));
+        if let Err(error) = written {
             println!("  could not write {}: {error}", path.display());
+            let _ = std::fs::remove_file(&partial);
         }
     }
 }
@@ -2285,19 +2296,134 @@ fn the_constrained_path_is_the_one_the_replay_gets() {
 }
 
 /// The snapshot has to give back exactly what inference produced, including
-/// the things that are easy to lose in a hand-rolled format: the channel byte,
-/// a track whose vector is empty, and runs that differ from clean runs.
+/// the things a record is easy to lose: the channel, a track whose vector is
+/// empty, and runs that differ from clean runs.
 #[test]
 fn a_snapshot_returns_the_pass_that_was_paid_for() {
-    use evertranscript_protocol::AudioChannel;
+    let (dir, snapshot, one) = a_saved_pass("round-trip");
+    let path = dir.join("round-trip.json");
 
-    let dir = std::env::temp_dir().join(format!("et-obs-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
+    let (back, audio_seconds, seconds) = snapshot.load(&path).expect("reload");
+    assert_eq!(back.windows, one.observed.windows);
+    assert_eq!(back.observations.len(), 2);
+    for (got, want) in back.observations.iter().zip(&one.observed.observations) {
+        assert_eq!(got.channel, want.channel);
+        assert_eq!(got.cluster, want.cluster);
+        assert_eq!((got.window, got.local), (want.window, want.local));
+        assert_eq!(got.vector, want.vector, "f32s survive the record exactly");
+        assert_eq!(got.runs, want.runs);
+        assert_eq!(got.clean_runs, want.clean_runs);
+    }
+    assert_eq!((audio_seconds, seconds), (1234.5, 67.25));
+
+    // Different inputs, same filename: refused rather than silently reused.
+    let other = Snapshot {
+        dir: dir.clone(),
+        stamp: "stamp two".into(),
+    };
+    assert!(other.load(&path).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A truncated or malformed file is a miss, not a crash.
+///
+/// The half-written case is what `save`'s rename is there to prevent, but a
+/// full disk or a killed run elsewhere can still leave one, and a harness that
+/// panicked on it would lose the pass it was trying to protect.
+#[test]
+fn a_half_written_snapshot_is_a_miss_and_not_a_panic() {
+    let (dir, snapshot, _) = a_saved_pass("truncated");
+    let path = dir.join("truncated.json");
+
+    let whole = std::fs::read(&path).expect("read back");
+    assert!(snapshot.load(&path).is_some(), "whole, it loads");
+
+    std::fs::write(&path, &whole[..whole.len() / 2]).expect("truncate");
+    assert!(snapshot.load(&path).is_none(), "half a record is no record");
+
+    std::fs::write(&path, b"").expect("empty");
+    assert!(snapshot.load(&path).is_none());
+
+    std::fs::write(&path, b"{\"stamp\": \"stamp one\"}").expect("wrong shape");
+    assert!(
+        snapshot.load(&path).is_none(),
+        "a stamp alone is not a pass: the fields it lacks are the observations"
+    );
+
+    assert!(snapshot.load(&dir.join("never-written.json")).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same WAV path holding different audio is a different meeting.
+///
+/// This is the failure the stamp exists for and the one a path-keyed record
+/// cannot see: a corpus re-cut in place keeps every name it had.
+#[test]
+fn audio_that_changed_under_the_same_name_invalidates_the_snapshot() {
+    let dir = scratch("audio-content");
+    let audio = dir.join("ES2011c.wav");
+    let segmentation = dir.join("segmentation.onnx");
+    let model = dir.join("embedding.onnx");
+    std::fs::write(&segmentation, b"segmentation bytes").expect("write");
+    std::fs::write(&model, b"embedding bytes").expect("write");
+
+    let meeting = Meeting {
+        name: "ES2011c".into(),
+        audio: audio.clone(),
+        reference: dir.join("ES2011c.rttm"),
+    };
+    let which = Which {
+        id: VoiceprintId {
+            model: "wespeaker",
+            version: "1",
+        },
+        path: model.clone(),
+        frontend: diarize::live::Frontend::Fbank,
+    };
+
+    std::fs::write(&audio, b"the audio as it was").expect("write");
+    let before = provenance(&meeting, &segmentation, &which);
+    std::fs::write(&audio, b"the audio as it is now").expect("rewrite in place");
+    let after = provenance(&meeting, &segmentation, &which);
+    assert_ne!(
+        before, after,
+        "same path, different bytes: the stamp has to move"
+    );
+
+    // And the same holds for the models, which is the trap that actually
+    // happened here — one export sitting under another's filename.
+    std::fs::write(&model, b"a different export entirely").expect("rewrite in place");
+    assert_ne!(after, provenance(&meeting, &segmentation, &which));
+
+    // A snapshot written before the change is refused after it.
     let snapshot = Snapshot {
         dir: dir.clone(),
-        stamp: "stamp one".into(),
+        stamp: before,
     };
-    let one = Inferred {
+    let path = dir.join("stale.json");
+    snapshot.save(&path, &a_pass());
+    let now = Snapshot {
+        dir: dir.clone(),
+        stamp: provenance(&meeting, &segmentation, &which),
+    };
+    assert!(now.load(&path).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(test)]
+fn scratch(what: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("et-obs-{}-{what}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    dir
+}
+
+/// One meeting's pass, with the shapes worth round-tripping in it.
+#[cfg(test)]
+fn a_pass() -> Inferred {
+    use evertranscript_protocol::AudioChannel;
+
+    Inferred {
         name: "ES2011c".into(),
         reference: Vec::new(),
         observed: diarize::live::Observed {
@@ -2308,7 +2434,7 @@ fn a_snapshot_returns_the_pass_that_was_paid_for() {
                     cluster: diarize::Cluster(7),
                     window: 29,
                     local: 2,
-                    vector: vec![0.25, -0.5, 1.0],
+                    vector: vec![0.25, -0.5, 1.0, f32::MIN_POSITIVE, 0.1],
                     runs: vec![(1_000, 2_000), (3_000, 4_500)],
                     clean_runs: vec![(1_200, 1_900)],
                 },
@@ -2327,30 +2453,19 @@ fn a_snapshot_returns_the_pass_that_was_paid_for() {
         },
         audio_seconds: 1234.5,
         seconds: 67.25,
-    };
-    let path = dir.join("round-trip.obs");
-    snapshot.save(&path, &one);
-
-    let (back, audio_seconds, seconds) = snapshot.load(&path).expect("reload");
-    assert_eq!(back.windows, one.observed.windows);
-    assert_eq!(back.observations.len(), 2);
-    for (got, want) in back.observations.iter().zip(&one.observed.observations) {
-        assert_eq!(got.channel, want.channel);
-        assert_eq!(got.cluster, want.cluster);
-        assert_eq!((got.window, got.local), (want.window, want.local));
-        assert_eq!(got.vector, want.vector);
-        assert_eq!(got.runs, want.runs);
-        assert_eq!(got.clean_runs, want.clean_runs);
     }
-    assert_eq!((audio_seconds, seconds), (1234.5, 67.25));
+}
 
-    // Different inputs, same filename: refused rather than silently reused.
-    let other = Snapshot {
-        dir,
-        stamp: "stamp two".into(),
+#[cfg(test)]
+fn a_saved_pass(what: &str) -> (PathBuf, Snapshot, Inferred) {
+    let dir = scratch(what);
+    let snapshot = Snapshot {
+        dir: dir.clone(),
+        stamp: "stamp one".into(),
     };
-    assert!(other.load(&path).is_none());
-    let _ = std::fs::remove_file(&path);
+    let one = a_pass();
+    snapshot.save(&dir.join(format!("{what}.json")), &one);
+    (dir, snapshot, one)
 }
 
 /// Two passes over one meeting, differing only in their vectors.
@@ -2991,7 +3106,7 @@ fn the_split_grid_changes_only_who_supplies_the_identity() {
          is SUFFICIENT to establish a recognition benefit at that configuration. It is \
          NOT necessary for a split to be worth having: these four are the recognition \
          column only, and say nothing about the DER column, about inference cost, or \
-         about carrying two models and two vector spaces. A cell that is a trade here \
+         about the second model and the second inference pass (a split does not entail two persisted identity spaces per Speaker: clustering vectors can stay meeting-local). A cell that is a trade here \
          may still be worth having, and a cell that dominates here may not be. So what \
          follows reports ties, dominances and trades against the configurations they \
          hold at, and stops there: any recommendation is a separate statement, made \
