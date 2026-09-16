@@ -1797,3 +1797,14 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Only a human can decide, and the reason is that the obvious conclusion is the wrong one. Before the oracle measurement the honest report was "off by more than an order of magnitude, and probably unreachable" — an earlier reading in this same session said exactly that. Rebuilding each meeting's voices from the reference, one centroid per person, gives 0.00% EER and 100% nearest-right on test and 5.64% / 90.3% on dev. The bar is therefore reachable and the embedding already reaches it; the entire 35% is paid by in-meeting clustering producing about forty-five voices per meeting for about four people, so most trials compare one person's shards with another's. That relocates the work: no value of the three constants this ticket owns can fix a partition, and ticket 07's instrument is the wrong lever for its own bar. Whether that means closing 07 against criteria 2-4 and opening clustering work, or holding 07 until the fragmentation is fixed, is a scoping call about the ticket tree — and it interacts with the still-open Q135, which asks whether to land the ReDimNet2 swap at 20.00% DER against an 18.8% bar. Both are now the same question about the same subsystem, and answering them apart risks answering them inconsistently.
 **Outcome:** escalated
 **Ref:** (pending)
+
+## Q144 — diarization/07 — gate-resolution
+
+**Question:** Q143 escalated whether to close ticket 07 against criteria 2-4 and open clustering work, or hold it until the fragmentation is fixed.
+**Options considered:** close 07 against criteria 2-4 and open clustering work / hold 07 until the fragmentation is fixed / lower the bar to what the pipeline measures
+**Chosen:** Hold ticket 07 open until the fragmentation is fixed. Criteria 2, 3 and 4 stay met and recorded; criterion 1 stays unchecked, and the ticket does not close on it.
+**Decided-by:** human
+**Justification:** Frank decided. The bar is the reason the ticket exists — its title is "and the EER bar is met" — so closing it against the three supporting criteria would retire the one criterion that was the point, and the evidence says the bar is reachable rather than aspirational: reference-built voices score 0.00% EER with 100% nearest-right on test and 5.64% / 90.3% on dev. Holding keeps the bar attached to work that can still meet it. The thresholds themselves are settled and landed either way (Q142), so the hold costs nothing that is already finished.
+**Supersedes:** Q143 — escalation resolved by the user.
+**Outcome:** applied
+**Ref:** (pending)

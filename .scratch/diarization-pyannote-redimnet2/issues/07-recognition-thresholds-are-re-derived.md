@@ -15,9 +15,11 @@ mutual-best rule to stop a colleague being recognized as someone else.
 Derive each on AMI's dev set, report on test, and record the curve rather than the point, so
 the next person can see how much the choice is worth.
 
-**Blocked by:** 06.
+**Blocked by:** 06, and now the in-meeting clustering fragmentation described below. No
+ticket covers that work yet.
 
-**Status:** blocked — the bar is missed, and the cause is not in this ticket
+**Status:** held open — criteria 2-4 met, criterion 1 waits on the fragmentation fix
+(DECISIONS Q144)
 
 - [ ] **Cross-meeting EER at or under 1%, with no different-colleague pair above the match floor** — the bar this ticket exists for
 - [x] Each threshold is chosen on dev and reported on test, with the dev curve recorded
@@ -66,7 +68,13 @@ measures the fragmentation rather than the model.
 
 That makes this ticket's own instrument the wrong lever. No value of the three constants
 fixes a partition; the fix is in the clustering, which is ticket 06's and ADR-0037's
-territory. Escalated as a decision rather than restated as a missed bar.
+territory.
+
+**Resolved (DECISIONS Q144): this ticket is held open rather than closed against criteria
+2-4.** The bar is the reason the ticket exists, and the oracle measurement says it is
+reachable rather than aspirational — so the bar stays attached to work that can still meet
+it. The three constants are settled and landed regardless (Q142); what remains held is
+criterion 1 alone.
 
 ### Criterion 2 — each threshold chosen on dev, reported on test
 
