@@ -383,6 +383,14 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
         audio_seconds,
         // Labelled by the reference speaker the cluster mostly is, so a
         // cross-meeting trial knows whether two vectors are the same person.
+        //
+        // **By total overlap, not by the first turn.** `oracle_relabel`
+        // labels each turn on its own, so reading the first one named a
+        // cluster after whoever happened to open it: one second of Alice
+        // ahead of ninety-nine of Bob made it Alice, and a cluster whose
+        // first turn landed in silence kept its `cluster-N` label and was
+        // dropped whole. Both mistakes fed the cross-meeting trials, which
+        // are the numbers this block exists to produce.
         embeddings: result
             .embeddings
             .iter()
@@ -392,9 +400,18 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
                     .filter(|span| span.speaker == format!("cluster-{}", cluster.index()))
                     .cloned()
                     .collect();
-                let named = score::oracle_relabel(&own, &reference);
-                let who = named.first()?.speaker.clone();
-                (!who.starts_with("cluster-")).then(|| (who, embedding.vector.clone()))
+                let mut held: BTreeMap<String, u64> = BTreeMap::new();
+                for span in score::oracle_relabel(&own, &reference) {
+                    if span.speaker.starts_with("cluster-") {
+                        continue;
+                    }
+                    *held.entry(span.speaker).or_default() +=
+                        span.end_ms.saturating_sub(span.start_ms);
+                }
+                let (who, _) = held
+                    .into_iter()
+                    .max_by_key(|(name, ms)| (*ms, std::cmp::Reverse(name.clone())))?;
+                Some((who, embedding.vector.clone()))
             })
             .collect(),
     }
