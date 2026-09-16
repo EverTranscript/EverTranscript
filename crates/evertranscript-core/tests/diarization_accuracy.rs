@@ -2588,6 +2588,97 @@ fn the_split_grid_changes_only_who_supplies_the_identity() {
         })
         .collect();
 
+    // Where the two passes disagree about which observations exist.
+    //
+    // They can: `observe` drops an observation whose front end produced no
+    // features, and the two front ends are different code over different
+    // spans. A track only one pass produced has no counterpart to wear, and
+    // no arithmetic recovers one — so the grid runs on the tracks both
+    // produced, and what that costs is reported here rather than absorbed.
+    // Restricting one side alone would compare a partition against a subset
+    // of itself, so every cell of every arm, controls included, sees the
+    // same set.
+    let mut common: BTreeMap<String, BTreeSet<(usize, u8)>> = BTreeMap::new();
+    let (mut dropped, mut dropped_ms, mut kept, mut kept_ms) = (0usize, 0u64, 0usize, 0u64);
+    for chapter in &chapters {
+        let tracks = |name: &str| -> BTreeSet<(usize, u8)> {
+            inferred[name][&chapter.meeting]
+                .observed
+                .observations
+                .iter()
+                .map(|one| (one.window, one.local))
+                .collect()
+        };
+        let both: BTreeSet<(usize, u8)> = tracks(SPLIT_MODELS[0])
+            .intersection(&tracks(SPLIT_MODELS[1]))
+            .copied()
+            .collect();
+        let mut lost: Vec<(&str, u64)> = Vec::new();
+        for &name in &SPLIT_MODELS {
+            for one in &inferred[name][&chapter.meeting].observed.observations {
+                if both.contains(&(one.window, one.local)) {
+                    kept += 1;
+                    kept_ms += one.voiced_ms();
+                } else {
+                    dropped += 1;
+                    dropped_ms += one.voiced_ms();
+                    lost.push((name, one.voiced_ms()));
+                }
+            }
+        }
+        if !lost.is_empty() {
+            println!(
+                "  {}: {} observation(s) only one pass produced, {:.1}s — {}",
+                chapter.meeting,
+                lost.len(),
+                lost.iter().map(|(_, ms)| *ms as f64).sum::<f64>() / 1000.0,
+                lost.iter()
+                    .map(|(name, ms)| format!("{name} {ms}ms"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        common.insert(chapter.meeting.clone(), both);
+    }
+    println!(
+        "\nalignment: {kept} observation(s) in both passes ({:.0}s voiced), {dropped} in \
+         only one ({:.1}s, {:.4}% of voiced time). Every cell below, controls \
+         included, runs on the tracks both produced.",
+        kept_ms as f64 / 1000.0,
+        dropped_ms as f64 / 1000.0,
+        100.0 * dropped_ms as f64 / (kept_ms + dropped_ms).max(1) as f64,
+    );
+
+    // The full-set control, before anything is restricted: this is the number
+    // already on record, and the check that the rig has not moved underneath
+    // the comparison.
+    for arm in &SPLIT_ARMS {
+        for &name in &SPLIT_MODELS {
+            let mut tally = score::Der::default();
+            for chapter in &chapters {
+                let one = &inferred[name][&chapter.meeting];
+                let diarization = clustered(&one.observed, arm.threshold(name), arm.constrained);
+                tally.accumulate(&score::der(&one.reference, &hypothesis(&diarization.turns)));
+            }
+            println!(
+                "  every observation, {name} at merge {:.2}{}: DER {:.2}%",
+                arm.threshold(name),
+                if arm.constrained { " constrained" } else { "" },
+                tally.rate() * 100.0
+            );
+        }
+    }
+
+    let mut inferred = inferred;
+    for pass in inferred.values_mut() {
+        for (meeting, one) in pass.iter_mut() {
+            let keep = &common[meeting];
+            one.observed
+                .observations
+                .retain(|observation| keep.contains(&(observation.window, observation.local)));
+        }
+    }
+
     let grid = matcher_grid();
     for arm in &SPLIT_ARMS {
         println!("\n=== {} ===", arm.label);
