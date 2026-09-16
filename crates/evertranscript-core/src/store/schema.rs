@@ -324,6 +324,24 @@ const MIGRATIONS: &[&str] = &[
        AND id NOT IN (SELECT replaced_speaker_id FROM attribution_hints
                        WHERE replaced_speaker_id IS NOT NULL);
     "#,
+    // **Whether Diarization ever ran, so an interrupted one can be finished.**
+    // `diarize_in_background` is detached on purpose, which means a Core that
+    // stops in those minutes takes the run with it — and a Meeting that was
+    // never diarized is indistinguishable in this schema from one where
+    // Diarization ran and recognised nobody. Without that distinction a retry
+    // either misses the first or repeats the second on every start.
+    //
+    // Backfilled from the evidence rather than guessed: a Meeting with an
+    // attributed segment was plainly diarized. One without is left NULL, so
+    // the next Core start finishes what a previous one did not — which is
+    // exactly what heals the Meetings this migration was written for.
+    r#"
+    ALTER TABLE meetings ADD COLUMN diarized_at TEXT;
+
+    UPDATE meetings SET diarized_at = updated_at
+     WHERE id IN (SELECT DISTINCT meeting_id FROM transcript_segments
+                   WHERE speaker_id IS NOT NULL);
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.
@@ -365,6 +383,50 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .expect("user_version");
         assert_eq!(version as usize, MIGRATIONS.len());
+    }
+
+    #[test]
+    fn the_diarization_mark_is_backfilled_from_the_evidence_not_guessed() {
+        // Migration 11 decides which existing Meetings the retry picks up on
+        // the first start after an upgrade. A Meeting with an attributed
+        // segment was plainly diarized and must not be redone; one with none
+        // is exactly the case the retry exists for, and the two real
+        // Meetings that prompted it had zero (DECISIONS Q125).
+        let mut connection = Connection::open_in_memory().expect("open");
+        configure(&connection).expect("configure");
+        let before_mark = 10;
+        for migration in &MIGRATIONS[..before_mark] {
+            connection.execute_batch(migration).expect("migrate");
+        }
+        connection
+            .pragma_update(None, "user_version", before_mark as i64)
+            .expect("user_version");
+        connection
+            .execute_batch(
+                "INSERT INTO meetings (id, started_at, created_at, updated_at)
+                 VALUES ('heard', 'now', 'now', 'now'), ('silent', 'now', 'now', 'now');
+                 INSERT INTO speakers (id, is_operator, created_at) VALUES ('s1', 0, 'now');
+                 INSERT INTO transcript_segments
+                     (id, meeting_id, sequence, channel, start_ms, end_ms, text, speaker_id)
+                 VALUES ('a', 'heard', 0, 'mic', 0, 1, 'hi', 's1'),
+                        ('b', 'silent', 0, 'mic', 0, 1, 'hi', NULL);",
+            )
+            .expect("seed");
+
+        migrate(&mut connection).expect("migrate the rest");
+
+        let marked: Vec<String> = connection
+            .prepare("SELECT id FROM meetings WHERE diarized_at IS NOT NULL ORDER BY id")
+            .expect("prepare")
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("rows");
+        assert_eq!(
+            marked,
+            vec!["heard".to_string()],
+            "only a Meeting with words already attributed counts as diarized"
+        );
     }
 
     #[test]

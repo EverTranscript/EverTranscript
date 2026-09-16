@@ -1602,6 +1602,10 @@ impl Core {
                 // nothing, and go. Only here, after the segments moved —
                 // before that they still owned this Meeting's words.
                 let swept = crate::store::speakers::sweep_unreferenced(&transaction)?;
+                // In the same transaction as the attribution it describes, so
+                // a Meeting can never be marked diarized without the words
+                // that marking is about.
+                crate::store::meetings::set_diarized(&transaction, &meeting_id)?;
                 transaction.commit()?;
                 tracing::info!(
                     boundary_flips = reconciliation.boundary_flips,
@@ -1617,6 +1621,63 @@ impl Core {
 
         self.mirror_wake.notify_one();
         Ok(written)
+    }
+
+    /// Finishes the Diarization a previous Core did not.
+    ///
+    /// **A detached run does not survive a restart, and nothing in the record
+    /// said so.** [`Self::diarize_in_background`] is detached on purpose —
+    /// attribution arriving minutes later is ADR-0009's premise, and making
+    /// `stop` wait for two neural models would make the one act the Operator
+    /// performs by hand feel broken. The cost is that a Core stopping inside
+    /// those minutes takes the run with it, leaving a `warn!` in a log the
+    /// Operator cannot read and a Meeting whose words belong to nobody.
+    ///
+    /// Measured on the real History: two consecutive Meetings ended
+    /// undiarized because an install swap restarted the Core twenty-three
+    /// seconds after the second one stopped, and the first anyone knew of it
+    /// was that every action item in their Summaries credited the
+    /// unnamed-Speaker placeholder and was dropped (DECISIONS Q125).
+    ///
+    /// Sequential rather than one task per Meeting: `diarize::runner::Slot`
+    /// refuses a second claim, so a fan-out would diarize one and log `Busy`
+    /// for the rest. Spawned rather than awaited, for the same reason the
+    /// original is: booting must not wait for the models.
+    pub fn finish_interrupted_diarization(self: std::sync::Arc<Self>) {
+        tokio::spawn(async move {
+            let pending = match self
+                .store
+                .read(crate::store::meetings::never_diarized)
+                .await
+            {
+                Ok(pending) => pending,
+                Err(error) => {
+                    warn!(%error, "could not look for Meetings that were never diarized");
+                    return;
+                }
+            };
+            if pending.is_empty() {
+                return;
+            }
+            info!(
+                meetings = pending.len(),
+                "finishing Diarization a previous Core did not"
+            );
+            for meeting_id in pending {
+                match self.diarize_meeting(&meeting_id).await {
+                    Ok(0) => {}
+                    Ok(attributed) => info!(
+                        meeting = %meeting_id,
+                        attributed,
+                        "Diarization attributed a Meeting a previous Core left"
+                    ),
+                    // One Meeting failing is not a reason to abandon the rest.
+                    Err(error) => {
+                        warn!(meeting = %meeting_id, %error, "Diarization did not complete")
+                    }
+                }
+            }
+        });
     }
 
     /// Starts Diarization for a finished Meeting without waiting for it.
