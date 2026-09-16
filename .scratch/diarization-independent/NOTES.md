@@ -47,8 +47,8 @@ WeSpeaker Voiceprints to a ReDimNet2 resolve without a word (DECISIONS Q154).
 |---|---|
 | 03 | Turns come from segmentation. Main landed its own turn-placement implementation while this branch built a different one; reconciling them is its own work, not a merge. |
 | 05 | A model change clears Voiceprints. Migration written and tested, **not registered**; Registry messaging and activation remain — see below. |
-| 06 | ReDimNet2-B3 replaces WeSpeaker. Measured on both halves; the decision is the user's and is unanswered. See below. |
-| 07 | Recognition thresholds are re-derived. Dev curve and held-out validation done; no point selected, for the same reason as 06. |
+| 06 | ReDimNet2-B3 replaces WeSpeaker. **Measurement is complete**: both halves, plus the split-model architecture on dev (Q180) and on held-out test at declared points (Q183). No measurement work remains. The decision is the user's and is deliberately held open. See below. |
+| 07 | Recognition thresholds are re-derived. Dev curve and held-out validation done, now also across both clustering arms and both embeddings at three declared points. No point selected, for the same reason as 06: selecting one needs the adoption bar and a rate of exchange between a correct and a wrong attributed second, both reserved to the user. |
 | 12 | A model change re-runs History. `cluster::claims` built and unwired (`058bcad`); the rest wants 05, a migration or the protocol — see below. |
 
 ### 05 and 12, audited against this branch rather than their old Done flags
