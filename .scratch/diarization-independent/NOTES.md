@@ -9,6 +9,9 @@ WeSpeaker — so they were landed on their own. Their ticket files were
 deliberately not brought across: they describe a starting state that no longer
 exists, and a stale ticket is worse than none.
 
+`issues/` holds the ones rewritten here rather than landed: 05 and 12, against
+the current code, with the policy they carry unchanged.
+
 ## Landed
 
 | Ticket | Commit | What it does |
@@ -43,35 +46,48 @@ WeSpeaker Voiceprints to a ReDimNet2 resolve without a word (DECISIONS Q154).
 | Ticket | Why |
 |---|---|
 | 03 | Turns come from segmentation. Main landed its own turn-placement implementation while this branch built a different one; reconciling them is its own work, not a merge. |
-| 05 | A model change clears Voiceprints. **Superseded on this branch, not parked** — see below. |
+| 05 | A model change clears Voiceprints. Ticket rewritten against current code; the policy is unchanged and unshipped — see below. |
 | 06 | ReDimNet2-B3 replaces WeSpeaker. Measured on both halves; the decision is the user's and is unanswered. See below. |
 | 07 | Recognition thresholds are re-derived. Dev curve and held-out validation done; no point selected, for the same reason as 06. |
-| 12 | A model change re-runs History. Still real work, for a narrower reason than it states, and **not** blocked by 04 or 05 — see below. |
+| 12 | A model change re-runs History. Ticket rewritten against current code; still blocked by 05, which is now the only thing in front of it — see below. |
 
 ### 05 and 12, audited against this branch rather than their old Done flags
 
-Both are marked done on `diarization-pyannote-redimnet2`. Neither landed here,
-and the premise both were built on is no longer true of `main`.
+Both are marked done on `diarization-pyannote-redimnet2`. Neither landed here.
+The rewritten tickets are in `issues/`; this is what changed and what did not.
 
-Ticket 05 wipes every Voiceprint and every exemplar on a model change, because
-"old and new vectors cannot be compared". Main answers the same problem the
-other way and has since Q115: `stale_exemplars` finds every row from another
-space, `runner::rebuild` re-embeds each from the sample window it kept, and
-`adopt_rebuilt` adopts them in the next Diarization's own transaction. A row
-with no window is dropped and a Speaker left with nothing loses its Voiceprint,
-name and words intact. **Landing 05 as written would delete the evidence that
-path rebuilds from**, so it is superseded rather than pending, and the dropped
-migration should stay dropped.
+**The policy is unchanged and unshipped.** ADR-0037 asks that a model change
+wipe every Voiceprint and re-run History, rebuilding a named Speaker from its
+**attributed whole clusters** with the Operator's corrections on top — and it
+explicitly rejected re-embedding the old exemplars' stored sample offsets,
+because those offsets are the *old model's* choice of cuts while the Operator's
+naming is a statement about a whole cluster. That reasoning is untouched by
+anything measured since.
 
-Ticket 12's bulk re-run is built on 05 having run first — its `claims`
-mechanism exists because "there is no vector left to seed with". On this branch
-there is one, rebuilt lazily as each Meeting is next diarized, so recognition
-already survives a model change with no bulk job at all. What a re-run would
-still buy is narrower and real: the lazy path rebuilds *evidence* but never
-re-runs *attribution*, so a Meeting already diarized keeps the turns and the
-speaker assignments the old model gave it, and a change to segmentation or turn
-placement cannot be fixed by re-embedding anything. That is the ticket worth
-writing, and it depends on 08's queue (landed) rather than on 04 or 05.
+**What `main` does today is a different, narrower mechanism.** Since Q115,
+`stale_exemplars` finds every row from another space, `runner::rebuild`
+re-embeds each from the sample window it kept, and `adopt_rebuilt` adopts them
+in the next Diarization's own transaction. It is lazy, per-Meeting, and it is
+the thing ADR-0037 rejected: the old model's cuts. It rebuilds *evidence* and
+never re-runs *attribution*.
+
+An earlier revision of this file called 05 "superseded" on the strength of that
+mechanism. **That was wrong twice.** An implementation existing is not a policy
+being replaced, and "recognition already survives a model change" is stronger
+than anything measured — the rebuild has never been exercised against a real
+model change on a populated History, only through its seams, and a Speaker
+whose exemplars have no window or whose Meeting is gone loses its Voiceprint
+under it. Nothing has measured how often that is.
+
+If the lazy path *should* replace the policy, that is a proposal for the user
+and is written up as one at the end of `issues/05-…`. It is not adopted here.
+
+**What actually changed for the tickets** is narrower: 05's migration must now
+account for the rebuild path existing, and 12's `claims` mechanism can no
+longer be justified by "there is no vector left to seed with" — after 05's wipe
+there is none, but 05 now has to say so rather than assume it. Both are
+rewritten on those terms. 12 remains blocked by 05 and by nothing else: 04 has
+landed, and 08's queue landed with it.
 
 Checked while auditing and found already correct: `feed_correction` copies the
 mistaken exemplar's own model and version rather than stamping the current
@@ -95,18 +111,23 @@ the fact — there is nothing left to compare against.
 
 The full table is in ADR-0037's second amendment; the shape of it is:
 
-- **Unconstrained, as the product ships:** ReDimNet2 leads DER by 3.12 points
-  on dev and 4.02 on held-out test, all of it confusion (Q140, Q143).
+- **The existing unconstrained path, each model at its own dev-selected merge
+  threshold:** ReDimNet2 leads DER by 3.12 points on dev and 4.02 on held-out
+  test, all of it confusion (Q140, Q143). Not the shipped configuration —
+  production runs one threshold of 0.60 whatever the model, and WeSpeaker was
+  given 0.65 here so each model was judged at its own best measured dev point.
 - **With a same-window cannot-link constraint** built only from segmentation
   provenance and never from the reference: WeSpeaker gains 5.13 held-out points
   and ReDimNet2 gains 0.68, and **the DER ranking reverses** — 23.51% against
   23.94% (Q147, Q149, Q150). Harness-only; production still runs the
   unconstrained clusterer.
 - **Recognition, under the constraint, at points declared before the split was
-  looked at:** ReDimNet2 is better on all four reported quantities, +2239.300s
-  correct returning and −402.720s wrong (Q151–Q153). Both constrained
-  configurations are nonetheless *worse* on returning time than their own
-  earlier unconstrained replay, so the DER gain is not a recognition gain.
+  looked at:** ReDimNet2 is better on all four reported quantities — net
+  +2239.300s correct returning and −402.720s wrong (Q151–Q153). Both
+  constrained configurations are nonetheless worse on returning time than their
+  own earlier unconstrained replay, so the DER gain is not a recognition gain.
+  All of these are net bucket differences between runs; no paired per-segment
+  transition was measured, so no bucket can be said to have fed another.
 
 So the two halves of ticket 06 now disagree, and that is the finding rather than
 a problem to resolve by averaging. They measure different things.
@@ -116,14 +137,18 @@ a problem to resolve by averaging. They measure different things.
 **The split-model option is unmeasured.** Every run above moves the clustering
 embedding and the recognition embedding together, so "WeSpeaker wins DER,
 ReDimNet2 wins recognition" does **not** establish that taking one of each
-combines their benefits. Decoupling them is a run nobody has done.
+combines their benefits. Decoupling them is a run nobody has done — and it is
+conditional on the split question being reopened, not a prerequisite for
+keeping one model, which is what the build does today and goes on doing.
 
-Two decisions are the user's and are outstanding: whether a 2.0-point DER
-improvement is the adoption bar, and what rate of exchange holds between a
-correct and a wrong attributed second. Nothing here assigns either. Q152's rule
-holds throughout: measurements, mechanism hypotheses and utility judgements stay
-separately labelled, and a sentence that ranks two outcomes is a utility
-judgement however it is phrased.
+**Two decisions are the user's and are outstanding:** whether ≥ 2.0 points of
+DER is the adoption bar, and whether to pursue the split-model architecture at
+all. **Separately unresolved, and not a substitute for either:** the rate of
+exchange between a correct and a wrong attributed second, without which the
+recognition column cannot be collapsed to one ranking. Nothing here assigns any
+of the three. Q152's rule holds throughout: measurements, mechanism hypotheses
+and utility judgements stay separately labelled, and a sentence that ranks two
+outcomes is a utility judgement however it is phrased.
 
 ### The rig
 
@@ -149,25 +174,35 @@ prints which model and file it believes it holds.
 Three things per split, over AMI test (16 meetings) and dev (18):
 
 - **DER** — what the product scores end to end.
-- **the oracle ceiling** — one centroid per person per meeting, built from the
-  reference. What perfect clustering would hand the matcher, so what it reaches
-  is the embedding's own ceiling and the gap below it is our clustering's.
+- **the oracle floor** — the same hypothesis spans relabelled with reference
+  identities, so it is what this pipeline would score with labelling error
+  removed and nothing else changed.
 - **a chronological enrollment replay** — meetings in declared order onto a
   fresh store, scored as reference-transcript speaker-time, reported as correct
   and wrong seconds for returning people and for newcomers separately.
 
 **Withdrawn: cross-meeting EER and nearest-voice-right.** Both are all-pairs
-metrics whose denominators move with the cluster count, so a model or threshold
-that fragments more scores better on them for no better reason than that its
-fragments are small and pure — nearest-voice-right runs from 33.3% at merge
-threshold 0.30 to 72.4% at 0.90 while DER goes from 37% to 86% (Q140). They
-cannot compare two models that fragment differently, and every figure this
-branch reported from them is withdrawn. The enrollment replay is what replaced
-them; it asks the same question with a denominator that does not move.
+metrics whose trial count moves with the cluster count: across the merge sweep
+nearest-voice-right rises monotonically from 33.3% at 0.30 to 72.4% at 0.90
+while DER over the same range goes from 37% to 86% (Q140), so they improve
+exactly where the partition is getting worse. Fragmentation is the available
+explanation for that co-movement and is not established as the mechanism by it;
+what is certain is that the arms' trial counts differ by orders of magnitude
+(2.28M against 50k), so the two models are not being asked the same question.
+Every figure this branch reported from them is withdrawn. The enrollment replay
+is what replaced them; its denominator is reference speaker-time and does not
+move with the partition.
 
-The oracle ceiling is the one that matters most here: without it a DER
-comparison folds embedding quality and clustering quality into one number and
-attributes the result to whichever was moved.
+**What the oracle floor is and is not.** It is conditional on this
+segmentation and this reconstruction — `oracle_relabel` relabels the
+*hypothesis* spans, so missed speech and false alarm survive it untouched and
+only labelling error is removed. It is therefore not an embedding ceiling, and
+a DER bar below it does not show that segmentation alone is the cause; it shows
+only that something upstream of the embedding has to move. It also flatters
+recognition badly if read that way: its centroids are one per person **per
+whole meeting**, minutes of speech each, where real enrollment mints a Speaker
+from as little as `MIN_SPEAKER_MS` — ten seconds. A separability measured at
+whole-meeting duration says nothing about what a ten-second cluster can do.
 
 ### Reproducing
 
@@ -196,12 +231,12 @@ The other knobs, all harness-side and all unset in production:
 
 | Variable | What it does |
 |---|---|
-| `EVERTRANSCRIPT_MERGE_SWEEP=1` | Sweep the merge threshold instead of scoring one |
+| `EVERTRANSCRIPT_MERGE_SWEEP` | The merge thresholds to score, as a **comma-separated numeric list** (`0.55,0.60,0.65`). Unset is one pass at the shipped `MERGE_THRESHOLD`. It is not a flag: `=1` scores the single threshold 1.0 |
 | `EVERTRANSCRIPT_CANNOT_LINK=1` | Enforce segmentation's same-window cannot-link pairs, in both scoring and the replay |
 | `EVERTRANSCRIPT_SEGMENT_STEP_MS` | How far the segmentation window advances; unset is the 10 s default |
 | `EVERTRANSCRIPT_REPLAY_MANIFEST` | The chronological enrollment replay's meeting order (`tests/ami-replay-{dev,test}.manifest`) |
 | `EVERTRANSCRIPT_REPLAY_EVENTS` | Where to write the replay's per-person, per-meeting rows |
-| `EVERTRANSCRIPT_REPLAY_PAIR` | Score one named pair of meetings rather than the whole manifest |
+| `EVERTRANSCRIPT_REPLAY_PAIR` | Two comma-separated **event-file paths**. Joins two ledgers that already ran and reports the pairing; replays nothing and needs no corpus |
 | `EVERTRANSCRIPT_MATCHER_GRID=1` | Replay the whole floor × margin grid |
 | `EVERTRANSCRIPT_MATCHER_POINTS` | Replay an explicit `floor:margin` list instead of the grid |
 

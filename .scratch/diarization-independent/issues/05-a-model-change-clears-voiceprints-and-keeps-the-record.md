@@ -1,0 +1,110 @@
+# 05: A model change clears Voiceprints and keeps the record
+
+Rewritten 2026-09-16 against `main`. The ticket of the same number on
+`diarization-pyannote-redimnet2` is marked done there and did not land here;
+what follows replaces it. **The policy is unchanged** — only the starting
+state it is written against has moved.
+
+**Parent:** `docs/prd.md` (Speakers & diarization, stories 33b–33i) and
+ADR-0037.
+
+**Blocked by:** nothing. Ticket 04 has landed (`ba8a491`), which is what makes
+"the model changed" a question the code can answer.
+
+**Status:** ready, not started. Not activated — see *Activation* below.
+
+## What to build
+
+The migration, landing **before** the model it exists for, so that a swap is a
+registry change rather than a cliff.
+
+When the embedding changes, old and new vectors cannot be compared. ADR-0037
+chose the wipe over re-embedding the old exemplars' stored sample offsets, for
+a stated reason that still holds: **those offsets are the old model's choice of
+cuts, where the Operator's naming is a statement about a whole cluster.** The
+re-learning therefore belongs in ticket 12, from attributed whole clusters and
+the Operator's corrections, and not here.
+
+The migration removes every Voiceprint and every exemplar and keeps everything
+the Operator would notice losing: every Speaker row, every name, the Operator
+flag, every segment attribution, every correction hint. A named Speaker with no
+Voiceprint is an ordinary state afterwards, and the Voice Registry says why it
+has none rather than showing an unexplained empty row.
+
+It is a versioned migration in the existing append-only sequence, and it is
+tested over a file-backed database, because the claim is about what the next
+Core opens rather than about in-memory state.
+
+## What changed since the branch wrote this
+
+Three things, none of which touches the policy.
+
+**Main grew a different mechanism for the same event** (Q115, ADR-0035 as
+amended). `store::speakers::stale_exemplars` finds every exemplar from another
+space; `diarize::runner::rebuild` re-embeds each from the sample window it
+kept; `cluster::adopt_rebuilt` adopts them in the next Diarization's own
+transaction. It is lazy, per-Meeting, and it re-embeds **the old model's cuts**
+— the thing this ADR rejected. It rebuilds evidence and never re-runs
+attribution. It is not this ticket, and this ticket is not redundant to it.
+
+So the migration has to say what happens to that path, and the answer is that
+it goes quiet on its own: after the wipe there are no stale exemplars to find,
+so `stale_exemplars` returns empty and `rebuild` is a no-op until ticket 12
+writes new evidence. **That must be asserted, not assumed** — a migration that
+left rows behind for the lazy path to resurrect would reintroduce the old
+model's cuts through the back door.
+
+**Ticket 04 landed, so the identity is now checkable.** `registry::
+DIARIZE_EMBEDDING.voiceprint()` is the single source of what the current model
+stamps, and the migration can be written against it instead of a constant.
+
+**The migration index moved.** Main is at 14; the branch's wipe was its 15th.
+Whatever number it takes here, `the_second_you_is_reduced_to_one_and_then_made_
+impossible` and its neighbours pin their own indices and must be checked
+against the new length rather than `MIGRATIONS.len() - 1`.
+
+## Acceptance criteria
+
+- [ ] A History carrying old-model Voiceprints migrates with every Speaker,
+      name, flag, attribution and correction hint intact and no exemplar left
+- [ ] `stale_exemplars` returns empty immediately after the migration, so the
+      lazy rebuild path cannot reintroduce the old model's cuts
+- [ ] Tested over a file-backed database, closed and reopened
+- [ ] The Registry states the reason a named Speaker holds no Voiceprint
+- [ ] Migrations stay idempotent and the schema version advances by one
+- [ ] Every migration-index assertion still names the migration it means
+
+## Activation
+
+**This migration must not run against a real History until the model decision
+is made.** Landing it while WeSpeaker remains the model would clear Voiceprints
+for no swap. Two exact dependencies:
+
+1. The model choice (ticket 06) is settled by the user. Both reserved decisions
+   — the ≥ 2.0-point bar, and whether to pursue split models — are open.
+2. Ticket 12 exists, because a wipe with no re-run is a History nobody is
+   recognized in, which ADR-0037's *Considered options* already rejected.
+
+Until both hold, the migration can be **written and tested** but is not added
+to `MIGRATIONS`. That is the safe groundwork boundary: a tested migration
+behind an unapplied entry costs nothing and removes the cliff later.
+
+## A proposal for the user, not a decision taken
+
+The lazy rebuild path answers the same event more cheaply than wipe-and-re-run:
+no multi-hour background job, no renumbered pseudonyms, and a named Speaker is
+recognizable again the next time its Meeting is diarized. It is worse on two
+counts ADR-0037 named — it uses the old model's cuts rather than the Operator's
+confirmation of a whole cluster, and it never re-runs attribution, so an
+already-diarized Meeting keeps the old model's turns.
+
+It also has an unmeasured cost: a Speaker whose exemplars have no sample window
+or whose Meeting is gone loses its Voiceprint under it, and nothing has measured
+how often that is. The rebuild has never been exercised against a real model
+change on a populated History — only through its seams — so "recognition
+survives a model change" is not currently supported.
+
+**Whether the lazy path should replace the policy is the user's call and is not
+taken here.** If it does, 05 and 12 both close and what replaces them is a
+much smaller ticket: measure the window-less exemplar rate on a real History,
+and decide whether attribution needs re-running at all.

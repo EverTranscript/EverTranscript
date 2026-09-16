@@ -157,30 +157,6 @@ pub fn resolve_with(
     margin: f32,
 ) -> BTreeMap<Cluster, Resolved> {
     let mut resolved = BTreeMap::new();
-
-    // A Voiceprint from another model is not a candidate, however close the
-    // numbers come out. [`cosine`] already refuses a dimension mismatch,
-    // which is all that stood between the ReDimNet2 A/B and a silent
-    // cross-space match: its vectors are 192 wide against WeSpeaker's 256,
-    // so every such score was zero. Two models of the same width would have
-    // scored, and the match would have looked like any other.
-    //
-    // Every cluster in one call comes from one pass, so the space is the
-    // first one's. A caller that mixes passes is asking a question that has
-    // no answer, and gets no seeds rather than a plausible wrong one.
-    let space = clusters
-        .values()
-        .next()
-        .map(|one| (one.model.as_str(), one.model_version.as_str()));
-    let seeds: Vec<&SeedVoice> = seeds
-        .iter()
-        .filter(|seed| {
-            space.is_some_and(|(model, version)| {
-                seed.model == model && seed.model_version == version
-            })
-        })
-        .collect();
-
     if seeds.is_empty() {
         for cluster in clusters.keys() {
             resolved.insert(*cluster, Resolved::New);
@@ -188,15 +164,38 @@ pub fn resolve_with(
         return resolved;
     }
 
-    // Every pairwise score once. Cheap — clusters are single digits and
-    // seeds are bounded — and it makes the mutual-best check a lookup rather
-    // than a second pass over the models.
+    // Every pairwise score once, **and only where the pair is in one space**.
+    // Cheap — clusters are single digits and seeds are bounded — and it makes
+    // the mutual-best check a lookup rather than a second pass over the
+    // models.
+    //
+    // A Voiceprint from another model is not a candidate, however close the
+    // numbers come out. [`cosine`] already refuses a dimension mismatch,
+    // which is all that stood between the ReDimNet2 A/B and a silent
+    // cross-space match: its vectors are 192 wide against WeSpeaker's 256,
+    // so every such score was zero. Two models of the same width would have
+    // scored, and the match would have looked like any other.
+    //
+    // The test is per pair rather than per batch. Taking the space from the
+    // first cluster and filtering the seeds once would be right only if
+    // every cluster in the call were in that space, which nothing here can
+    // promise: a caller passing clusters from two passes would have had its
+    // second pass scored against the first pass's seeds, which is the very
+    // comparison this exists to refuse. An absent entry is a non-candidate
+    // everywhere below, including in the mutual-best check, so a cluster in
+    // another space cannot take a seed away from one that could have had it.
     let scores: BTreeMap<(Cluster, usize), f32> = clusters
         .iter()
         .flat_map(|(cluster, embedding)| {
-            seeds.iter().enumerate().map(move |(index, seed)| {
-                ((*cluster, index), cosine(&embedding.vector, &seed.vector))
-            })
+            seeds
+                .iter()
+                .enumerate()
+                .filter(move |(_, seed)| {
+                    seed.model == embedding.model && seed.model_version == embedding.model_version
+                })
+                .map(move |(index, seed)| {
+                    ((*cluster, index), cosine(&embedding.vector, &seed.vector))
+                })
         })
         .collect();
 
@@ -204,7 +203,7 @@ pub fn resolve_with(
         let mut ranked: Vec<(usize, f32)> = seeds
             .iter()
             .enumerate()
-            .map(|(index, _)| (index, scores[&(*cluster, index)]))
+            .filter_map(|(index, _)| Some((index, *scores.get(&(*cluster, index))?)))
             .collect();
         // Confirmed Voiceprints outrank unconfirmed ones at equal score
         // (ADR-0008 as amended): the Operator vouched for one of them.
@@ -257,6 +256,7 @@ fn best_cluster_for(
 ) -> Option<Cluster> {
     clusters
         .keys()
+        .filter(|cluster| scores.contains_key(&(**cluster, seed_index)))
         .max_by(|a, b| scores[&(**a, seed_index)].total_cmp(&scores[&(**b, seed_index)]))
         .copied()
 }
@@ -929,6 +929,51 @@ mod tests {
             resolve(&this_meeting, &[elsewhere])[&Cluster(0)],
             Resolved::New
         );
+    }
+
+    /// The batch is not assumed homogeneous, because nothing makes it so.
+    ///
+    /// The first version of this guard read the space off
+    /// `clusters.values().next()` and filtered the seeds once. That is right
+    /// only if every cluster in the call is in that space — and a caller that
+    /// mixed two passes would have had its second pass scored against the
+    /// first pass's seeds, the exact comparison the guard exists to refuse.
+    /// Both mixtures are here because model and version are separate columns
+    /// and a check on one is not a check on the other.
+    #[test]
+    fn a_mixed_batch_does_not_let_the_first_clusters_space_speak_for_the_rest() {
+        let with_space = |vector: &[f32], model: &str, version: &str| {
+            Embedding::new(vector.to_vec(), model, version, 30_000)
+        };
+        let alice = seed("alice", &[1.0, 0.0], true);
+
+        for (label, elsewhere) in [
+            ("another model", with_space(&[1.0, 0.0], "other", "1")),
+            ("another version", with_space(&[1.0, 0.0], "test", "9")),
+        ] {
+            // Cluster 0 is in the seed's space and is the same voice;
+            // cluster 1 is an identical vector from somewhere else.
+            let mixed: BTreeMap<Cluster, Embedding> = [
+                (Cluster(0), with_space(&[1.0, 0.0], "test", "1")),
+                (Cluster(1), elsewhere),
+            ]
+            .into_iter()
+            .collect();
+            let resolved = resolve(&mixed, std::slice::from_ref(&alice));
+            assert_eq!(
+                resolved[&Cluster(1)],
+                Resolved::New,
+                "{label}: scored against a seed it shares no space with"
+            );
+            // And the out-of-space cluster must not have taken the seed
+            // away from the cluster that could legitimately have it: it is
+            // not a candidate anywhere, including in the mutual-best check.
+            assert_eq!(
+                resolved[&Cluster(0)],
+                Resolved::Existing("alice".into()),
+                "{label}: the in-space cluster lost its own match to it"
+            );
+        }
     }
 
     /// A version bump is a different space, and reads as one.
