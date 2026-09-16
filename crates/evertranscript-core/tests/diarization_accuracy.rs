@@ -24,6 +24,7 @@
 //!   cargo test -p evertranscript-core --test diarization_accuracy -- --nocapture
 //! ```
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -215,6 +216,94 @@ struct Measured {
     seconds: f64,
     audio_seconds: f64,
     embeddings: Vec<(String, Vec<f32>)>,
+    /// Pre-merge window vectors, each labelled by the reference speaker who
+    /// holds most of it. The raw material for the oracle ceiling.
+    windows: Vec<(String, Vec<f32>)>,
+}
+
+/// The reference speaker holding most of these milliseconds, if any is.
+///
+/// A window straddling a speaker change belongs to whoever is in most of it;
+/// one that is all silence or all overlap belongs to nobody and is dropped,
+/// because a vector with no owner cannot say anything about the embedding.
+fn dominant_speaker(ranges: &[(u64, u64)], reference: &[Span]) -> Option<String> {
+    let mut held: BTreeMap<&str, u64> = BTreeMap::new();
+    for (start, end) in ranges {
+        for span in reference {
+            let overlap = (*end)
+                .min(span.end_ms)
+                .saturating_sub((*start).max(span.start_ms));
+            if overlap > 0 {
+                *held.entry(span.speaker.as_str()).or_default() += overlap;
+            }
+        }
+    }
+    held.into_iter()
+        .max_by_key(|(_, ms)| *ms)
+        .map(|(who, _)| who.to_string())
+}
+
+/// One unit-length centroid per (meeting, reference speaker), built from every
+/// window that speaker owns.
+///
+/// This is what perfect clustering would hand the matcher, so the accuracy it
+/// reaches is the embedding's own ceiling — and the gap between it and the
+/// shipped numbers is our clustering's, not the model's. It is the only
+/// measurement here that separates the two, which is why an A/B that moves
+/// only the embedding needs it.
+fn oracle_voices(measured: &[Measured]) -> Vec<(String, Labelled)> {
+    measured
+        .iter()
+        .map(|one| {
+            let mut sums: BTreeMap<String, (Vec<f32>, usize)> = BTreeMap::new();
+            for (who, vector) in &one.windows {
+                let slot = sums
+                    .entry(who.clone())
+                    .or_insert_with(|| (vec![0.0; vector.len()], 0));
+                if slot.0.len() == vector.len() {
+                    for (into, from) in slot.0.iter_mut().zip(vector) {
+                        *into += from;
+                    }
+                    slot.1 += 1;
+                }
+            }
+            let voices = sums
+                .into_iter()
+                .map(|(who, (sum, count))| {
+                    let mean: Vec<f32> = sum.iter().map(|v| v / count as f32).collect();
+                    let norm = mean.iter().map(|v| v * v).sum::<f32>().sqrt();
+                    let unit = if norm == 0.0 {
+                        mean
+                    } else {
+                        mean.iter().map(|v| v / norm).collect()
+                    };
+                    (who, unit)
+                })
+                .collect();
+            (one.name.clone(), voices)
+        })
+        .collect()
+}
+
+/// Voices labelled by who they belong to, for one meeting.
+type Labelled = Vec<(String, Vec<f32>)>;
+
+/// Every cross-meeting pair drawn from labelled voices.
+fn cross_meeting_pairs(meetings: &[(String, Labelled)]) -> Vec<Trial> {
+    let mut trials = Vec::new();
+    for (index, (_, left)) in meetings.iter().enumerate() {
+        for (_, right) in &meetings[index + 1..] {
+            for (left_name, left_vector) in left {
+                for (right_name, right_vector) in right {
+                    trials.push(Trial {
+                        score: cosine(left_vector, right_vector),
+                        same_speaker: left_name == right_name,
+                    });
+                }
+            }
+        }
+    }
+    trials
 }
 
 fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured {
@@ -241,8 +330,31 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
             .expect("diarize");
     let seconds = started.elapsed().as_secs_f64();
 
+    // A second pass for the pre-merge windows. It pays the inference twice,
+    // which at 0.02x real time is a minute a split, and it is the price of
+    // the harness scoring exactly what production clusters rather than a
+    // re-implementation of it that can drift.
+    let windows = diarizer
+        .observe(
+            diarize::MeetingAudio {
+                mic: &samples,
+                system: &[],
+                sample_rate: diarize::fbank::SAMPLE_RATE,
+            },
+            &mut |_| {},
+            &diarize::Cancel::new(),
+        )
+        .expect("observe")
+        .into_iter()
+        .filter_map(|observation| {
+            let who = dominant_speaker(&observation.runs, &reference)?;
+            Some((who, observation.vector))
+        })
+        .collect();
+
     let spans = hypothesis(&result.turns);
     Measured {
+        windows,
         name: meeting.name.clone(),
         der: score::der(&reference, &spans),
         oracle: score::der(&reference, &score::oracle_relabel(&spans, &reference)),
@@ -380,6 +492,70 @@ fn the_pipeline_scores_what_the_record_says_it_scores() {
             rate * 100.0
         );
     }
+    // The shipped voiceprints, each against every other meeting's: does the
+    // right person win?
+    let shipped: Vec<(String, Labelled)> = measured
+        .iter()
+        .map(|one| (one.name.clone(), one.embeddings.clone()))
+        .collect();
+    let shipped_candidates: Vec<score::Candidate> = shipped
+        .iter()
+        .flat_map(|(meeting, voices)| {
+            voices.iter().map(move |(who, vector)| score::Candidate {
+                group: meeting,
+                speaker: who,
+                vector,
+            })
+        })
+        .collect();
+    match score::nearest_is_right(&shipped_candidates) {
+        Some(rate) => println!(
+            "nearest voice  {:>5.1}% right   {} voices, each against every other meeting's",
+            rate * 100.0,
+            shipped_candidates.len()
+        ),
+        None => println!("nearest voice  not askable: one meeting's voices have nobody to meet"),
+    }
+
+    // The ceiling. One centroid per person per meeting, built from the
+    // reference rather than from our clustering, so what it reaches is what
+    // the embedding can do and the gap below it is ours to close.
+    let oracle_voices = oracle_voices(&measured);
+    let oracle_candidates: Vec<score::Candidate> = oracle_voices
+        .iter()
+        .flat_map(|(meeting, voices)| {
+            voices.iter().map(move |(who, vector)| score::Candidate {
+                group: meeting,
+                speaker: who,
+                vector,
+            })
+        })
+        .collect();
+    let oracle_pairs = cross_meeting_pairs(&oracle_voices);
+    println!(
+        "\noracle voices  {} voices from perfect clustering — the ceiling any threshold aims at",
+        oracle_candidates.len()
+    );
+    match score::equal_error_rate(&oracle_pairs) {
+        Some((rate, threshold)) => println!(
+            "  cross-meeting EER {:.2}% at {threshold:.3}   {} trials",
+            rate * 100.0,
+            oracle_pairs.len()
+        ),
+        None => println!("  cross-meeting EER not computable"),
+    }
+    match score::nearest_is_right(&oracle_candidates) {
+        Some(rate) => println!("  nearest voice     {:.1}% right", rate * 100.0),
+        None => println!("  nearest voice     not askable"),
+    }
+    match score::refusal_point(&oracle_pairs) {
+        Some((threshold, refused)) => println!(
+            "  floor that admits nobody: {threshold:.3}, refusing {:.2}% of genuine pairs",
+            refused * 100.0
+        ),
+        None => println!("  floor that admits nobody: no impostor pairs to refuse"),
+    }
+
     let total_seconds: f64 = measured.iter().map(|one| one.seconds).sum();
     let total_audio: f64 = measured.iter().map(|one| one.audio_seconds).sum();
     println!(
