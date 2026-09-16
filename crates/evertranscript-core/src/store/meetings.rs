@@ -322,6 +322,38 @@ pub fn set_audio_path(connection: &Connection, id: &str, audio_path: &str) -> Re
     Ok(())
 }
 
+/// Records whether the far end could have reached the microphone.
+///
+/// A fact about the recording, written when the recording ends, because the
+/// audio itself no longer says: by the time diarization runs, which output
+/// device was playing and whether the microphone was swapped are gone. It is
+/// the first of ADR-0029's three rules for naming the Operator, and the only
+/// one that needs no act and no Voiceprint.
+pub fn set_mic_isolated(connection: &Connection, id: &str, isolated: bool) -> Result<()> {
+    connection.execute(
+        "UPDATE meetings SET mic_isolated = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, i64::from(isolated), now_rfc3339()],
+    )?;
+    Ok(())
+}
+
+/// What the capture layer concluded, or `None` where it never said.
+///
+/// `None` is a Meeting recorded before the column existed or one whose probe
+/// failed, and it is deliberately not the same answer as `Some(false)` —
+/// only `Some(true)` grants the rule, but a re-run over History needs to
+/// tell a "no" from a question nobody asked.
+pub fn mic_isolated(connection: &Connection, id: &str) -> Result<Option<bool>> {
+    let value: Option<Option<i64>> = connection
+        .query_row(
+            "SELECT mic_isolated FROM meetings WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(value.flatten().map(|flag| flag != 0))
+}
+
 /// Records what this recording lost, so the Meeting says so.
 pub fn set_audio_notes(connection: &Connection, id: &str, notes: &[String]) -> Result<()> {
     let encoded = serde_json::to_string(notes)?;
@@ -862,6 +894,41 @@ mod tests {
                 .notes
                 .as_deref(),
             Some("the thing I must not forget")
+        );
+    }
+
+    #[test]
+    fn whether_the_microphone_was_isolated_has_three_answers() {
+        // Not two. "Nobody asked" is every Meeting recorded before this
+        // shipped and every machine whose output device cannot be
+        // classified, and a re-run walking all of History (ticket 12) has
+        // to tell that apart from "asked, and the room was audible".
+        let connection = connection();
+        let meeting = start(&connection, None, None).expect("meeting");
+
+        assert_eq!(
+            mic_isolated(&connection, &meeting.id).expect("read"),
+            None,
+            "a Meeting starts out never having been asked"
+        );
+
+        set_mic_isolated(&connection, &meeting.id, true).expect("write");
+        assert_eq!(
+            mic_isolated(&connection, &meeting.id).expect("read"),
+            Some(true)
+        );
+
+        set_mic_isolated(&connection, &meeting.id, false).expect("write");
+        assert_eq!(
+            mic_isolated(&connection, &meeting.id).expect("read"),
+            Some(false),
+            "and a later run may say otherwise"
+        );
+
+        assert_eq!(
+            mic_isolated(&connection, "no such meeting").expect("read"),
+            None,
+            "a Meeting that is not there is not an error to ask about"
         );
     }
 }

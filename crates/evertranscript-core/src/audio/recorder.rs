@@ -39,6 +39,14 @@ pub struct RecordingOutcome {
     pub degraded: Vec<String>,
     /// How many Transcript segments this recording produced.
     pub segments: usize,
+    /// Whether the far end could have reached the microphone — headphones
+    /// throughout and the microphone never swapped. `None` where capture
+    /// could not tell, which is not the same answer as `Some(false)`.
+    ///
+    /// Gathered here because only the recording knows: by the time
+    /// diarization asks who the Operator is, the audio no longer says what
+    /// was plugged in (ADR-0029's first rule).
+    pub mic_isolated: Option<bool>,
 }
 
 /// Everything a recording needs in order to caption itself.
@@ -160,6 +168,10 @@ async fn run(
     // failure once something has been playing through it. The microphone has
     // no such excuse; a quiet room still produces frames of zeros.
     let mut ticks_with_playback = 0u32;
+    let mut isolation = super::system::MicIsolation::default();
+    // One reading before the first tick, so a Meeting shorter than the
+    // watchdog's grace period still has an answer.
+    isolation.observe(super::system::output_is_headphones());
     let mut watchdog = tokio::time::interval(SILENT_LEG_GRACE);
     watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // The first tick is immediate; the grace period starts after it.
@@ -204,6 +216,7 @@ async fn run(
                     if super::system::output_is_active() == Some(true) {
                         ticks_with_playback += 1;
                     }
+                    isolation.observe(super::system::output_is_headphones());
                     for (index, channel) in [AudioChannel::Mic, AudioChannel::System]
                         .into_iter()
                         .enumerate()
@@ -239,6 +252,7 @@ async fn run(
             }
         };
 
+        isolation.note(&event);
         match policy.decide(&event) {
             Action::Continue => {}
             Action::RestartLeg { channel, after, .. } => {
@@ -331,6 +345,7 @@ async fn run(
         seconds,
         degraded,
         segments: transcribed,
+        mic_isolated: isolation.verdict(),
     });
 }
 

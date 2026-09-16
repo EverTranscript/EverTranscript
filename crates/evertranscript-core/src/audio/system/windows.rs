@@ -165,3 +165,55 @@ pub fn available() -> std::result::Result<(), String> {
         }
     }
 }
+
+/// Whether the machine's default output goes into someone's ears rather
+/// than into the room.
+///
+/// WASAPI answers this outright: every endpoint carries a form factor, and
+/// `Headphones` and `Headset` are two of its values. Windows is the easier
+/// platform here — the macOS side has to infer it from a transport type.
+///
+/// The failure that costs the most is the *false* `true`: a speakerphone
+/// reported as a headset would make every voice in that room "You". So
+/// anything this cannot classify is `None`, which callers read as "cannot
+/// tell" and never as "no".
+pub(crate) fn output_is_headphones() -> Option<bool> {
+    use windows::Win32::Media::Audio::EndpointFormFactor;
+    use windows::Win32::Media::Audio::Headphones;
+    use windows::Win32::Media::Audio::Headset;
+    use windows::Win32::Media::Audio::IMMDeviceEnumerator;
+    use windows::Win32::Media::Audio::MMDeviceEnumerator;
+    use windows::Win32::Media::Audio::eMultimedia;
+    use windows::Win32::Media::Audio::eRender;
+    use windows::Win32::Media::Audio::{RemoteNetworkDevice, SPDIF, UnknownFormFactor};
+    use windows::Win32::System::Com::CLSCTX_ALL;
+    use windows::Win32::System::Com::COINIT_MULTITHREADED;
+    use windows::Win32::System::Com::CoCreateInstance;
+    use windows::Win32::System::Com::CoInitializeEx;
+    use windows::Win32::System::Com::STGM_READ;
+    use windows::Win32::Media::Audio::PKEY_AudioEndpoint_FormFactor;
+
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerator =
+            CoCreateInstance::<_, IMMDeviceEnumerator>(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .ok()?;
+        let device = enumerator
+            .GetDefaultAudioEndpoint(eRender, eMultimedia)
+            .ok()?;
+        let store = device.OpenPropertyStore(STGM_READ).ok()?;
+        let value = store.GetValue(&PKEY_AudioEndpoint_FormFactor).ok()?;
+        let form = EndpointFormFactor(u32::try_from(&value).ok()? as i32);
+
+        if form == Headphones || form == Headset {
+            return Some(true);
+        }
+        // Unknown, remote and digital passthrough could be anything; every
+        // other value — speakers, a line out, a microphone-shaped endpoint —
+        // is something in the room.
+        if form == UnknownFormFactor || form == RemoteNetworkDevice || form == SPDIF {
+            return None;
+        }
+        Some(false)
+    }
+}

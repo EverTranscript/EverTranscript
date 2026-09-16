@@ -11,7 +11,7 @@
 //! the frames it holds with everybody else's removed, all those vectors are
 //! clustered together, and the timeline is then rebuilt per voice:
 //!
-//!   1. [`LiveDiarizer::segment`] runs the window across the channel and
+//!   1. `LiveDiarizer::segment` runs the window across the channel and
 //!      keeps per-frame *per-speaker* activation, not a speaker count.
 //!   2. Each (window, local speaker) with at least [`MIN_EMBED_MS`] of
 //!      speech is embedded from its own frames alone.

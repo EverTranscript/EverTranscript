@@ -1615,3 +1615,43 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The constraint would change `agglomerate`'s signature and the 34 tests around it, to guard against something the masking is supposed to prevent: each local speaker is embedded from its own frames with the others removed, so two genuinely different voices should not land close. It cannot be falsified by the fixtures, whose vectors are orthogonal, so only the corpus can say whether it is needed. Recorded in the ticket as the thing to watch for in that run; the fix is cheap if it is needed, because each group already carries its members.
 **Outcome:** assumed
 **Ref:** ba1f517
+
+## Q126 — diarization-pyannote-redimnet2/11 — tradeoff
+
+**Question:** Rule 1 says an isolated microphone makes every mic-channel voice the Operator. In a shared room where the Operator happens to be wearing headphones, that names a colleague "You" — which rule 2 exists to refuse. Follow the rule as written, or narrow it to fire only when the isolated mic carries a single voice?
+**Options considered:** as written, naming every mic-channel cluster / narrowed to the single-voice case / drop rule 1 and rely on dominance plus the Voiceprint
+**Chosen:** As written. `Identified::IsolatedMic` carries a `Vec<Cluster>`, and `an_isolated_microphone_identifies_the_operator_with_no_act` asserts the two-voice consequence rather than hiding it.
+**Decided-by:** agent
+**Justification:** Ticket 11 states rule 1 in those words — "makes every mic-channel cluster of that Meeting the Operator" — and the two criteria coexist because the shared-room criterion is asserted on a Meeting carrying no isolated-mic fact. Narrowing it would have been me overruling the spec on a case the spec had in view. The residual risk is a real one and it is the reason the probe underneath is conservative: what actually fires rule 1 is `mic_isolated == Some(true)`, and that needs headphones on every reading plus a microphone that was never swapped. Flagged for confirmation.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q127 — diarization-pyannote-redimnet2/11 — tradeoff
+
+**Question:** macOS reports a transport type, not "headphones". Bluetooth is AirPods almost always and a Bluetooth speaker occasionally, and CoreAudio does not distinguish them. Count Bluetooth as headphones?
+**Options considered:** yes, Bluetooth is headphones / no, only the built-in jack's `hdpn` data source counts / defer the whole question to the echo canceller's idle signal
+**Chosen:** Yes. Bluetooth and BluetoothLE report `Some(true)`; built-in resolves through the data source; HDMI, DisplayPort and AirPlay report `Some(false)`; USB, aggregate and everything else report `None`.
+**Decided-by:** agent
+**Justification:** Restricting rule 1 to the 3.5 mm jack would exclude the common case and leave the rule nearly dead. Granola reaches the same conclusion — its native audio library exposes `outputDeviceIsHeadphones` and uses it to turn echo cancellation off, which is the same "the far end cannot reach the microphone" claim. The residual false positive is a Bluetooth speaker in a shared room, and `MicIsolation` narrows it: every reading across the Meeting must say headphones and the microphone must not have been swapped. The AEC idle signal remains available as the ticket's named fallback if this proves wrong in the field; it is not wired in, because wiring a second signal before the first has been shown to fail is guessing twice.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q128 — diarization-pyannote-redimnet2/11 — gate-resolution
+
+**Question:** `mic_isolated` is a per-Meeting fact. Two states or three?
+**Options considered:** `NOT NULL DEFAULT 0` / nullable, with NULL meaning nobody asked
+**Chosen:** Nullable. 1 isolated, 0 looked at and not isolated, NULL never asked. `MicIsolation::verdict` returns `None` rather than `Some(false)` whenever any reading was unclassifiable.
+**Decided-by:** agent
+**Justification:** Only 1 grants rule 1, so the other two behave identically today and a boolean would have worked. But `NOT NULL DEFAULT 0` writes "the room was audible" onto every Meeting already on disk, and ticket 12 re-runs all of History — at which point a Meeting that was never asked is indistinguishable from one that was asked and answered no. The column is cheap; the lost distinction is not recoverable.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q129 — diarization-pyannote-redimnet2/11 — deviation
+
+**Question:** Raising `DOMINANCE` from 0.75 to 0.80 makes `DOMINANCE_MARGIN` unreachable: at a share of 0.80 the runner-up holds at most 0.20, so the margin is at least 0.60 and can never fall to the `<= 0.5` that would refuse. Remove the margin check?
+**Options considered:** remove it as dead / keep it
+**Chosen:** Kept.
+**Decided-by:** agent
+**Justification:** Ticket 11 names "80% of mic time, the existing margin, and at least 20 seconds" as the rule, so removing a named component to tidy up would be a silent narrowing of the spec. It costs two comparisons and is correct again the moment `DOMINANCE` is lowered. Noted here because a later reader finding a branch no test can reach deserves to know it was looked at rather than missed. `one_quiet_voice_among_many_does_not_become_the_operator` was resized past `MIN_OPERATOR_MS` so that it is the share refusing, not the new floor — its old numbers passed for a reason the test name did not describe.
+**Outcome:** applied
+**Ref:** (pending)

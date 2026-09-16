@@ -1516,29 +1516,39 @@ impl Core {
                 // Transcript actually contains and mints only those.
                 let segments = crate::store::meetings::segments(&transaction, &meeting_id)?;
                 let reconciliation = diarize::reconcile::reconcile(&diarization, &segments);
-                let assigned = diarize::cluster::persist(
-                    &transaction,
-                    &meeting_id,
-                    &diarization.embeddings,
-                    &reconciliation.voices(),
-                )?;
 
-                // The Operator's own Speaker, where the evidence supports one
-                // (ADR-0029 as amended).
+                // The Operator's Voiceprint is admissible only in a Meeting
+                // big enough for a match to mean anything, and below that
+                // gate it leaves the resolve entirely rather than only the
+                // flag — otherwise it sits among every other seed and
+                // matches anyway, and the gate is decorative (ADR-0029 as
+                // amended).
+                let gate = diarize::operator::match_gate_met(&diarization);
                 let known = match diarize::cluster::embedding_model(&diarization.embeddings) {
                     Some((model, version)) => {
                         diarize::operator::known_operator(&transaction, model, version)?
                     }
                     None => None,
                 };
-                if let Some(mine) = diarize::operator::identify(&diarization, known.as_ref())
-                    && let Some(speaker_id) = assigned.get(&mine)
-                {
-                    transaction.execute(
-                        "UPDATE speakers SET is_operator = 1 WHERE id = ?1",
-                        rusqlite::params![speaker_id],
-                    )?;
-                }
+                let withheld = (!gate).then(|| known.as_ref().map(|seed| seed.speaker_id.clone()));
+                let withheld = withheld.flatten();
+
+                let assigned = diarize::cluster::persist(
+                    &transaction,
+                    &meeting_id,
+                    &diarization.embeddings,
+                    &reconciliation.voices(),
+                    withheld.as_deref(),
+                )?;
+
+                let facts = diarize::operator::MeetingFacts {
+                    mic_isolated: crate::store::meetings::mic_isolated(&transaction, &meeting_id)?,
+                };
+                let found = diarize::operator::identify(
+                    &diarization,
+                    gate.then_some(known.as_ref()).flatten(),
+                    &facts,
+                );
 
                 let written = diarize::reconcile::apply(
                     &transaction,
@@ -1546,6 +1556,12 @@ impl Core {
                     &assigned,
                     crate::store::speakers::Attribution::Clustered,
                 )?;
+
+                // "You", after the attributions are written, because
+                // re-attaching moves segments and they have to exist first.
+                let operator_id =
+                    Self::attach_operator(&transaction, &found, &assigned, &meeting_id)?;
+
                 // The other half of "a re-run replaces the run" (`persist`
                 // did the first): the Speakers the previous run of this
                 // Meeting minted and this one did not re-attribute now own
@@ -1558,6 +1574,8 @@ impl Core {
                     attributed = reconciliation.attributed(),
                     voices = reconciliation.voices().len(),
                     speakers = assigned.len(),
+                    operator = ?operator_id,
+                    operator_rule = ?std::mem::discriminant(&found),
                     swept,
                     "diarization reconciled"
                 );
@@ -1567,6 +1585,63 @@ impl Core {
 
         self.mirror_wake.notify_one();
         Ok(written)
+    }
+
+    /// Points "You" at the Speakers this run identified as the Operator.
+    ///
+    /// **Re-attaches rather than mints.** Where a Speaker is already flagged
+    /// it stays the Operator and this run's voices are folded into it. The
+    /// old code set the flag on whatever Speaker the identified cluster had
+    /// just been given, which was a fresh row whenever the Operator's
+    /// Voiceprint had been deleted — so the flag landed on the new row, the
+    /// lookup kept returning the old one, and the Registry showed two "You".
+    ///
+    /// A named Speaker is never folded away. Rule 1 names every mic-channel
+    /// voice, and in a room where one of them is a colleague History already
+    /// knows by name, resolving that contradiction by deleting the name
+    /// would be the worst of the available answers.
+    fn attach_operator(
+        connection: &rusqlite::Connection,
+        found: &crate::diarize::operator::Identified,
+        assigned: &std::collections::BTreeMap<crate::diarize::Cluster, String>,
+        meeting_id: &str,
+    ) -> Result<Option<String>> {
+        use crate::store::speakers;
+
+        let mine: Vec<String> = found
+            .clusters()
+            .iter()
+            .filter_map(|cluster| assigned.get(cluster).cloned())
+            .collect();
+        if mine.is_empty() {
+            return Ok(None);
+        }
+
+        let target = match speakers::operator(connection)? {
+            Some(existing) => existing.id,
+            None => mine[0].clone(),
+        };
+
+        for speaker_id in &mine {
+            if *speaker_id == target {
+                continue;
+            }
+            let Some(source) = speakers::get(connection, speaker_id)? else {
+                continue;
+            };
+            if source.display_name.is_some() {
+                tracing::warn!(
+                    meeting_id,
+                    speaker_id,
+                    "a named Speaker was identified as the Operator; leaving the name alone"
+                );
+                continue;
+            }
+            speakers::join(connection, speaker_id, &target)?;
+        }
+
+        speakers::set_operator(connection, &target)?;
+        Ok(Some(target))
     }
 
     /// Works the Diarization queue until shutdown.
@@ -2055,6 +2130,18 @@ impl Core {
                 let id = meeting.id.clone();
                 self.store
                     .write(move |connection| meetings::set_audio_path(connection, &id, &relative))
+                    .await?;
+            }
+            // What the recording knows and the audio does not: whether the
+            // far end could have reached the microphone. Written before
+            // Diarization is queued below, because that run is what reads
+            // it (ADR-0029's first rule).
+            if let Some(isolated) = outcome.mic_isolated {
+                let id = meeting.id.clone();
+                self.store
+                    .write(move |connection| {
+                        meetings::set_mic_isolated(connection, &id, isolated)
+                    })
                     .await?;
             }
             if !outcome.degraded.is_empty() {
@@ -3420,6 +3507,119 @@ mod tests {
         assert_eq!(
             interrupted_end("not a timestamp", Some("also not".to_string()), Some(4096)),
             "also not"
+        );
+    }
+
+    fn history() -> rusqlite::Connection {
+        let mut connection = rusqlite::Connection::open_in_memory().expect("open");
+        crate::store::schema::migrate(&mut connection).expect("migrate");
+        connection
+    }
+
+    #[test]
+    fn re_running_after_a_deleted_voiceprint_does_not_mint_a_second_you() {
+        // The defect, end to end. Delete the Operator's Voiceprint and
+        // re-run one Meeting: the cluster that used to be recognized is a
+        // stranger now and gets a fresh Speaker, and the old code set the
+        // flag on *that* — leaving two flagged rows, with the lookup still
+        // returning the first. A Registry with two "You" in it.
+        //
+        // Now the flag is an address, not a label: it stays on the row it is
+        // on, and the run's voices are folded into it.
+        use crate::diarize::Cluster;
+        use crate::diarize::operator::Identified;
+        use crate::store::speakers;
+
+        let connection = history();
+        let you = speakers::create(&connection, true).expect("the Operator");
+        let minted = speakers::create(&connection, false).expect("this run's stranger");
+
+        let assigned = std::collections::BTreeMap::from([(Cluster(0), minted.id.clone())]);
+        let attached = Core::attach_operator(
+            &connection,
+            &Identified::Dominant(Cluster(0)),
+            &assigned,
+            "m",
+        )
+        .expect("attach");
+
+        assert_eq!(attached.as_deref(), Some(you.id.as_str()));
+        assert_eq!(
+            speakers::list(&connection)
+                .expect("list")
+                .iter()
+                .filter(|speaker| speaker.is_operator)
+                .count(),
+            1,
+            "one 'You', which is the whole point"
+        );
+        assert!(
+            speakers::get(&connection, &minted.id).expect("get").is_none(),
+            "and the freshly minted row was folded in rather than left beside it"
+        );
+    }
+
+    #[test]
+    fn an_isolated_mic_does_not_swallow_a_colleague_history_already_knows() {
+        // Rule 1 names *every* mic-channel voice. In a room where one of
+        // them is someone History knows by name, that is a contradiction,
+        // and deleting the name to resolve it would be the worst answer
+        // available — so the name wins and the fold is skipped.
+        use crate::diarize::Cluster;
+        use crate::diarize::operator::Identified;
+        use crate::store::speakers;
+
+        let connection = history();
+        let mine = speakers::create(&connection, false).expect("a voice of mine");
+        let alice = speakers::create(&connection, false).expect("alice");
+        speakers::rename(&connection, &alice.id, "Alice").expect("rename");
+
+        let assigned = std::collections::BTreeMap::from([
+            (Cluster(0), mine.id.clone()),
+            (Cluster(1), alice.id.clone()),
+        ]);
+        let attached = Core::attach_operator(
+            &connection,
+            &Identified::IsolatedMic(vec![Cluster(0), Cluster(1)]),
+            &assigned,
+            "m",
+        )
+        .expect("attach");
+
+        assert_eq!(attached.as_deref(), Some(mine.id.as_str()));
+        assert_eq!(
+            speakers::get(&connection, &alice.id)
+                .expect("get")
+                .expect("still there")
+                .display_name
+                .as_deref(),
+            Some("Alice"),
+            "a named Speaker is never folded away"
+        );
+    }
+
+    #[test]
+    fn identifying_nobody_leaves_the_flag_exactly_where_it_was() {
+        use crate::diarize::operator::Identified;
+        use crate::store::speakers;
+
+        let connection = history();
+        let you = speakers::create(&connection, true).expect("the Operator");
+        let attached = Core::attach_operator(
+            &connection,
+            &Identified::Nobody,
+            &std::collections::BTreeMap::new(),
+            "m",
+        )
+        .expect("attach");
+
+        assert_eq!(attached, None, "no rule fired, so nothing is claimed");
+        assert_eq!(
+            speakers::operator(&connection)
+                .expect("lookup")
+                .map(|speaker| speaker.id),
+            Some(you.id),
+            "and a Meeting that named nobody does not un-name the Operator"
         );
     }
 }

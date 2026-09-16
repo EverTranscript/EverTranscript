@@ -402,6 +402,43 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE speakers ADD COLUMN forgotten INTEGER NOT NULL DEFAULT 0
         CHECK (forgotten IN (0, 1));
     "#,
+    // 14 — one Operator, and the fact that decides them without an act.
+    //
+    // `mic_isolated` is what the capture layer concluded about this Meeting:
+    // the far end could not have reached the microphone, because headphones
+    // were the only playing output and the microphone was never swapped.
+    // ADR-0029 as amended makes that the first of the three rules that name
+    // "You", and it is a fact about the recording, so it is recorded with the
+    // recording rather than re-derived later from audio that no longer says.
+    //
+    // Nullable on purpose, with three states rather than two: 1 is isolated,
+    // 0 is looked at and not isolated, and NULL is a Meeting recorded before
+    // this shipped or one whose probe failed. Only 1 grants the rule, so the
+    // other two behave alike today — but a re-run that walks all of History
+    // (ticket 12) needs to tell "no" from "never asked", and a NOT NULL
+    // DEFAULT 0 would have thrown that away on every Meeting already on disk.
+    //
+    // The index is the other half. The flag never had a uniqueness
+    // constraint, the lookup took the first row it found, and the diarize
+    // path set the flag without clearing any other — so deleting the
+    // Operator's Voiceprint and re-running one Meeting put the flag on a
+    // freshly minted row while the lookup still returned the old one, and
+    // the Registry showed two "You". Any History that already has two is
+    // reduced to one first, keeping the row with a Voiceprint because that
+    // is the one recognition has been using; ties go to the oldest.
+    r#"
+    ALTER TABLE meetings ADD COLUMN mic_isolated INTEGER
+        CHECK (mic_isolated IN (0, 1));
+
+    UPDATE speakers SET is_operator = 0
+     WHERE is_operator = 1
+       AND id <> (SELECT id FROM speakers WHERE is_operator = 1
+                   ORDER BY (voiceprint IS NULL), created_at, id
+                   LIMIT 1);
+
+    CREATE UNIQUE INDEX speakers_one_operator
+        ON speakers (is_operator) WHERE is_operator = 1;
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.
@@ -629,6 +666,99 @@ mod tests {
             })
             .expect("count");
         assert_eq!(hints, 1, "and still remembers the correction");
+    }
+
+    #[test]
+    fn the_second_you_is_reduced_to_one_and_then_made_impossible() {
+        // The defect migration 14 closes, reproduced from the outside: a
+        // History written by the old code, where deleting the Operator's
+        // Voiceprint and re-running put the flag on a fresh row while the
+        // lookup kept returning the old one.
+        //
+        // Two things have to happen, and the second is the one that lasts.
+        // The rows already on disk are reduced to one — keeping the row
+        // recognition has actually been using, which is the one with a
+        // Voiceprint — and after that the schema refuses a second, so no
+        // future call site can recreate it by forgetting to clear the flag.
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("history.sqlite3");
+
+        let before = MIGRATIONS.len() - 1;
+        {
+            let mut connection = Connection::open(&path).expect("open");
+            configure(&connection).expect("configure");
+            for migration in &MIGRATIONS[..before] {
+                connection.execute_batch(migration).expect("migrate");
+            }
+            connection
+                .pragma_update(None, "user_version", before as i64)
+                .expect("user_version");
+            connection
+                .execute_batch(
+                    "INSERT INTO speakers
+                         (id, display_name, is_operator, voiceprint, voiceprint_model,
+                          voiceprint_model_version, confirmed, created_at)
+                     VALUES ('you-old', NULL, 1, x'2233', 'm', '1', 0, '2026-01-01'),
+                            ('you-new', NULL, 1, NULL, NULL, NULL, 0, '2026-02-01'),
+                            ('someone', NULL, 0, x'4455', 'm', '1', 0, '2026-01-15');",
+                )
+                .expect("seed two Operators");
+            migrate(&mut connection).expect("migrate the rest");
+        }
+
+        let mut connection = Connection::open(&path).expect("reopen");
+        configure(&connection).expect("configure");
+        migrate(&mut connection).expect("a second pass changes nothing");
+
+        let flagged: Vec<String> = connection
+            .prepare("SELECT id FROM speakers WHERE is_operator = 1")
+            .expect("prepare")
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("rows");
+        assert_eq!(
+            flagged,
+            ["you-old".to_string()],
+            "the row recognition was already using is the one that stays"
+        );
+
+        // Neither Speaker was deleted — only the flag moved. A Registry row
+        // that owns words must not vanish because of a schema change.
+        let total: i64 = connection
+            .query_row("SELECT count(*) FROM speakers", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(total, 3);
+
+        let second = connection.execute(
+            "UPDATE speakers SET is_operator = 1 WHERE id = 'someone'",
+            [],
+        );
+        assert!(
+            second.is_err(),
+            "and from here a second one is impossible rather than unlikely"
+        );
+
+        // The Meeting-level fact arrives with the same migration, in three
+        // states: every Meeting already on disk was never asked.
+        connection
+            .execute_batch(
+                "INSERT INTO meetings (id, started_at, created_at, updated_at)
+                 VALUES ('m', 'now', 'now', 'now');",
+            )
+            .expect("meeting");
+        let unasked: Option<i64> = connection
+            .query_row("SELECT mic_isolated FROM meetings WHERE id = 'm'", [], |row| {
+                row.get(0)
+            })
+            .expect("read");
+        assert_eq!(unasked, None, "never asked is not the same as no");
+        assert!(
+            connection
+                .execute("UPDATE meetings SET mic_isolated = 2 WHERE id = 'm'", [])
+                .is_err(),
+            "and it is a three-state column, not a number"
+        );
     }
 
     #[test]
