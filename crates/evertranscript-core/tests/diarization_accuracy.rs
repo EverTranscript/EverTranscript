@@ -1784,6 +1784,9 @@ fn the_constrained_path_is_the_one_the_replay_gets() {
     let voice = |cluster: u32, at: u64, vector: Vec<f32>| diarize::live::Observation {
         channel: AudioChannel::Mic,
         cluster: diarize::Cluster(cluster),
+        // Two local speakers of the one window, which is what this is about.
+        window: 0,
+        local: cluster as u8,
         vector,
         runs: vec![(at, at + 4_000)],
         clean_runs: vec![(at, at + 4_000)],

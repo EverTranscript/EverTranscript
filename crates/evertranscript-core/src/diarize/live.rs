@@ -283,6 +283,19 @@ pub struct LiveDiarizer {
 pub struct Observation {
     pub channel: AudioChannel,
     pub cluster: Cluster,
+    /// Which segmentation window this came from, as an index into
+    /// [`Observed::windows`], and which of that window's local speakers it
+    /// is.
+    ///
+    /// Provenance, not input: nothing in clustering or assembly reads
+    /// either. They are what lets two passes over the same audio with
+    /// *different embedding models* be aligned observation to observation —
+    /// which a measurement that holds the partition fixed and changes only
+    /// the identity embedding needs, and which the runs cannot supply, since
+    /// two local speakers of one window can share an active-frame pattern
+    /// and then differ in nothing but their vectors.
+    pub window: usize,
+    pub local: u8,
     pub vector: Vec<f32>,
     /// Every stretch this speaker was active, on the capture clock.
     pub runs: Vec<(u64, u64)>,
@@ -464,6 +477,7 @@ impl LiveDiarizer {
                 // window that finds nobody still voted on every instant it
                 // covered.
                 windows.push((channel, chunk_start_ms, to_ms(masks.len())));
+                let window = windows.len() - 1;
 
                 // Features over the audio actually present, so the mean
                 // that is subtracted is the mean of speech, not of speech
@@ -519,6 +533,8 @@ impl LiveDiarizer {
                     observations.push(Observation {
                         channel,
                         cluster: Cluster(observations.len() as u32),
+                        window,
+                        local: local as u8,
                         vector,
                         runs: in_ms(runs),
                         clean_runs: in_ms(runs_of(masks, |mask| mask == bit)),
@@ -793,8 +809,13 @@ pub fn assemble(observed: &Observed, canonical: &BTreeMap<Cluster, Cluster>) -> 
             let vector = super::cluster::centroid(&observations)?;
             let mut embedding = Embedding::new(
                 vector,
-                EMBEDDING_MODEL,
-                EMBEDDING_MODEL_VERSION,
+                // The pass that made these vectors, not the constant — the
+                // same fix ticket 04 made to `provisional_of`, and the same
+                // reason: this is the stamp that reaches the record, so a
+                // constant here labels a measured model's vectors with
+                // production's name.
+                observed.embedding.model,
+                observed.embedding.version,
                 voiced.get(&cluster).copied().unwrap_or(0),
             );
             if let Some(turn) = longest.get(&cluster)
@@ -1002,6 +1023,11 @@ mod tests {
         Observation {
             channel,
             cluster: Cluster(cluster),
+            // The fixtures are one local speaker per window, which is what
+            // the tests below are about; the alignment fields are carried,
+            // not exercised.
+            window: cluster as usize,
+            local: 0,
             vector: vec![1.0, 0.0],
             runs: runs.to_vec(),
             clean_runs: clean.to_vec(),
@@ -1073,6 +1099,37 @@ mod tests {
             ("redimnet2-b3", "1")
         );
         assert_ne!(one.model, EMBEDDING_MODEL);
+    }
+
+    /// The assembled vector carries the same stamp the provisional one did.
+    ///
+    /// `assemble` is the stamp that reaches the record — `persist` files
+    /// these — so a constant here would label a measured model's vectors
+    /// with production's name however truthfully `provisional_of` had
+    /// stamped them a moment earlier.
+    #[test]
+    fn the_assembled_stamp_names_the_model_that_actually_ran() {
+        let observed = Observed {
+            embedding: VoiceprintId {
+                model: "redimnet2-b3",
+                version: "1",
+            },
+            observations: vec![observation(
+                AudioChannel::Mic,
+                0,
+                &[(0, 2_000)],
+                &[(0, 2_000)],
+            )],
+            windows: vec![(AudioChannel::Mic, 0, 10_000)],
+        };
+        let canonical = [(Cluster(0), Cluster(0))].into_iter().collect();
+        let assembled = assemble(&observed, &canonical);
+        let embedding = assembled.embeddings.values().next().expect("one voice");
+        assert_eq!(
+            (embedding.model.as_str(), embedding.model_version.as_str()),
+            ("redimnet2-b3", "1")
+        );
+        assert_ne!(embedding.model, EMBEDDING_MODEL);
     }
 
     /// Production's own stamp still comes from the registry, unchanged.
