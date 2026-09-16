@@ -14,11 +14,29 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use evertranscript_core::audio::fixture::FixtureSource;
+use evertranscript_core::audio::fixture::Step;
 use evertranscript_core::server::Core;
 use evertranscript_core::store::diarize_queue::Priority;
+use evertranscript_protocol::AudioChannel;
 
+/// A Core whose capture is scripted, like every other test file here.
+///
+/// **Nothing in this file is about capture**, but `Core` falls back to
+/// `LiveSource::new()` when nothing installs a factory, so a `meeting/start`
+/// here would open a real device to obtain a finished row. That is what Q55
+/// found the last time: `STATUS_ACCESS_VIOLATION` on a Windows runner with no
+/// audio hardware, green on every machine that has a microphone.
 async fn core(history_dir: &Path) -> Arc<Core> {
-    Core::with_history_dir_acknowledged(history_dir.to_path_buf()).expect("core")
+    let core = Core::with_history_dir_acknowledged(history_dir.to_path_buf()).expect("core");
+    core.set_source_factory(Arc::new(|| {
+        Box::new(FixtureSource::new(vec![
+            Step::audio(AudioChannel::Mic, 400, 0.3),
+            Step::audio(AudioChannel::System, 400, -0.3),
+        ]))
+    }))
+    .await;
+    core
 }
 
 /// A finished Meeting with no audio: enough to be queued, and it runs to
