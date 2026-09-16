@@ -239,12 +239,14 @@ of quoting one point. At the shipped matcher point, constrained 0.62/0.08:
 | Re clust / **We ident** | 14888.530 | 2165.625 | 7589.680 | 50.720 |
 | Re clust / Re ident *(control)* | 16213.960 | 2361.655 | 7565.090 | 75.680 |
 
-Substituting ReDimNet2's identity vectors under WeSpeaker's partition is worth
-**+1976.310s** of correct returning, 8.9% of the denominator, against +128.000s
-wrong, −53.750s correct-new and +53.750s false attachment. A trade, and a large
-one in the direction that matters most. At the same point Re-clustering with
-We-identity **dominates the WeSpeaker control on all four** while trading
-against the ReDimNet2 control.
+Substituting ReDimNet2's identity vectors under WeSpeaker's partition moves
+correct returning **+1976.310s** (8.9% of the denominator) and wrong returning
+**+128.000s**, with correct-new −53.750s and false attachment +53.750s. That is
+a trade, reported with both numbers and **not ranked**: which side is worth more
+is a utility judgement the user has not made, and M3's own catalogue holds that
+a wrong attribution costs more than an unnamed one. At the same point
+Re-clustering with We-identity **dominates the WeSpeaker control on all four**
+while trading against the ReDimNet2 control.
 
 **The one dominance over both controls survives on complete inputs** and is no
 longer a diagnostic: constrained 0.30/0.00, We clustering with Re identity,
@@ -264,19 +266,104 @@ Separately, We-clustering/Re-identity beats its own control on all four
 unconstrained at 0.80/0.00, 0.62/0.08 and 0.80/0.15, each by tens of seconds,
 each a trade against the ReDimNet2 control.
 
+**A well-calibrated single model already beats the split's best point.**
+WeSpeaker doing both jobs at constrained 0.80/0.00 — 18119.570 / 2645.625 /
+7434.140 / 206.810 — dominates We-clustering/Re-identity at 0.30/0.00 on three
+of four quantities and ties the fourth. So a win at a badly calibrated setting
+does not establish an architectural advantage over calibrating one model, and
+any held-out design that reads a split only against its own arm's controls at
+its own point cannot see that. This is why the held-out set below runs every
+point across both arms.
+
 **No recommendation follows from this, and none is made.** These four are the
-recognition column. The measured cost of a split is two models in the bundle and
-two inference passes per meeting — 1597s of wall clock for this grid — and a
-split does *not* entail two persisted identity spaces per Speaker, since
-clustering vectors can stay meeting-local and never be stored against a Speaker.
+recognition column. Cost, stated as harness timing rather than as the
+architecture's price: inference was **583s + 606s = 1189s** for the two passes
+over 18 meetings, and the grid's other 408s is downstream replay a production
+split would not repeat. A production split could share one segmentation pass
+between the two embeddings, so 1189s is an upper bound. A split also does *not*
+entail two persisted identity spaces per Speaker, since clustering vectors can
+stay meeting-local and never be stored against a Speaker.
 The DER column is a separate reading. Dominating both same-model controls is
 sufficient evidence of a recognition benefit and **not necessary** for a split to
 be worth having; "no split pays" was a product verdict the data never
 established and is withdrawn.
 
-**Held-out candidates are predeclared and unrun** (Q181): constrained 0.30/0.00
-and 0.62/0.08, unconstrained 0.80/0.00, all four cells at each — twelve cells,
-re-chosen from these corrected curves rather than carried from Q172.
+**Held-out design, predeclared before any test number** (Q182, amending Q181):
+three matcher points — **0.80/0.00** as the main common-operating-point
+comparison, **0.62/0.08** as the shipped matcher comparison, **0.30/0.00** as a
+secondary low-floor diagnostic — across **both** arms and all four model
+pairings. 24 configuration replays through the existing
+`EVERTRANSCRIPT_MATCHER_POINTS` mechanism, every merge threshold as dev fixed
+it. Running both arms is the correction that matters: it puts each split beside
+a competitively calibrated same-model cell instead of only beside its own arm's
+controls. Two Q181 claims withdrawn: a held-out failure fails to replicate *that
+configuration on this split and corpus*, not "no split dominates anywhere"; and
+Q153's one failed transfer does not establish that dev-best points generally
+fail to transfer, nor justify excluding a competitive control.
+
+### Held-out AMI test: the 24 predeclared configurations (Q183)
+
+**Validity.** Denominators 25538.370s returning and 5175.554s new, fixed across
+all eight cells and three points. No duplicate keys. `unattributed:unexpected`
+zero, and `unattributed:no-embedding` **zero** — with 4 of WeSpeaker's 5666
+observations unvectored (0.3s) no cluster was left without a centroid, so the
+abstention path built for that case was not exercised on this corpus. Coverage:
+ReDimNet2 supplies 5662 of WeSpeaker's 5666 (99.929%); WeSpeaker all 5662 of
+ReDimNet2's; 4 WeSpeaker observations have no place in ReDimNet2's partition.
+Six exact checks against saved standalone test ledgers, all **identical**: both
+constrained diagonals at 0.62/0.08 and 0.80/0.00, both unconstrained diagonals
+at 0.62/0.08. DER unchanged from the record — 28.64% / 24.62% unconstrained,
+23.51% / 23.94% constrained — and equal on all four millisecond tallies within
+each clustering row. Inference 651s + 558s over 16 meetings; snapshots kept.
+
+**The dev dominance did not replicate.** Constrained 0.30/0.00,
+WeSpeaker-clustering with ReDimNet2 identity, dominated both controls on dev. On
+test it is a **trade** against the WeSpeaker control (correct −113.790, wrong
++120.910, correct-new +56.130, false attachment −56.130) and **dominated** by the
+ReDimNet2 control (correct −2272.550, wrong +1920.600). That is a failure to
+replicate this configuration on this split and corpus, and not a result about
+other configurations.
+
+**Zero of the 12 splits dominate both same-model controls of their own arm and
+point** — against one in 128 on dev. Against own-partition control, which is the
+DER-neutral comparison: 2 dominate, 1 ties exactly, 2 are dominated, 7 trade.
+
+**What did replicate, and got stronger: the shipped matcher point.** Constrained
+0.62/0.08, holding WeSpeaker's partition (the best DER measured here, 23.51%)
+and substituting ReDimNet2's identity vectors **dominates its own-partition
+control on all four** — 18116.280 / 4108.840 / 4960.354 / 0.000 against
+17039.900 / 4328.150 / 4947.024 / 13.330, so correct +1076.380, wrong −219.310,
+correct-new +13.330, false attachment −13.330, at identical DER. On dev the same
+cell moved correct +1976.310 but wrong +128.000; on test both moved the helpful
+way. It still only **trades** against the ReDimNet2 control.
+
+**The exact null replicated.** Unconstrained 0.80/0.00, ReDimNet2 clustering
+with WeSpeaker identity ties its control on all four quantities to the second,
+as on dev.
+
+**At the main common operating point under the constraint the split hurts.**
+Constrained 0.80/0.00, We-clustering/Re-identity is dominated by both controls
+(wrong +141.500 against its own, and worse on correct and wrong against
+ReDimNet2's).
+
+**No split dominates every measured same-model configuration.** The best does so
+for 6 of the 12; several manage none. So nothing here shows a split beating a
+single model calibrated properly.
+
+**The tension the split does not resolve, at the shipped point:**
+
+| 0.62/0.08 | DER | ret.correct | ret.wrong | new.correct | false-attach |
+|---|---|---|---|---|---|
+| const We/We *(control)* | 23.51% | 17039.900 | 4328.150 | 4947.024 | 13.330 |
+| const We/**Re** *(split)* | 23.51% | 18116.280 | 4108.840 | 4960.354 | 0.000 |
+| uncon Re/Re *(control)* | 24.62% | 20628.360 | 2927.080 | 4677.384 | 0.000 |
+
+The best DER measured is constrained WeSpeaker at 23.51%, and under that
+partition the split buys 1076.380s of correct returning and less wrong at no
+cost on any of the four. Unconstrained ReDimNet2 alone has 2512.080s more
+correct returning and 1181.760s less wrong than that split, for 1.11 more DER
+points and 282.970s less correct-new. Which of those is preferable is the
+undecided adoption bar plus an unchosen rate of exchange, and neither is ours.
 
 **One decision is the user's and is deliberately held open by them:** whether
 ≥ 2.0 points of DER is the adoption bar. They were asked and chose to leave it
