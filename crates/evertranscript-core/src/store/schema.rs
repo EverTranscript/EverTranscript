@@ -374,6 +374,43 @@ const MIGRATIONS: &[&str] = &[
     ALTER TABLE speakers ADD COLUMN forgotten INTEGER NOT NULL DEFAULT 0
         CHECK (forgotten IN (0, 1));
     "#,
+    // 14 — one Operator, and the fact that decides them without an act.
+    //
+    // `mic_isolated` is what the capture layer concluded about this Meeting:
+    // the far end could not have reached the microphone, because headphones
+    // were the only playing output and the microphone was never swapped.
+    // ADR-0029 as amended makes that the first of the three rules that name
+    // "You", and it is a fact about the recording, so it is recorded with the
+    // recording rather than re-derived later from audio that no longer says.
+    //
+    // Nullable on purpose, with three states rather than two: 1 is isolated,
+    // 0 is looked at and not isolated, and NULL is a Meeting recorded before
+    // this shipped or one whose probe failed. Only 1 grants the rule, so the
+    // other two behave alike today — but a re-run that walks all of History
+    // (ticket 12) needs to tell "no" from "never asked", and a NOT NULL
+    // DEFAULT 0 would have thrown that away on every Meeting already on disk.
+    //
+    // The index is the other half. The flag never had a uniqueness
+    // constraint, the lookup took the first row it found, and the diarize
+    // path set the flag without clearing any other — so deleting the
+    // Operator's Voiceprint and re-running one Meeting put the flag on a
+    // freshly minted row while the lookup still returned the old one, and
+    // the Registry showed two "You". Any History that already has two is
+    // reduced to one first, keeping the row with a Voiceprint because that
+    // is the one recognition has been using; ties go to the oldest.
+    r#"
+    ALTER TABLE meetings ADD COLUMN mic_isolated INTEGER
+        CHECK (mic_isolated IN (0, 1));
+
+    UPDATE speakers SET is_operator = 0
+     WHERE is_operator = 1
+       AND id <> (SELECT id FROM speakers WHERE is_operator = 1
+                   ORDER BY (voiceprint IS NULL), created_at, id
+                   LIMIT 1);
+
+    CREATE UNIQUE INDEX speakers_one_operator
+        ON speakers (is_operator) WHERE is_operator = 1;
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.

@@ -54,10 +54,19 @@ use objc2_core_audio::kAudioAggregateDeviceNameKey;
 use objc2_core_audio::kAudioAggregateDeviceTapAutoStartKey;
 use objc2_core_audio::kAudioAggregateDeviceTapListKey;
 use objc2_core_audio::kAudioAggregateDeviceUIDKey;
+use objc2_core_audio::kAudioDevicePropertyDataSource;
+use objc2_core_audio::kAudioDevicePropertyTransportType;
+use objc2_core_audio::kAudioDeviceTransportTypeAirPlay;
+use objc2_core_audio::kAudioDeviceTransportTypeBluetooth;
+use objc2_core_audio::kAudioDeviceTransportTypeBluetoothLE;
+use objc2_core_audio::kAudioDeviceTransportTypeBuiltIn;
+use objc2_core_audio::kAudioDeviceTransportTypeDisplayPort;
+use objc2_core_audio::kAudioDeviceTransportTypeHDMI;
 use objc2_core_audio::kAudioHardwarePropertyDefaultOutputDevice;
 use objc2_core_audio::kAudioHardwarePropertyProcessObjectList;
 use objc2_core_audio::kAudioObjectPropertyElementMain;
 use objc2_core_audio::kAudioObjectPropertyScopeGlobal;
+use objc2_core_audio::kAudioObjectPropertyScopeOutput;
 use objc2_core_audio::kAudioObjectSystemObject;
 use objc2_core_audio::kAudioProcessPropertyIsRunningOutput;
 use objc2_core_audio::kAudioSubTapDriftCompensationKey;
@@ -547,6 +556,91 @@ fn is_running_output(process: AudioObjectID) -> bool {
         )
     };
     code == 0 && value == 1
+}
+
+/// The data source code the built-in output reports when something is
+/// plugged into the headphone jack. CoreAudio's four-character `'hdpn'`;
+/// the internal speaker is `'ispk'`.
+const DATA_SOURCE_HEADPHONES: u32 = u32::from_be_bytes(*b"hdpn");
+
+/// Whether the machine's default output goes into someone's ears rather
+/// than into the room.
+///
+/// The question behind it is not really about hardware: it is whether the
+/// far end of the meeting could have reached the microphone. Headphones
+/// mean it could not, which is what lets ADR-0029's first rule name the
+/// Operator with no act at all.
+///
+/// So the failure that costs the most is the *false* `true` — a Bluetooth
+/// speaker in a conference room reported as headphones would make every
+/// voice in that room "You". Anything this cannot classify is `None`, which
+/// callers read as "cannot tell" and never as "no".
+pub(crate) fn output_is_headphones() -> Option<bool> {
+    // An `if` chain rather than a `match`: these constants are lower-camel
+    // and Rust reads a lower-case name in a pattern as a fresh binding, so a
+    // `match` here would silently match everything on its first arm.
+    let device = default_output_device()?;
+    let transport = read_u32(device, address(kAudioDevicePropertyTransportType))?;
+
+    // Bluetooth is AirPods and headsets nearly all of the time. It is also
+    // how a Bluetooth speaker attaches, and CoreAudio does not distinguish
+    // them — see DECISIONS.
+    if transport == kAudioDeviceTransportTypeBluetooth
+        || transport == kAudioDeviceTransportTypeBluetoothLE
+    {
+        return Some(true);
+    }
+
+    // The jack, or the speaker under the keyboard. The data source says
+    // which, and it is the one case macOS answers exactly.
+    if transport == kAudioDeviceTransportTypeBuiltIn {
+        let source = read_u32(
+            device,
+            AudioObjectPropertyAddress {
+                mSelector: kAudioDevicePropertyDataSource,
+                mScope: kAudioObjectPropertyScopeOutput,
+                mElement: kAudioObjectPropertyElementMain,
+            },
+        )?;
+        return Some(source == DATA_SOURCE_HEADPHONES);
+    }
+
+    // A television, a projector, another room. Not ears.
+    if transport == kAudioDeviceTransportTypeHDMI
+        || transport == kAudioDeviceTransportTypeDisplayPort
+        || transport == kAudioDeviceTransportTypeAirPlay
+    {
+        return Some(false);
+    }
+
+    // USB is a headset as often as it is a speaker, and a virtual or
+    // aggregate device could be anything at all.
+    None
+}
+
+fn default_output_device() -> Option<AudioObjectID> {
+    let device = read_u32(
+        kAudioObjectSystemObject as AudioObjectID,
+        address(kAudioHardwarePropertyDefaultOutputDevice),
+    )?;
+    (device != 0).then_some(device)
+}
+
+/// One `u32`-shaped CoreAudio property, or `None` where it cannot be read.
+fn read_u32(object: AudioObjectID, mut addr: AudioObjectPropertyAddress) -> Option<u32> {
+    let mut value: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let code = unsafe {
+        AudioObjectGetPropertyData(
+            object,
+            NonNull::from(&mut addr),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut size),
+            NonNull::from(&mut value).cast(),
+        )
+    };
+    (code == 0).then_some(value)
 }
 
 fn require_an_output_device() -> Result<()> {

@@ -69,6 +69,9 @@ windows = { version = "0.62", features = [
     "Win32_System_Variant",
     "Win32_Storage_FileSystem",
     "Win32_Storage_Packaging_Appx",
+    # `IMMDevice::OpenPropertyStore`, which is how an audio endpoint is
+    # asked for its form factor — headphones or the room (ADR-0029 rule 1).
+    "Win32_UI_Shell_PropertiesSystem",
 ] }
 windows-future = "0.3"
 

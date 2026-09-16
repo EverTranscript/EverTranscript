@@ -174,8 +174,37 @@ pub fn list(connection: &Connection) -> Result<Vec<Speaker>> {
 
 /// The Operator's own Speaker, if it has been established yet.
 pub fn operator(connection: &Connection) -> Result<Option<Speaker>> {
-    let sql = format!("SELECT {SPEAKER_COLUMNS} FROM speakers WHERE is_operator = 1 LIMIT 1");
+    // Ordered even though migration 14's partial unique index makes at most
+    // one row matchable. An unordered `LIMIT 1` is how this returned a
+    // different Operator than the one the diarize path had just flagged, and
+    // an index is a promise about the schema rather than about a query.
+    let sql = format!(
+        "SELECT {SPEAKER_COLUMNS} FROM speakers WHERE is_operator = 1 \
+          ORDER BY created_at, id LIMIT 1"
+    );
     Ok(connection.query_row(&sql, [], row_to_speaker).optional()?)
+}
+
+/// Moves the Operator flag onto one Speaker, taking it off whoever held it.
+///
+/// Both halves in one statement pair rather than a bare `SET is_operator =
+/// 1`: migration 14's unique index makes a second flagged row an error now,
+/// so a caller that only set the flag would fail on the constraint — which
+/// is the defect made loud, but still a failure. Clearing first is what
+/// makes re-flagging an ordinary move.
+pub fn set_operator(connection: &Connection, id: &str) -> Result<()> {
+    connection.execute(
+        "UPDATE speakers SET is_operator = 0 WHERE is_operator = 1 AND id <> ?1",
+        params![id],
+    )?;
+    let changed = connection.execute(
+        "UPDATE speakers SET is_operator = 1 WHERE id = ?1",
+        params![id],
+    )?;
+    if changed == 0 {
+        anyhow::bail!("no Speaker with id {id}");
+    }
+    Ok(())
 }
 
 /// Names a Speaker — which also confirms its Voiceprint (ADR-0008 as
