@@ -164,7 +164,82 @@ pub fn build_user_message(notes: Option<&str>, transcript: &str) -> String {
     message.push_str("<transcript>\n");
     message.push_str(&escape_control_markers(transcript));
     message.push_str("\n</transcript>\n");
+    // **After the transcript, where an instruction is still in view.** The
+    // system prompt's rule 2 says the same thing and is thousands of tokens
+    // further away; this is the one the model was measured ignoring. It is
+    // safe here because `</transcript>` is itself a control marker, so no
+    // transcript can reach the ground this line stands on.
+    if let Some(language) = dominant_language(transcript) {
+        message.push_str(&format!(
+            "\nThis meeting was held in {language}. Write the summary in \
+             {language}. Do not translate it.\n"
+        ));
+    }
     message
+}
+
+/// The language to hold a Summary to, when counting characters can tell.
+///
+/// Rule 2 of the system prompt already says "write in the same language the
+/// transcript is in", and on a meeting held in one language the model obeys
+/// it. On a meeting that code-switches it does not: measured on two real
+/// Chinese-English Meetings, it summarized Chinese speech in English. That is
+/// not only a preference — an English item echoes none of the Chinese that
+/// was actually said, so `verify` refused every chunk and those Meetings
+/// ended with no Summary at all.
+///
+/// **Only scripts a character count can separate.** There is no cheap way to
+/// tell English from Spanish, and a wrong answer here would order the model
+/// to translate a meeting into a language nobody spoke — so Latin script
+/// returns `None` and rule 2 keeps it. An ideograph counts as one word, the
+/// same as one Latin word, which is the comparison that matches how much of
+/// a meeting each one carries.
+///
+/// Measured per chunk rather than per meeting, which is the approximation
+/// here: the halves of a code-switching meeting can land on different
+/// languages. The reduce pass sees both partial summaries and settles on one,
+/// and half a Summary in the other language still beats none.
+fn dominant_language(text: &str) -> Option<&'static str> {
+    let (mut han, mut kana, mut hangul, mut latin_words) = (0usize, 0usize, 0usize, 0usize);
+    let mut inside_a_word = false;
+    for character in text.chars() {
+        // Kana first: `is_ideograph` covers them, and Japanese has to be
+        // distinguishable from Chinese before it is counted as Chinese.
+        if matches!(character, '\u{3040}'..='\u{30ff}') {
+            kana += 1;
+            inside_a_word = false;
+        } else if matches!(character, '\u{1100}'..='\u{11ff}' | '\u{ac00}'..='\u{d7af}') {
+            hangul += 1;
+            inside_a_word = false;
+        } else if is_ideograph(character) {
+            han += 1;
+            inside_a_word = false;
+        } else if character.is_alphabetic() {
+            if !inside_a_word {
+                latin_words += 1;
+            }
+            inside_a_word = true;
+        } else {
+            inside_a_word = false;
+        }
+    }
+
+    // Dominant means more than half, so there is no threshold to tune. Real
+    // meetings are not close to the line anyway: the two that failed are 75%
+    // and 94% ideographs by this count, the English ones under 1%.
+    if han + kana + hangul <= latin_words {
+        return None;
+    }
+    if hangul > han + kana {
+        return Some("Korean");
+    }
+    // Japanese writes kanji and kana together. A stray `ん` — Whisper emits
+    // them on silence, and one real Meeting has several — must not turn a
+    // Chinese meeting Japanese, so this asks for a tenth of the syllables.
+    if kana * 10 > han + kana {
+        return Some("Japanese");
+    }
+    Some("Chinese")
 }
 
 /// Removes what a model wraps around an answer.
@@ -270,23 +345,27 @@ impl std::fmt::Display for NotASummary {
 /// `.scratch/m5-onboarding/what-v1-is-not.md` rather than papered over here.
 ///
 /// **It is stricter on real meetings than the tests here suggest, and that
-/// is now measured.** The paraphrases below are near-verbatim — "Booked the
+/// was measured.** The paraphrases below are near-verbatim — "Booked the
 /// compliance review" for "I'll book the compliance review" — and a summary
 /// of a forty-five minute meeting is not. Across three real Meetings this
-/// refused four of the five chunks generated. One of them was "Evaluate Nango and compare
-/// with MedPlum" against "So I will start the evaluation on Nango": true,
-/// refused, because `evaluate` is not a substring of `evaluation` and the
-/// speaker never said `MedPlum` — somebody else did. The Operator lost half
-/// of that meeting's Summary and was told which fraction, not why.
+/// refused four of the five chunks generated (DECISIONS Q119), for two
+/// reasons, both since addressed and neither of them by loosening the rule
+/// itself:
 ///
-/// A code-switching meeting loses everything instead: `distinctive_words`
-/// does split Chinese into bigrams, so a Chinese item against Chinese speech
-/// matches (29 of 35 pieces on a real one), but the model summarizes Chinese
-/// speech in *English*, nothing echoes, and every chunk goes. Two real
-/// Meetings produced no Summary at all for exactly that.
+/// "Evaluate Nango and compare with MedPlum" was refused against "So I will
+/// start the evaluation on Nango" — true, and refused because `evaluate` is
+/// not a substring of `evaluation`. Words are compared by `stem` now, so an
+/// ending does not decide it.
 ///
-/// Left as it is rather than loosened here: every remedy trades against the
-/// injection defence above, and DECISIONS Q119 is where that trade belongs.
+/// A code-switching meeting lost everything instead. Chinese items against
+/// Chinese speech do match — `distinctive_words` splits Chinese into bigrams,
+/// 29 of 35 pieces on a real one — but the model summarized Chinese speech in
+/// *English*, nothing echoed, and every chunk went; two real Meetings got no
+/// Summary at all. `build_user_message` pins the language now, so the item
+/// and the speech are in the same one.
+///
+/// The question, the half, and the non-positional design are unchanged. What
+/// the first remedy costs is written up in `stem`.
 pub fn verify(summary: &str, transcript: &str) -> Result<(), NotASummary> {
     let said = spoken_by(transcript);
     for (who, what) in table_rows(summary) {
@@ -302,7 +381,7 @@ pub fn verify(summary: &str, transcript: &str) -> Result<(), NotASummary> {
             .join(" ");
         let echoed = distinctive
             .iter()
-            .filter(|word| theirs.contains(word.as_str()))
+            .filter(|word| theirs.contains(stem(word)))
             .count();
         // Half. The model paraphrases — "Booked the compliance review" for
         // "I'll book the compliance review" — so demanding every word would
@@ -366,6 +445,28 @@ fn distinctive_words(what: &str) -> Vec<String> {
         }
     }
     pieces
+}
+
+/// The front of a word, which is the part an ending cannot move.
+///
+/// `verify` asks whether the speaker echoed an item's words, and English
+/// inflects: "Evaluate Nango" was refused against "I will start the
+/// evaluation on Nango". Dropping up to three trailing characters covers the
+/// endings that put two forms of one word apart — -e, -ed, -es, -ing, -ion —
+/// without a stemmer, a dictionary, or a language to pick them for.
+///
+/// **Never below six characters**, which is what keeps this from being a
+/// hole. A prefix of a short word is most of the language, so `wire`, `4471`
+/// and `friday` still have to appear whole; the injection canary's `retainer`
+/// stems to `retain`, which the speaker it is pinned on never says either.
+/// Bigrams are two characters and come through untouched, so Chinese is
+/// exactly as strict as it was.
+fn stem(word: &str) -> &str {
+    let keep = word.chars().count().saturating_sub(3).max(6);
+    match word.char_indices().nth(keep) {
+        Some((at, _)) => &word[..at],
+        None => word,
+    }
 }
 
 /// CJK ideographs, plus the kana that run together the same way.
@@ -653,6 +754,76 @@ mod tests {
             "0:04:25",
         );
         assert!(verify(&summary, DENSE).is_err());
+    }
+
+    #[test]
+    fn an_item_matches_the_form_the_speaker_said_it_in() {
+        // **The real refusal, from one of Frank's Meetings.** The item is
+        // true and was refused, because `evaluate` is not a substring of
+        // `evaluation`. `medplum` was somebody else's word and `with` is
+        // nobody's, so three of five pieces have to carry it — which they do
+        // on stems and did not on whole words.
+        let transcript = "\
+[0:12:30] Frank Dai: So I will start the evaluation on Nango and then compare.
+[0:12:44] Jack Ahn: MedPlum is the other one worth looking at.
+";
+        let summary = table(
+            "Frank Dai",
+            "Evaluate Nango and compare with MedPlum",
+            "0:12:30",
+        );
+        assert_eq!(verify(&summary, transcript), Ok(()));
+    }
+
+    #[test]
+    fn a_short_word_still_has_to_appear_whole() {
+        // The floor under `stem`, which is what keeps the looser comparison
+        // from being a hole: three characters off `wire` leaves `w`, and `w`
+        // is in every transcript ever recorded.
+        assert_eq!(stem("wire"), "wire");
+        assert_eq!(stem("friday"), "friday");
+        assert_eq!(stem("4471"), "4471");
+        // The injection canary's own words, which must keep missing.
+        assert_eq!(stem("retainer"), "retain");
+        // Chinese bigrams are untouched, so Chinese is as strict as before.
+        assert_eq!(stem("评估"), "评估");
+    }
+
+    #[test]
+    fn a_meeting_held_in_chinese_is_pinned_to_chinese() {
+        // Two real Meetings got no Summary at all because the model answered
+        // in English and then nothing it wrote echoed what anyone said.
+        let message = build_user_message(
+            None,
+            "[0:00:01] 陈明: 我们下周把这个方案定下来，然后开始做。",
+        );
+        assert!(
+            message.contains("Write the summary in Chinese"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn an_english_meeting_is_left_to_the_rule_in_the_system_prompt() {
+        // Nothing here can tell English from Spanish, and a guess would order
+        // the model to translate a meeting into a language nobody spoke.
+        let message = build_user_message(None, DENSE);
+        assert!(!message.contains("Write the summary in"), "{message}");
+    }
+
+    #[test]
+    fn a_stray_kana_does_not_make_a_chinese_meeting_japanese() {
+        // Whisper emits `ん` into silence, and one real Meeting has several.
+        let transcript = "\
+[0:00:01] 陈明: ん
+[0:00:05] 陈明: 我们下周把这个方案定下来，然后开始做实验。
+";
+        assert_eq!(dominant_language(transcript), Some("Chinese"));
+        // And a meeting actually held in Japanese still reads as Japanese.
+        assert_eq!(
+            dominant_language("[0:00:01] 田中: 来週までに資料をまとめておきます。"),
+            Some("Japanese")
+        );
     }
 
     #[test]

@@ -209,6 +209,8 @@ struct SummaryRun {
     fell_back_from: Option<String>,
     chunks: usize,
     failed_chunks: usize,
+    /// Why the first refused chunk was refused, for the Operator.
+    refusal: Option<String>,
 }
 
 type ChosenBackends = (
@@ -934,25 +936,38 @@ impl Core {
             // judgement as above — one poisoned chunk should not cost the
             // Operator the other five — and the count reaches the record
             // through `gaps`, so the loss is visible rather than silent.
-            fn kept(text: &str, piece: &str) -> Option<String> {
+            //
+            // **The reason travels with the refusal.** The daemon writes no
+            // log the Operator can read, so a `warn!` here is a reason nobody
+            // will ever see; a Summary that lost half a meeting was telling
+            // them the fraction and not the cause.
+            fn kept(text: &str, piece: &str) -> Result<String, String> {
                 let part = summary::prompt::scrub(text);
                 match summary::prompt::verify(&part, piece) {
-                    Ok(()) => Some(part),
+                    Ok(()) => Ok(part),
                     Err(why) => {
                         tracing::warn!(
                             %why,
                             "a Summary was refused: it is not a summary of this meeting"
                         );
-                        None
+                        Err(why.to_string())
                     }
                 }
             }
 
             let mut parts = Vec::with_capacity(chunks.len());
             let mut failed = 0usize;
+            // The first one only. A list of every refusal would be a wall
+            // of text in what is one line of a record, and the first is the
+            // one an Operator can still find the transcript for.
+            let mut refusal = None;
+            let mut note = |why: String| {
+                failed += 1;
+                refusal.get_or_insert(why);
+            };
             match kept(&first.text, &chunks[0]) {
-                Some(part) => parts.push(part),
-                None => failed += 1,
+                Ok(part) => parts.push(part),
+                Err(why) => note(why),
             }
             for piece in &chunks[1..] {
                 if cancel.is_cancelled() {
@@ -960,13 +975,15 @@ impl Core {
                 }
                 match winner.generate(&request_for(piece), &cancel) {
                     Ok(text) => match kept(&text, piece) {
-                        Some(part) => parts.push(part),
-                        None => failed += 1,
+                        Ok(part) => parts.push(part),
+                        Err(why) => note(why),
                     },
                     Err(summary::BackendError::Cancelled) => {
                         anyhow::bail!("{}", summary::BackendError::Cancelled)
                     }
-                    Err(_) => failed += 1,
+                    // A Backend that failed outright is a lost chunk too,
+                    // and its own message says more than "could not".
+                    Err(error) => note(error.to_string()),
                 }
             }
 
@@ -975,11 +992,20 @@ impl Core {
             // whatever the transcript told the model to write is a false
             // record, and ADR-0009 will not let them edit it out.
             if parts.is_empty() {
+                // **With the reason, when there is one.** This sentence is
+                // what an Operator receives when a meeting gets no Summary at
+                // all, which is the case that most needs explaining, and on
+                // its own it sends them to a log the daemon does not write.
+                let why = match &refusal {
+                    Some(why) => format!(" — {why}"),
+                    None => String::new(),
+                };
                 anyhow::bail!(
                     "{}",
-                    summary::BackendError::Malformed(
-                        "the Backend returned nothing that was a summary of this meeting".into()
-                    )
+                    summary::BackendError::Malformed(format!(
+                        "the Backend returned nothing that was a summary of \
+                         this meeting{why}"
+                    ))
                 );
             }
 
@@ -1024,6 +1050,7 @@ impl Core {
                 fell_back_from,
                 chunks: chunks.len(),
                 failed_chunks: failed,
+                refusal,
             })
         })
         .await??;
@@ -1040,11 +1067,15 @@ impl Core {
                 of = outcome.chunks,
                 "some chunks of this Meeting could not be summarized"
             );
-            format!(
+            let mut note = format!(
                 "{} of {} parts of this meeting could not be summarized, \
                  so this Summary does not cover all of it.",
                 outcome.failed_chunks, outcome.chunks
-            )
+            );
+            if let Some(why) = &outcome.refusal {
+                note.push_str(&format!(" The first one failed because {why}."));
+            }
+            note
         });
         if let Some(from) = &outcome.fell_back_from {
             // Never silent: an Operator who chose Cloud and received local
