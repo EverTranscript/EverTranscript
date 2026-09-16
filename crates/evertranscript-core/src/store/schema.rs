@@ -458,13 +458,39 @@ const MIGRATIONS: &[&str] = &[
 /// - **`transcript_segments.speaker_id` and every `attribution_hints` row** —
 ///   after this runs they are the only surviving record of who the voices
 ///   are, and ticket 12's seeding reads them.
+/// - **`voiceprint_model` and `voiceprint_model_version`** — the stamp
+///   outlives the vector it described, because it is the only thing that can
+///   tell the Registry *why* a named Speaker has nothing behind it. Three
+///   states wear "no Voiceprint": one the Operator chose, one this wipe
+///   caused, and one that is a voice never enrolled. The renderer's
+///   `voiceprintLabel` already separates them and already reads the stamp for
+///   the middle one, so nulling it here turned "cleared when the voice model
+///   changed" into "No Voiceprint" — the sentence for a voice that was never
+///   known — on every Speaker this ran over.
+///
+/// Keeping the stamp cannot revive anything, which is the property that makes
+/// it the small fix rather than a new column. Both queries that could act on
+/// it gate on the vector, not the stamp: [`speakers::voiceprints`], the
+/// gallery every match is drawn from, selects `voiceprint IS NOT NULL AND
+/// voiceprint_model = ?`, and [`speakers::speakers_with_stale_voiceprint`],
+/// which drives the lazy re-embed, selects `voiceprint IS NOT NULL AND
+/// (voiceprint_model IS NOT ? ...)`. A row with a stamp and no vector is
+/// outside both. `has_voiceprint` on the wire is `voiceprint IS NOT NULL`
+/// too, so nothing downstream reads the stamp as evidence; and with every
+/// exemplar deleted there is nothing left to re-embed in any case. The stamp
+/// is overwritten wholesale by [`speakers::set_voiceprint`] when a real
+/// vector next arrives.
+///
+/// [`speakers::voiceprints`]: crate::store::speakers::voiceprints
+/// [`speakers::speakers_with_stale_voiceprint`]:
+///     crate::store::speakers::speakers_with_stale_voiceprint
+/// [`speakers::set_voiceprint`]: crate::store::speakers::set_voiceprint
 pub const PENDING_MODEL_CHANGE_WIPE: &str = r#"
     DELETE FROM speaker_exemplars;
 
     UPDATE speakers
-       SET voiceprint = NULL,
-           voiceprint_model = NULL,
-           voiceprint_model_version = NULL;
+       SET voiceprint = NULL
+     WHERE voiceprint IS NOT NULL;
 "#;
 
 /// The backlog a model change re-runs History with, **written and
@@ -806,9 +832,10 @@ mod tests {
     /// A History as the current build leaves one, on disk.
     ///
     /// A named Speaker with a Voiceprint and both signs of evidence, the
-    /// Operator, a forgotten Speaker, an attributed segment and a correction
-    /// hint — one of each thing the wipe promises to keep or to take.
-    fn populated_history(path: &std::path::Path) -> (String, String, String, String) {
+    /// Operator, a forgotten Speaker, a named Speaker who was never
+    /// enrolled, an attributed segment and a correction hint — one of each
+    /// thing the wipe promises to keep or to take.
+    fn populated_history(path: &std::path::Path) -> (String, String, String, String, String) {
         use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
         use crate::store::speakers::{self, NewExemplar};
         use rusqlite::params;
@@ -832,6 +859,11 @@ mod tests {
         speakers::rename(&connection, &me, "Me").expect("name");
         let gone = speakers::create(&connection, false).expect("gone").id;
         speakers::rename(&connection, &gone, "Gone").expect("name");
+        // Named and never heard well enough to enrol: the third way to have
+        // no Voiceprint, and the one the Registry must not confuse with
+        // either of the other two.
+        let fresh = speakers::create(&connection, false).expect("fresh").id;
+        speakers::rename(&connection, &fresh, "Fresh").expect("name");
 
         for (id, vector) in [(&alice, [1.0f32, 0.0]), (&me, [0.0, 1.0])] {
             for is_negative in [false, true] {
@@ -884,12 +916,19 @@ mod tests {
         // The Operator disagreeing, which is the hint that must outlive this.
         speakers::correct_attribution(&connection, &segment, &me).expect("correct");
 
-        (alice, me, gone, segment)
+        (alice, me, gone, fresh, segment)
     }
 
     /// The state the fixture leaves, so both tests below assert the same
     /// things about it and a drift shows up once rather than twice.
-    fn record_survives(connection: &Connection, alice: &str, me: &str, gone: &str, segment: &str) {
+    fn record_survives(
+        connection: &Connection,
+        alice: &str,
+        me: &str,
+        gone: &str,
+        fresh: &str,
+        segment: &str,
+    ) {
         use crate::store::speakers;
 
         let named = speakers::get(connection, alice)
@@ -910,6 +949,16 @@ mod tests {
         let forgotten = speakers::get(connection, gone).expect("get").expect("gone");
         assert!(forgotten.forgotten, "a forgotten Speaker stays forgotten");
         assert_eq!(forgotten.display_name.as_deref(), Some("Gone"));
+
+        let never = speakers::get(connection, fresh)
+            .expect("get")
+            .expect("fresh");
+        assert_eq!(never.display_name.as_deref(), Some("Fresh"));
+        assert!(!never.forgotten, "nobody deleted anything here");
+        assert!(
+            !never.has_voiceprint && never.voiceprint_model.is_none(),
+            "a voice never enrolled has no vector and no model to name"
+        );
 
         assert_eq!(
             speakers::attributed_speaker(connection, segment).expect("attributed"),
@@ -941,7 +990,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("history.sqlite3");
-        let (alice, me, gone, segment) = populated_history(&path);
+        let (alice, me, gone, fresh, segment) = populated_history(&path);
 
         // Closed and reopened, because the claim is about what the next Core
         // opens rather than about in-memory state.
@@ -949,7 +998,7 @@ mod tests {
         configure(&connection).expect("configure");
         migrate(&mut connection).expect("migrate again");
 
-        record_survives(&connection, &alice, &me, &gone, &segment);
+        record_survives(&connection, &alice, &me, &gone, &fresh, &segment);
         assert_eq!(
             speakers::voiceprints(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
                 .expect("voiceprints")
@@ -973,7 +1022,7 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("history.sqlite3");
-        let (alice, me, gone, segment) = populated_history(&path);
+        let (alice, me, gone, fresh, segment) = populated_history(&path);
 
         {
             let connection = Connection::open(&path).expect("open to wipe");
@@ -986,7 +1035,7 @@ mod tests {
         let connection = Connection::open(&path).expect("reopen");
         configure(&connection).expect("configure");
 
-        record_survives(&connection, &alice, &me, &gone, &segment);
+        record_survives(&connection, &alice, &me, &gone, &fresh, &segment);
 
         let exemplars: i64 = connection
             .query_row("SELECT count(*) FROM speaker_exemplars", [], |row| {
@@ -996,17 +1045,58 @@ mod tests {
         assert_eq!(exemplars, 0, "positive and negative alike");
         let vectors: i64 = connection
             .query_row(
-                "SELECT count(*) FROM speakers WHERE voiceprint IS NOT NULL
-                    OR voiceprint_model IS NOT NULL OR voiceprint_model_version IS NOT NULL",
+                "SELECT count(*) FROM speakers WHERE voiceprint IS NOT NULL",
                 [],
                 |row| row.get(0),
             )
             .expect("count");
-        assert_eq!(vectors, 0, "no vector and no label claiming there is one");
+        assert_eq!(vectors, 0, "every vector, whoever it belonged to");
+
+        // The gallery is empty even though two rows still name the model,
+        // because it is drawn by vector: this is the property that lets the
+        // stamp stay without becoming evidence again.
         assert!(
             speakers::voiceprints(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
                 .expect("voiceprints")
-                .is_empty()
+                .is_empty(),
+            "a stamp with no vector behind it must not be matchable"
+        );
+        assert!(
+            speakers::speakers_with_stale_voiceprint(&connection, "some-next-model", "1")
+                .expect("stale")
+                .is_empty(),
+            "and must not look to the next model like something to re-embed"
+        );
+
+        // Three Speakers now have no Voiceprint for three different reasons,
+        // and the Registry's one sentence for each is chosen from these three
+        // fields (`voiceprintLabel`, App.tsx). Nulling the stamp here is what
+        // collapsed "cleared when the voice model changed" into the sentence
+        // for a voice that was never known, on every row the wipe touched.
+        let label = |id: &str| {
+            let speaker = speakers::get(&connection, id).expect("get").expect("some");
+            match (
+                speaker.has_voiceprint,
+                speaker.forgotten,
+                speaker.voiceprint_model.is_some(),
+            ) {
+                (true, _, _) => "confirmed-or-not",
+                (false, true, _) => "forgotten",
+                (false, false, true) => "cleared",
+                (false, false, false) => "none",
+            }
+        };
+        assert_eq!(label(&alice), "cleared", "Alice lost a vector to this wipe");
+        assert_eq!(label(&me), "cleared", "and so did the Operator");
+        assert_eq!(
+            label(&gone),
+            "forgotten",
+            "an Operator's deletion is not a model change"
+        );
+        assert_eq!(
+            label(&fresh),
+            "none",
+            "and a voice never enrolled lost nothing"
         );
 
         // The one that stops the lazy rebuild path reintroducing the old
@@ -1037,6 +1127,9 @@ mod tests {
         // from the old model's attributions, which is ticket 12's
         // `claims` to exclude rather than this query's.
         assert!(relearnable.contains(&alice) && relearnable.contains(&me));
+        // Named and never enrolled is relearnable for the plain reason: it was
+        // always going to get a Voiceprint the next time it was heard.
+        assert!(relearnable.contains(&fresh));
         assert!(!relearnable.contains(&gone), "still forgotten");
     }
 }

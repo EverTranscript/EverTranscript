@@ -11,8 +11,9 @@ ADR-0037.
 **Blocked by:** nothing. Ticket 04 has landed (`ba8a491`), which is what makes
 "the model changed" a question the code can answer.
 
-**Status:** partly built, **not done**. The migration and its file-backed
-test exist; the Registry messaging and the activation do not.
+**Status:** built, **not activated**. The migration, its file-backed test and
+the Registry messaging all exist; the activation does not, and by design will
+not until the model decision is the user's to give.
 
 ## What to build
 
@@ -73,7 +74,13 @@ against the new length rather than `MIGRATIONS.len() - 1`.
       the current identity *and* for a hypothetical next one, since the point
       is that no model can find anything to re-embed
 - [x] Tested over a file-backed database, closed and reopened
-- [ ] The Registry states the reason a named Speaker holds no Voiceprint
+- [x] The Registry states the reason a named Speaker holds no Voiceprint —
+      already built (`voiceprintLabel`, `App.tsx`), which is why the fix was to
+      stop the wipe destroying the provenance it reads rather than to add a
+      message: the wipe nulled `voiceprint_model`, so every Speaker it cleared
+      read as one that was never enrolled. It now keeps the stamp, and the
+      three states stay separate — deleted by the Operator, cleared by the
+      model change, never enrolled
 - [x] Migrations stay idempotent and the schema version advances by one —
       unchanged, because the wipe is not in `MIGRATIONS`, which
       `the_pending_wipe_is_not_registered` asserts
@@ -104,10 +111,16 @@ Three tests in `store::schema`:
 - `the_pending_wipe_takes_every_vector_and_keeps_the_record` — the same
   fixture, wiped, closed, reopened. Name, `confirmed`, Operator flag,
   `forgotten`, the machine's attribution and the correction hint all survive;
-  exemplars and Voiceprint columns are gone; `stale_exemplars` is empty for
-  the current identity and for a hypothetical next model; and `relearnable`
-  still names the right Speakers, which is only true because the wipe kept the
-  names and the mark.
+  every exemplar and every vector is gone while the model stamp stays, and both
+  queries that could act on a stamp are checked to ignore one with no vector
+  behind it — `voiceprints` finds no gallery and `speakers_with_stale_voiceprint`
+  finds nothing to re-embed for a hypothetical next model. `stale_exemplars` is
+  empty for the current identity and for that next one. The three reasons a
+  Speaker can hold no Voiceprint are asserted to stay distinguishable from the
+  three fields the Registry chooses its sentence from, with a fourth Speaker in
+  the fixture who was named but never enrolled. And `relearnable` still names
+  the right Speakers, which is only true because the wipe kept the names and
+  the mark.
 - `the_pending_wipe_is_not_registered` — the activation gate as a test rather
   than a comment, since appending to `MIGRATIONS` is the whole of activating
   it and a stray paste would clear Voiceprints on the next Core start.
@@ -129,8 +142,13 @@ Three tests in `store::schema`:
 is made.** Landing it while WeSpeaker remains the model would clear Voiceprints
 for no swap. Two exact dependencies:
 
-1. The model choice (ticket 06) is settled by the user. Both reserved decisions
-   — the ≥ 2.0-point bar, and whether to pursue split models — are open.
+1. The model choice (ticket 06) is settled by the user. Its measurement is
+   complete: the embedding A/B ran on dev and held-out test, and the split-model
+   question the user released for measurement has been measured too (Q180,
+   Q183), so neither is an open experiment. What is still the user's is the
+   adoption — which model and configuration to run, and which recognition
+   outcome to prioritise — together with the ≥ 2.0-point DER bar, which they
+   asked for and deliberately left undecided.
 2. Ticket 12 exists, because a wipe with no re-run is a History nobody is
    recognized in, which ADR-0037's *Considered options* already rejected.
 

@@ -96,8 +96,13 @@ to today's shape.
 
 Same two dependencies as 05, plus one of its own:
 
-1. The model choice (ticket 06) is settled by the user. Both reserved decisions
-   — the ≥ 2.0-point bar, and whether to pursue split models — are open.
+1. The model choice (ticket 06) is settled by the user. Its measurement is
+   complete: the embedding A/B ran on dev and held-out test, and the split-model
+   question the user released for measurement has been measured too (Q180,
+   Q183), so neither is an open experiment. What is still the user's is the
+   adoption — which model and configuration to run, and which recognition
+   outcome to prioritise — together with the ≥ 2.0-point DER bar, which they
+   asked for and deliberately left undecided.
 2. Ticket 05 has landed, since this re-runs into the state its wipe leaves.
 3. **A real end-to-end exercise needs the ONNX models and roughly an hour of
    audio per Meeting**, which is why the branch's version shipped with that

@@ -48,7 +48,7 @@ WeSpeaker Voiceprints to a ReDimNet2 resolve without a word (DECISIONS Q154).
 | 03 | Turns come from segmentation. Main landed its own turn-placement implementation while this branch built a different one; reconciling them is its own work, not a merge. |
 | 05 | A model change clears Voiceprints. Migration written and tested, **not registered**; Registry messaging and activation remain — see below. |
 | 06 | ReDimNet2-B3 replaces WeSpeaker. **Measurement is complete**: both halves, plus the split-model architecture on dev (Q180) and on held-out test at declared points (Q183). No measurement work remains. The decision is the user's and is deliberately held open. See below. |
-| 07 | Recognition thresholds are re-derived. Dev curve and held-out validation done, now also across both clustering arms and both embeddings at three declared points. No point selected, for the same reason as 06: selecting one needs the adoption bar and a rate of exchange between a correct and a wrong attributed second, both reserved to the user. |
+| 07 | Recognition thresholds are re-derived. Dev curve and held-out validation done, now also across both clustering arms and both embeddings at three declared points. No point selected — not because the DER bar is missing, which a threshold does not need, but because ranking the four recognition quantities against each other needs a rate of exchange between a correct and a wrong attributed second, and that is the user's. |
 | 12 | A model change re-runs History. `cluster::claims` built and unwired (`058bcad`); the rest wants 05, a migration or the protocol — see below. |
 
 ### 05 and 12, audited against this branch rather than their old Done flags
@@ -328,27 +328,46 @@ other configurations.
 point** — against one in 128 on dev. Against own-partition control, which is the
 DER-neutral comparison: 2 dominate, 1 ties exactly, 2 are dominated, 7 trade.
 
-**What did replicate, and got stronger: the shipped matcher point.** Constrained
-0.62/0.08, holding WeSpeaker's partition (the best DER measured here, 23.51%)
-and substituting ReDimNet2's identity vectors **dominates its own-partition
-control on all four** — 18116.280 / 4108.840 / 4960.354 / 0.000 against
-17039.900 / 4328.150 / 4947.024 / 13.330, so correct +1076.380, wrong −219.310,
-correct-new +13.330, false attachment −13.330, at identical DER. On dev the same
-cell moved correct +1976.310 but wrong +128.000; on test both moved the helpful
-way. It still only **trades** against the ReDimNet2 control.
+**At the shipped matcher point the sign of the trade changed, which means the
+dominance did not replicate either.** Constrained 0.62/0.08, holding WeSpeaker's
+partition (the best DER measured here, 23.51%) and substituting ReDimNet2's
+identity vectors **dominates its own-partition control on all four** —
+18116.280 / 4108.840 / 4960.354 / 0.000 against 17039.900 / 4328.150 /
+4947.024 / 13.330, so correct +1076.380, wrong −219.310, correct-new +13.330,
+false attachment −13.330, at identical DER. But on dev this cell was a **trade**
+(correct +1976.310, wrong +128.000), so there was no dominance here to replicate:
+one setting shows a trade and the other a dominance, and the shape of the result
+is what differs between them. What did carry across both is the direction of
+correct returning, which rose under the swap in each. It still only **trades**
+against the ReDimNet2 control in both.
 
 **The exact null replicated.** Unconstrained 0.80/0.00, ReDimNet2 clustering
 with WeSpeaker identity ties its control on all four quantities to the second,
 as on dev.
 
-**At the main common operating point under the constraint the split hurts.**
-Constrained 0.80/0.00, We-clustering/Re-identity is dominated by both controls
-(wrong +141.500 against its own, and worse on correct and wrong against
-ReDimNet2's).
+**At the main common operating point under the constraint the two splits go
+opposite ways, so neither "the split" nor "the architecture" is the subject.**
+Constrained 0.80/0.00, correct-new is 4960.354s and false attachment 0.000s in
+all four cells, so the comparison is the returning pair alone.
+**We-clustering/Re-identity** is the one dominated by both controls: wrong
++141.500 with the other three identical against We/We, and correct −731.300 /
+wrong +338.520 against Re/Re. **Re-clustering/We-identity**, at the same point,
+**dominates We/We** (correct +687.520, wrong −283.880) and is a **trade** against
+Re/Re, giving up 43.780s of correct returning for 86.860s less wrong.
 
-**No split dominates every measured same-model configuration.** The best does so
-for 6 of the 12; several manage none. So nothing here shows a split beating a
-single model calibrated properly.
+**No split dominates every measured same-model configuration.** Counting
+dominances over the 12 same-model cells, the highest count any split reaches is 6;
+several reach none. That is a fact about this grid and does **not** imply that no
+split beats a calibrated single model — the two claims are different, and the
+second is false here. Unconstrained 0.80/0.00, We-clustering/Re-identity beats
+We/We at the same point on the one quantity that moves and ties the other three:
+wrong returning 2401.140 against 2436.900, so 35.760s less wrong with correct
+returning, correct-new and false attachment identical. The same cell at the same
+point on dev is also a dominance (wrong −15.550s, correct-new +6.890s, false
+attachment −7.590s, correct returning identical), which makes it the one gain in
+this work that replicated. It is small, it is one point in one arm, and it says
+nothing about any other cell. No cell is called "the best split" here without the
+metric that ranks it, because the four quantities do not agree on an order.
 
 **The tension the split does not resolve, at the shipped point:**
 
@@ -367,10 +386,14 @@ undecided adoption bar plus an unchosen rate of exchange, and neither is ours.
 
 **One decision is the user's and is deliberately held open by them:** whether
 ≥ 2.0 points of DER is the adoption bar. They were asked and chose to leave it
-undecided; it is not an unanswered question. **Separately unresolved, and not a substitute for either:** the rate of
-exchange between a correct and a wrong attributed second, without which the
-recognition column cannot be collapsed to one ranking. Nothing here assigns any
-of the three. Q152's rule holds throughout: measurements, mechanism hypotheses
+undecided; it is not an unanswered question, and it is **not a premise the rest
+waits on** — choosing a recognition threshold does not logically require a
+number for the DER bar, and the sentences above that made the two read as one
+condition were wrong to. What is actually unresolved are two product choices:
+which model and configuration to adopt, and which recognition outcome to
+prioritise. **The second needs** the rate of exchange between a correct and a
+wrong attributed second, without which the recognition column cannot be
+collapsed to one ranking. Nothing here assigns any of these. Q152's rule holds throughout: measurements, mechanism hypotheses
 and utility judgements stay separately labelled, and a sentence that ranks two
 outcomes is a utility judgement however it is phrased.
 
