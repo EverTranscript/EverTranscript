@@ -1644,3 +1644,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Ticket 11 names "80% of mic time, the existing margin, and at least 20 seconds" as the rule, so removing a named component to tidy up would be a silent narrowing of the spec. It costs two comparisons and is correct again the moment `DOMINANCE` is lowered. Noted here because a later reader finding a branch no test can reach deserves to know it was looked at rather than missed. `one_quiet_voice_among_many_does_not_become_the_operator` was resized past `MIN_OPERATOR_MS` so that it is the share refusing, not the new floor — its old numbers passed for a reason the test name did not describe.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q129 — diarization-independent/ab — tradeoff
+
+**Question:** The two embeddings need different front ends — WeSpeaker takes `input_features [B,T,80]` with the fbank computed in-crate, ReDimNet2-B3 takes `waveform` and owns its mel. Should `Embedder` pick the front end by inspecting the loaded graph's input names, or should the caller state it?
+**Options considered:** sniff the ONNX input names at load / explicit `Frontend` passed to `load_with`
+**Chosen:** Explicit. `Frontend::{Fbank, Waveform}` is an argument; `load` keeps its old signature and delegates with `Fbank`.
+**Decided-by:** agent
+**Justification:** Sniffing is the shorter code and would be right nearly always, but it fails silently in exactly the case this rig exists to prevent. A stale `/tmp/et-diarize-models/diarize-embedding.onnx` on this machine was in fact a ReDimNet2 export under WeSpeaker's filename; a sniffing loader would have accepted it and produced an A/B comparing ReDimNet2 against itself, reported as a win. Naming the front end makes that a load error instead of a plausible number. The harness prints the model and file it believes it is testing for the same reason.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q130 — diarization-independent/ab — gate-resolution
+
+**Question:** Each model has its own natural windowing. When `observe` feeds a window to the embedder, should each front end select the frames the model was trained to prefer, or should both see the identical frame selection?
+**Options considered:** per-model frame selection / identical selection, converted to sample offsets for the waveform path
+**Chosen:** Identical. `observe` picks the frames once — alone-frames where numerous enough, all frames otherwise — and the waveform path converts those same frames to sample offsets via `samples_per_frame`.
+**Decided-by:** agent
+**Justification:** The whole point of this rig is that Q111's bake-off moved two variables and attributed the result to one. Main's own Q115 records that it "compared three models through the same wrong front end, which is why WeSpeaker looked so much worse than the ReDimNets there." Letting each model window differently would reintroduce the same confound with the sign flipped. Per-model tuning is a later question and a real one; it is not answerable until the single-variable number exists.
+**Outcome:** applied
+**Ref:** (pending)

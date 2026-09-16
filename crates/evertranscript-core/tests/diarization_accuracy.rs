@@ -108,12 +108,44 @@ fn corpus() -> Option<Vec<Meeting>> {
 }
 
 /// The two ONNX graphs, from wherever this build keeps them.
+/// Which embedding to measure, and with which front end.
+///
+/// **The point of the switch is that only this moves.** Segmentation, turn
+/// placement, clustering, the thresholds and the corpus are identical
+/// across a pair of runs, so a difference between them is the embedding's.
+/// Q115 is why that matters: the bake-off that chose the shipped model ran
+/// every candidate through one front end, and it was the wrong one for the
+/// model it rejected, so the comparison measured our feature extraction.
+///
+///   EVERTRANSCRIPT_EMBEDDING=wespeaker   (default) diarize-embedding.onnx
+///   EVERTRANSCRIPT_EMBEDDING=redimnet2             diarize-embedding-redimnet2.onnx
+fn embedding_under_test() -> (String, PathBuf, diarize::live::Frontend) {
+    match std::env::var("EVERTRANSCRIPT_EMBEDDING")
+        .unwrap_or_else(|_| "wespeaker".into())
+        .as_str()
+    {
+        "redimnet2" => (
+            "redimnet2-b3".into(),
+            "diarize-embedding-redimnet2.onnx".into(),
+            diarize::live::Frontend::Waveform,
+        ),
+        "wespeaker" => (
+            "wespeaker-resnet34-LM".into(),
+            "diarize-embedding.onnx".into(),
+            diarize::live::Frontend::Fbank,
+        ),
+        other => panic!("EVERTRANSCRIPT_EMBEDDING={other}: expected wespeaker or redimnet2"),
+    }
+}
+
 fn models() -> (PathBuf, PathBuf) {
     let dir = std::env::var_os("EVERTRANSCRIPT_MODELS_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(evertranscript_core::paths::models_dir);
     let segmentation = dir.join("diarize-segmentation.onnx");
-    let embedding = dir.join("diarize-embedding.onnx");
+    let (name, file, _) = embedding_under_test();
+    let embedding = dir.join(&file);
+    println!("embedding under test: {name} ({})", file.display());
     assert!(
         segmentation.exists() && embedding.exists(),
         "the diarization models are not in {}. Fetch them with \
@@ -192,7 +224,8 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
         score::parse_rttm(&std::fs::read_to_string(&meeting.reference).expect("read reference"));
 
     let mut diarizer =
-        diarize::live::LiveDiarizer::load(segmentation, embedding).expect("load models");
+        diarize::live::LiveDiarizer::load_with(segmentation, embedding, embedding_under_test().2)
+            .expect("load models");
     let audio = diarize::MeetingAudio {
         mic: &samples,
         system: &[],

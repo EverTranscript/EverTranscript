@@ -124,14 +124,63 @@ fn open(path: &Path) -> Result<Session, DiarizeError> {
 pub struct Embedder {
     session: Session,
     mel: MelBank,
+    frontend: Frontend,
+}
+
+/// Where the model's filterbank lives.
+///
+/// Two embeddings in this product's history want different things at their
+/// input, and the difference is not a detail of either: WeSpeaker is handed
+/// Kaldi features this crate computes, and ReDimNet2 is handed the waveform
+/// and computes its own inside the graph. Keeping both selectable is what
+/// lets the two be compared on one pipeline — the only way to attribute a
+/// difference to the model rather than to everything else that moved with
+/// it, which Q115 is the cautionary tale for: the bake-off that chose
+/// between them ran every candidate through a front end that was wrong for
+/// one of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Frontend {
+    /// Kaldi fbank computed here, fed as `input_features`.
+    Fbank,
+    /// Raw 16 kHz waveform, fed as `waveform`; the graph owns the mel.
+    Waveform,
 }
 
 impl Embedder {
     pub fn load(path: &Path) -> Result<Self, DiarizeError> {
+        Self::load_with(path, Frontend::Fbank)
+    }
+
+    pub fn load_with(path: &Path, frontend: Frontend) -> Result<Self, DiarizeError> {
         Ok(Self {
             session: open(path)?,
             mel: MelBank::new(),
+            frontend,
         })
+    }
+
+    pub fn frontend(&self) -> Frontend {
+        self.frontend
+    }
+
+    /// Embeds a stretch of raw audio, for a model that carries its own mel.
+    /// `None` when there is too little of it to run the model on.
+    pub fn embed_samples(&mut self, samples: &[f32]) -> Result<Option<Vec<f32>>, DiarizeError> {
+        if samples.len() < MIN_EMBED_FRAMES * FRAME_SHIFT {
+            return Ok(None);
+        }
+        let input =
+            Value::from_array(([1_usize, samples.len()], samples.to_vec())).map_err(failed)?;
+        let outputs = self
+            .session
+            .run(ort::inputs!["waveform" => input])
+            .map_err(failed)?;
+        let (_, vector) = outputs["embedding"]
+            .try_extract_tensor::<f32>()
+            .map_err(failed)?;
+        let mut vector = vector.to_vec();
+        super::cluster::l2_normalize(&mut vector);
+        Ok(Some(vector))
     }
 
     /// Log-mel features of a stretch of audio, mean-normalized over it.
@@ -200,9 +249,19 @@ impl LiveDiarizer {
     /// Loads both models. Failure here is [`DiarizeError::Unavailable`] at
     /// the call site, never a lost Meeting.
     pub fn load(segmentation: &Path, embedding: &Path) -> Result<Self, DiarizeError> {
+        Self::load_with(segmentation, embedding, Frontend::Fbank)
+    }
+
+    /// As [`load`](Self::load), choosing which front end the embedding wants.
+    /// The measurement harness is the caller; production takes the default.
+    pub fn load_with(
+        segmentation: &Path,
+        embedding: &Path,
+        frontend: Frontend,
+    ) -> Result<Self, DiarizeError> {
         Ok(Self {
             segmentation: open(segmentation)?,
-            embedder: Embedder::load(embedding)?,
+            embedder: Embedder::load_with(embedding, frontend)?,
         })
     }
 
@@ -297,11 +356,43 @@ impl LiveDiarizer {
                     if runs.is_empty() {
                         continue;
                     }
-                    let rows: Vec<&[f32]> = chosen_rows(masks, bit, samples_per_frame)
-                        .into_iter()
-                        .filter_map(|row| features.get(row).map(Vec::as_slice))
-                        .collect();
-                    let Some(vector) = self.embedder.embed_frames(&rows)? else {
+                    // The same selection either way — the frames this
+                    // speaker holds alone where there are enough of them,
+                    // all of its frames otherwise — expressed in whatever
+                    // the model eats. Selecting differently per frontend
+                    // would put a second variable next to the one being
+                    // measured.
+                    let vector = match self.embedder.frontend() {
+                        Frontend::Fbank => {
+                            let rows: Vec<&[f32]> = chosen_rows(masks, bit, samples_per_frame)
+                                .into_iter()
+                                .filter_map(|row| features.get(row).map(Vec::as_slice))
+                                .collect();
+                            self.embedder.embed_frames(&rows)?
+                        }
+                        Frontend::Waveform => {
+                            let alone = runs_of(masks, |mask| mask == bit);
+                            let picked = if alone.len() > 1
+                                || alone.iter().map(|(a, b)| b - a).sum::<usize>()
+                                    > MIN_EMBED_FRAMES
+                            {
+                                alone
+                            } else {
+                                runs_of(masks, |mask| mask & bit != 0)
+                            };
+                            let mut voiced: Vec<f32> = Vec::new();
+                            for (from, to) in picked {
+                                let a = start + (from as f64 * samples_per_frame) as usize;
+                                let b = (start + (to as f64 * samples_per_frame) as usize)
+                                    .min(samples.len());
+                                if a < b {
+                                    voiced.extend_from_slice(&samples[a..b]);
+                                }
+                            }
+                            self.embedder.embed_samples(&voiced)?
+                        }
+                    };
+                    let Some(vector) = vector else {
                         continue;
                     };
                     let in_ms = |runs: Vec<(usize, usize)>| -> Vec<(u64, u64)> {
