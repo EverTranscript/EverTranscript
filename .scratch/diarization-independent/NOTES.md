@@ -100,26 +100,38 @@ and for a hypothetical next model, which is what stops the lazy rebuild path
 reintroducing the old model's cuts behind the wipe. **05 is not done**: the
 Registry messaging and the activation remain.
 
-**12's first two pieces are built and unwired**: `cluster::claims` (`058bcad`)
-and `cluster::relearn` (`c72bb74`) — no table, no migration, no protocol
-method, and nothing calls either. `claims` hands back the clusters a Speaker
-owns outright and the Speakers a correction took a whole cluster away from,
-reading through `attributed_speaker` and `replaced_speaker` so the Operator's
-latest word counts in both directions, and excluding the Operator. `relearn`
-files the denials as negative exemplars.
+**12's groundwork is built and unwired**: `cluster::claims` (`058bcad`,
+`c72bb74`) and `store::rerun` with its unregistered tables (`8dd6781`).
+Nothing calls any of it.
 
-**The rule on both halves is unanimity, not a vote.** A cluster is claimed only
-where every segment in it belongs to the same eligible Speaker, and denied only
-where every segment was corrected away from the same one; anything mixed or
-unvouched yields nothing. A first draft used a plurality, which would have
-enrolled a cluster's unsupported audio under whichever name held the most of it
-and broken a two-name tie by comparing UUIDs. The test is over the set of
-owners rather than a count, so splitting an utterance into more segments cannot
-change who claims it. An absent claim withholds the shortcut past the resolve,
-not the person: the Voiceprint is still there to match against, and the seeding
-path can still rebuild from the ranges that are theirs. `relearn` deletes
-nothing and is idempotent, and writes only whole-cluster denials — a
-per-segment negative needs a per-segment vector, which its inputs do not carry.
+`claims` is **read-only attribution evidence**. It hands back the clusters a
+Speaker owns outright and the Speakers a correction took a whole cluster away
+from, reading through `attributed_speaker` and `replaced_speaker` so the
+Operator's latest word counts both ways, and excluding the Operator. The rule
+on both halves is unanimity, not a vote: anything mixed or unvouched yields
+nothing. The test is over the set of owners rather than a count, so splitting
+an utterance into more segments cannot change who claims it. An absent claim
+withholds the shortcut past the resolve, not the person.
+
+**`cluster::relearn` was built and withdrawn the same day**, and the reason is
+worth keeping: unanimity over `reconciliation.assignments` is unanimity among
+*transcript segments*, while `live::assemble` builds each cluster's vector
+over every grouped `Observation` before reconciliation runs. The vector can
+carry speech no segment covers and the parts of each window outside the
+segments over it, so "cut entirely from the disputed audio" was never
+established — and by the same token a positive claim is not permission to
+enrol the raw centroid either. Its dedup was also an existence check rather
+than replacement, so correcting away and back left a stale negative. Both
+halves of the fix want an embedding bounded to the claimed ranges plus a
+stable source identity, which is the seeding path's own work.
+
+`store::rerun` is the backlog state over the existing queue: one row for the
+model identity, the original size and what cancelling abandoned, plus a
+membership table so it counts and cancels **its own** Meetings — `Back` is a
+scheduling class and production already enqueues there for Meetings that were
+never diarized. The first start records the identity and enqueues nothing;
+`begin` is the explicit path a wipe uses and consults no row, so it works with
+no prior metadata. Tables unregistered, gate tested beside 05's.
 
 Two traps from the old branch's version are written into the ticket so a
 rewrite cannot lose them: `begin_if_the_model_changed` treats an *absent*

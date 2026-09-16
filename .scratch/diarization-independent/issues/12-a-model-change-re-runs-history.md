@@ -108,78 +108,98 @@ Same two dependencies as 05, plus one of its own:
 No part of this may be run against a real History before (1) and (2). Writing
 and testing it is safe; adding the trigger is not.
 
-## Built: `cluster::claims` and `cluster::relearn` (`058bcad`, `c72bb74`)
+## Built: `cluster::claims` and `store::rerun` (`058bcad`, `c72bb74`, `8dd6781`)
 
-Landed ahead of the rest because they add no table, no migration, no protocol
-method and nothing that runs on its own. **Nothing calls either of them**; the
-re-run they belong to is still gated behind 05 and the model decision.
+Landed ahead of the rest because none of it adds a protocol method, a
+production caller or a registered migration. **Nothing calls any of it**; the
+re-run it belongs to is gated behind 05 and the model decision.
 
-`claims` reads who owned each segment **before** the run overwrites it — the
-previous model's attribution with the Operator's corrections on top — and
-hands back two things: the clusters a Speaker owns outright, and the Speakers
-a correction took a whole cluster away from. It reads through
+### `cluster::claims` — read-only attribution evidence
+
+Reads who owned each segment **before** the run overwrites it — the previous
+model's attribution with the Operator's corrections on top — and hands back
+two things: the clusters a Speaker owns outright, and the Speakers a
+correction took every one of a cluster's segments away from. It reads through
 `store::speakers::attributed_speaker` and `store::speakers::replaced_speaker`,
-never `speaker_id` directly, so the Operator's latest word counts in both
-directions. Both traps below are honoured: the Operator is filtered out, and
-nothing here enqueues anything.
+never `speaker_id`, so the Operator's latest word counts in both directions.
+The Operator is filtered out; the channel rules own them.
 
-### The rule: unanimity, not a vote
+**The rule on both halves is unanimity.** A cluster is claimed only where
+every one of its segments belongs to the same eligible Speaker, and denied
+only where every one was corrected away from the same Speaker; conflicting or
+unsupported ownership yields nothing rather than a winner. This ticket seeds a
+named Speaker **from their own attributed segments**, and naming a cluster the
+old model drew was never confirmation of every voice in a new, differently
+drawn one — the re-run redraws them, so a cluster can arrive holding two
+people's words or one person's mixed with audio nobody vouched for. The test
+is over the **set** of owners, never a count, so splitting an utterance into
+more segments cannot change who claims it; a tally would make transcription
+granularity an input to identity, and a two-name tie would be broken by
+comparing UUIDs.
 
-**A cluster is claimed only where every one of its segments belongs to the
-same eligible Speaker.** Conflicting or unsupported ownership yields no claim
-at all rather than a winner.
+**It is evidence about attribution, not permission to enrol a cluster
+vector.** `live::assemble` builds each cluster's vector with `centroid` over
+every grouped `Observation`, *before* reconciliation maps transcript segments
+to clusters. So the vector can carry speech no segment covers at all, and the
+parts of each observation window outside the segments over it. Unanimity here
+is unanimity among the segments and cannot speak for the rest of the vector —
+in either direction. A writer that enrols or suppresses a voice from a claim
+needs an embedding **bounded to the claimed ranges**, which this API does not
+carry.
 
-This ticket seeds a named Speaker **from their own attributed segments**.
-Naming a cluster the old model drew was never confirmation of every voice in a
-new, differently drawn one — and the re-run redraws them, so a cluster can
-arrive holding two people's words, or one person's mixed with audio nobody has
-vouched for. A vote would hand that whole cluster to whoever held the most of
-it, and the Voiceprint the re-run then built would be cut from all of it,
-enrolling unsupported audio under a name the Operator trusts. Two named owners
-are worse: the tie would be broken by comparing two UUIDs, which say nothing
-about whose voice it is.
+**An absent claim is not a lost person.** A claim is the coarse fast path: a
+claimed cluster could be assigned rather than resolved. Where it abstains, the
+Speaker still has their Voiceprint for the resolve, and the seeding path can
+rebuild them from the ranges that *are* theirs.
 
-The test is over the **set** of owners, never a count, so splitting one
-utterance into more segments cannot change who claims it —
-`splitting_an_utterance_cannot_change_which_identity_is_claimed`. A tally or a
-coverage percentage would make transcription granularity an input to identity.
+### Withdrawn: `cluster::relearn`
 
-**An absent claim is not a lost person.** `claims` is the coarse fast path: a
-claimed cluster is assigned rather than resolved, skipping the resolve and the
-minting floor. Where it abstains, the Speaker still has their Voiceprint for
-the resolve to match against, and the seeding path can still rebuild them from
-the ranges that *are* theirs. What an absent claim withholds is the shortcut,
-not the identity.
+Built and removed in the same day. It filed a denied cluster's centroid as a
+negative exemplar, justified by the unanimity above — which, per the
+provenance note, does not establish that the vector is cut from the disputed
+audio. Its idempotency was also dedup rather than replacement: correct away
+from Alice, relearn, correct back, relearn again, and the stale negative
+stays; a repartition writes a second vector and keeps the obsolete one. 05's
+one-time wipe does not reach a later correction under the same model.
 
-### The negative half
+The negative half comes back with the seeding path, which re-embeds the
+claimed ranges and will have both of the missing inputs in hand: a vector
+bounded to what the correction actually covered, and a stable source identity
+to scope an atomic replacement to.
 
-`relearn` writes what the corrections denied — "these words were not yours" —
-as a negative exemplar cut from the denied cluster's centroid, after the
-assignment that decided whose the words actually were.
+### `store::rerun` — the backlog state, over the existing queue
 
-Held to the same standard: a cluster is denied to a Speaker only where **every**
-segment in it was corrected away from them. A centroid is evidence of "not
-them" only if all of it was taken from them; one corrected segment in thirty
-would suppress a voice using twenty-nine segments of audio the Operator never
-disputed, which is the same mistake as enrolling one from them.
+One row (`diarize_rerun`): the model identity the backlog is for, the size it
+started at, whether the Operator stopped it, and what cancelling abandoned —
+without which `done` is `total - remaining` and jumps to `total` the moment
+the queue is emptied, telling an Operator who stopped at 1 of 40 that all
+forty were walked. `begin`, `begin_if_the_model_changed`, `state`, `cancel`.
 
-It **deletes nothing** and is idempotent. A negative already held for the same
-vector in the same Meeting is left alone rather than rewritten, so a Meeting
-retried inside one pass writes its negatives once — copies are votes in
-`centroid`. The Voiceprint is refreshed whether or not the call wrote, so a
-run interrupted between the exemplar and the Voiceprint converges on a retry
-instead of leaving the vector stale for good. Withdrawing a *previous model's*
-evidence is 05's wipe, which takes every exemplar; a negative deleted by a path
-that cannot re-derive it is a correction the Operator made and the system
-quietly forgot.
+A second table (`diarize_rerun_backlog`) records **which Meetings are the
+re-run's own**, because the queue's `Back` priority is a scheduling class, not
+a job: production already enqueues there for Meetings that were never
+diarized. Counting the whole backlog would report that catch-up as re-run
+progress, and cancelling would delete it. A Meeting promoted to `Front`
+because somebody asked for it stops being the re-run's to cancel.
 
-**One gap, stated rather than narrowed silently.** The ticket says negatives
-are rebuilt "from corrections that took a segment away" — per segment. A
-per-segment negative needs a per-segment vector, and `relearn`'s inputs carry
-one vector per cluster. The whole-cluster denial is the part of that the
-current data flow can support with sound provenance; the per-segment case
-belongs with the seeding path, which will have the ranges in hand because it
-re-embeds them.
+**The first start records the identity and asks for nothing.** An absent row
+means this History has never recorded an identity — which is every History
+today — so reading it as a model change would re-run all of History on the
+first ordinary update. A transition that genuinely needs the walk calls
+`begin`, which consults no row and therefore works on an installation with no
+prior metadata. `begin` and `cancel` are each one transaction.
+
+Both tables live in `schema::PENDING_MODEL_CHANGE_RERUN`, **unregistered**, so
+every function fails on a current History by design.
+`the_pending_rerun_is_not_registered` is the gate, beside 05's.
+
+### Still to build
+
+`store::rerun`'s walk and its production trigger, the per-segment seeding path
+(which is also where the negative half returns), the `rerun` block on
+`diarize/status`, and `diarize/rerunCancel`. The two protocol changes are
+additive (ADR-0028); a Core with no re-run must encode byte-identically to
+today's shape.
 
 ## Two traps in the old branch's version, checked against this code
 
