@@ -232,13 +232,18 @@ fn shared_ms(left: &[(u64, u64)], right: &[(u64, u64)]) -> u64 {
     total
 }
 
-/// Beyond this many speakers on either side, the exact assignment is not
-/// worth the exponent and a greedy one is used instead.
+/// Beyond this many speakers on the **narrower** side, the exact assignment
+/// is not worth the exponent and a greedy one is used instead.
 ///
 /// AMI meetings have four or five people in them, so the exact path is what
-/// actually runs; the fallback exists so a pathological hypothesis — the
-/// 503-Speaker History that migration 10 pruned, say — degrades to a
-/// slightly pessimistic number rather than to a hang.
+/// runs; the fallback exists so a pathological case degrades to a slightly
+/// pessimistic number rather than to a hang.
+///
+/// **This said the same thing while the code tested the wider side**, which
+/// is the hypothesis — a hundred clusters a meeting before merging, never
+/// under eighteen. So every DER this file ever reported was greedy, and the
+/// comment asserting otherwise is why nobody looked. Raised by the Codex
+/// peer reviewing the sweep (DECISIONS Q141).
 const EXACT_MAPPING_LIMIT: usize = 18;
 
 /// The reference-to-hypothesis mapping that credits the most time.
@@ -260,9 +265,13 @@ fn optimal_mapping(
     }
     let matrix = overlaps(reference, hypothesis);
 
-    let side = reference_names.len().max(hypothesis_names.len());
-    let pairs = if side <= EXACT_MAPPING_LIMIT {
-        exact_assignment(&matrix, side)
+    // On the *narrow* side. Squaring the matrix and masking the wide one is
+    // what sent every real meeting down the greedy path: AMI has four or five
+    // people in it, but our clustering offers a hundred candidates for them,
+    // and `max` of those two is never four or five.
+    let narrow = reference_names.len().min(hypothesis_names.len());
+    let pairs = if narrow <= EXACT_MAPPING_LIMIT {
+        exact_assignment(&matrix, reference_names.len(), hypothesis_names.len())
     } else {
         greedy_assignment(&matrix, hypothesis_names.len())
     };
@@ -281,20 +290,23 @@ fn optimal_mapping(
         .collect()
 }
 
-/// Maximum-weight perfect matching by DP over subsets of hypothesis
-/// speakers, on the matrix squared out with zeros.
+/// Maximum-weight matching by DP over subsets of the **narrow** side.
 ///
-/// Squared first because the DP assigns reference speaker `k` at the step
-/// where `k + 1` columns are taken, which only visits every reference
-/// speaker when the two sides are the same size. With more people in the
-/// room than clusters found, an unsquared DP would silently force the
-/// alphabetically-first reference speakers to be the matched ones — a
-/// scorer's arbitrary choice charged to the system as confusion.
+/// The matrix is rectangular and usually lopsided: four or five people in the
+/// room, a hundred clusters offered for them. Masking the narrow side keeps
+/// the exponent on the four or five and streams the hundred past it, which is
+/// a few thousand operations. Masking the wide side — squaring the matrix and
+/// running the DP over hypothesis subsets — puts 2^100 in the way, so the
+/// limit above always tripped and greedy always ran.
 ///
-/// `best[mask]` is the most time creditable using reference speakers
-/// `0..mask.count_ones()` and exactly the hypothesis speakers in `mask`.
-fn exact_assignment(matrix: &[Vec<u64>], side: usize) -> Vec<(usize, usize)> {
-    let weight = |row: usize, column: usize| -> u64 {
+/// `best[mask]` is the most time creditable having walked some prefix of the
+/// wide side, with exactly the narrow entries in `mask` spoken for.
+fn exact_assignment(matrix: &[Vec<u64>], rows: usize, columns: usize) -> Vec<(usize, usize)> {
+    let narrow_is_row = rows <= columns;
+    let narrow = rows.min(columns);
+    let wide = rows.max(columns);
+    let weight = |n: usize, w: usize| -> u64 {
+        let (row, column) = if narrow_is_row { (n, w) } else { (w, n) };
         matrix
             .get(row)
             .and_then(|values| values.get(column))
@@ -302,34 +314,58 @@ fn exact_assignment(matrix: &[Vec<u64>], side: usize) -> Vec<(usize, usize)> {
             .unwrap_or(0)
     };
 
-    let states = 1usize << side;
-    let mut best = vec![0u64; states];
-    let mut chose = vec![usize::MAX; states];
+    let masks = 1usize << narrow;
+    let mut best = vec![0u64; masks];
+    let mut reached = vec![false; masks];
+    reached[0] = true;
+    // Which narrow entry the wide entry took to arrive at each mask, or NONE.
+    // A byte, because `narrow` is bounded by the limit above and this table is
+    // the one thing here that scales with both sides at once.
+    const NONE: u8 = u8::MAX;
+    let mut taken: Vec<Vec<u8>> = Vec::with_capacity(wide);
 
-    for mask in 1..states {
-        let row = mask.count_ones() as usize - 1;
-        for column in 0..side {
-            if mask & (1 << column) == 0 {
+    for w in 0..wide {
+        // Carried forward: a wide entry is allowed to match nobody, which is
+        // the usual case when a hundred clusters chase five people.
+        let mut next = best.clone();
+        let mut next_reached = reached.clone();
+        let mut step = vec![NONE; masks];
+        for mask in 0..masks {
+            if !reached[mask] {
                 continue;
             }
-            let previous = mask & !(1 << column);
-            let candidate = best[previous] + weight(row, column);
-            if candidate >= best[mask] && (chose[mask] == usize::MAX || candidate > best[mask]) {
-                best[mask] = candidate;
-                chose[mask] = column;
+            for n in 0..narrow {
+                let bit = 1usize << n;
+                if mask & bit != 0 {
+                    continue;
+                }
+                let value = best[mask] + weight(n, w);
+                let to = mask | bit;
+                if !next_reached[to] || value > next[to] {
+                    next[to] = value;
+                    next_reached[to] = true;
+                    step[to] = n as u8;
+                }
             }
         }
+        best = next;
+        reached = next_reached;
+        taken.push(step);
     }
 
-    let mut pairs = Vec::with_capacity(side);
-    let mut mask = states - 1;
-    while mask != 0 {
-        let column = chose[mask];
-        if column == usize::MAX {
-            break;
+    let mut mask = (0..masks)
+        .filter(|&candidate| reached[candidate])
+        .max_by_key(|&candidate| best[candidate])
+        .unwrap_or(0);
+    let mut pairs = Vec::new();
+    for w in (0..wide).rev() {
+        let n = taken[w][mask];
+        if n == NONE {
+            continue;
         }
-        pairs.push((mask.count_ones() as usize - 1, column));
-        mask &= !(1 << column);
+        let n = n as usize;
+        pairs.push(if narrow_is_row { (n, w) } else { (w, n) });
+        mask &= !(1usize << n);
     }
     pairs
 }
@@ -713,6 +749,27 @@ mod tests {
         assert_eq!(
             scored.confusion_ms, 600,
             "greedy would charge 1050 here: {scored:?}"
+        );
+    }
+
+    #[test]
+    fn a_crowd_of_clusters_does_not_push_a_two_speaker_meeting_onto_the_greedy_path() {
+        // The same trap as above, with seventeen clusters of nobody added so
+        // the hypothesis names nineteen speakers. The room still holds two
+        // people, which is the count that decides whether the exact
+        // assignment is affordable — and under the version of this scorer
+        // that took `max` of the two sides, nineteen sent it to greedy and
+        // this charged 1050. Every AMI meeting was on that path.
+        let reference = spans(&[("alice", 0, 1_100), ("bob", 2_000, 2_550)]);
+        let mut hypothesis = spans(&[("X", 0, 600), ("X", 2_000, 2_550), ("Y", 600, 1_100)]);
+        for spare in 0..17 {
+            let start = 10_000 + spare * 100;
+            hypothesis.push(Span::new(&format!("spare-{spare}"), start, start + 50));
+        }
+        let scored = der(&reference, &hypothesis);
+        assert_eq!(
+            scored.confusion_ms, 600,
+            "the clusters of nobody changed who alice is: {scored:?}"
         );
     }
 
