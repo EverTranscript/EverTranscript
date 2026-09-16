@@ -25,6 +25,7 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -773,4 +774,1035 @@ fn the_pipeline_scores_what_the_record_says_it_scores() {
         total_seconds / total_audio.max(1.0),
         thresholds.len()
     );
+}
+
+// ======================= chronological enrollment replay =======================
+//
+// Cross-meeting recognition, measured the way the product meets it: meetings
+// arrive one at a time, each resolved against the gallery the ones before it
+// built, and what it learns is available to the next.
+//
+// This replaces numbers that were confounded. Nearest-voice-right and
+// cross-meeting EER compare every voice against every other, which rewards
+// fragmentation — at a high merge threshold nothing merges, so every cluster
+// is a tiny pure fragment that trivially matches its own speaker, and both
+// improve while DER collapses (Q140). Two models that fragment differently
+// cannot be compared that way at all.
+//
+// **The unit of score is the segment, not the person.** An earlier version of
+// this file chose one representative cluster per reference speaker with
+// `optimal_mapping` and gave that person's whole speech time that cluster's
+// outcome, which turns 900 seconds right and 100 wrong into 1000 of one or
+// the other. Recognition is scored here from the SpeakerID production
+// actually stored on each segment, so a person split across two identities
+// is reported split. No oracle mapping enters recognition scoring at all.
+
+/// Which manifest to replay, as a path. Unset skips, like the corpus.
+const REPLAY_ENV: &str = "EVERTRANSCRIPT_REPLAY_MANIFEST";
+
+/// One meeting in the replay order.
+struct Chapter {
+    order: usize,
+    meeting: String,
+    /// Returning events here do not score. Set for IB4002, whose speaker
+    /// labels are permuted against IB4001's: only FIE038 is shared any
+    /// further, so a different-label neighbour above 0.8 for all four can
+    /// only be the partner meeting, and nothing model-free says which of the
+    /// pair is wrong. The meeting stays in the chronology, in DER and as an
+    /// open-set probe; only these four people's returning seconds stop
+    /// scoring, and they stay out of every scored denominator.
+    unscorable_returns: bool,
+    speakers: Vec<String>,
+}
+
+fn load_manifest(path: &Path, corpus: &[Meeting]) -> Vec<Chapter> {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let mut chapters: Vec<Chapter> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let order: usize = parts.next().expect("order").parse().expect("order");
+        let meeting = parts.next().expect("meeting").to_string();
+        let unscorable_returns = match parts.next().expect("flags") {
+            "." => false,
+            "unscorable-returns" => true,
+            other => panic!("{}: unknown flag {other}", path.display()),
+        };
+        let speakers: Vec<String> = parts.map(str::to_string).collect();
+        assert_eq!(
+            order,
+            chapters.len() + 1,
+            "manifest order is not contiguous"
+        );
+        chapters.push(Chapter {
+            order,
+            meeting,
+            unscorable_returns,
+            speakers,
+        });
+    }
+
+    // Checked against the corpus rather than trusted: the manifest's whole job
+    // is to say who is who, and one that had drifted from the RTTMs would
+    // answer that wrongly and silently.
+    for chapter in &chapters {
+        let found = corpus
+            .iter()
+            .find(|one| one.name == chapter.meeting)
+            .unwrap_or_else(|| panic!("{} is in the manifest but not the corpus", chapter.meeting));
+        let mut actual: Vec<String> =
+            score::parse_rttm(&std::fs::read_to_string(&found.reference).expect("rttm"))
+                .into_iter()
+                .map(|span| span.speaker)
+                .collect();
+        actual.sort();
+        actual.dedup();
+        assert_eq!(
+            actual, chapter.speakers,
+            "{}: the manifest and the RTTM disagree about who is in the room",
+            chapter.meeting
+        );
+    }
+    assert_eq!(
+        chapters.len(),
+        corpus.len(),
+        "the manifest and the corpus hold different numbers of meetings"
+    );
+    chapters
+}
+
+/// What the evaluator decided a stored Speaker *is*, fixed when it was minted.
+///
+/// A stored identity that began as Alice must not become "correctly Bob"
+/// because later erroneous updates dragged its centroid toward Bob. Ownership
+/// is settled once, from the reference speech time of the cluster that minted
+/// it, and every later judgement is against that. Lives entirely outside the
+/// store: production never sees it.
+struct Anchor {
+    who: String,
+    purity: f64,
+    minted_in: String,
+}
+
+impl Anchor {
+    /// No majority owner. Every later attach to it scores wrong, because
+    /// there is no person it could be right about — and it is not a genuine
+    /// enrollment of anybody, so it cannot make somebody enrolled-before.
+    fn mixed(&self) -> bool {
+        self.purity <= 0.5
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Population {
+    /// Spoke in an earlier meeting of this order — whether or not either
+    /// system managed to enrol them. Reference decides this, not the store.
+    Returning,
+    New,
+}
+
+/// Why production stored no SpeakerID on a segment.
+///
+/// Read from the assignment and the embeddings rather than guessed from
+/// duration: a short cluster that was *recognized* keeps its identity, so
+/// voiced time alone does not establish a mint-floor refusal.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Missing {
+    /// No turn covered the segment's midpoint, so reconcile chose no cluster.
+    NoTurn,
+    /// A cluster, but with too little clean voiced audio to embed honestly,
+    /// so `persist` never saw it.
+    NoEmbedding,
+    /// Heard, embedded, unrecognized, and under [`MIN_SPEAKER_MS`] — the only
+    /// way `persist` declines to mint under the current rules.
+    MintFloor,
+    /// Heard and embedded and over the floor, yet nothing was stored. Not a
+    /// case the rules produce; reported rather than filed under one of the
+    /// above, because filing it would hide a change in `persist`.
+    Unexpected,
+}
+
+impl Missing {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::NoTurn => "unattributed:no-turn",
+            Self::NoEmbedding => "unattributed:no-embedding",
+            Self::MintFloor => "unattributed:mint-floor",
+            Self::Unexpected => "unattributed:unexpected",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Outcome {
+    Correct,
+    Wrong,
+    /// A new anonymous Speaker for somebody the gallery already held.
+    AbstainEnrolled,
+    /// A new anonymous Speaker for somebody never enrolled — the persist
+    /// policy's failure rather than the matcher's refusal.
+    AbstainNeverEnrolled,
+    CorrectNew,
+    FalseAttach,
+    /// No SpeakerID at all, with the reason production's own signals give.
+    Unattributed(Missing),
+    Unscorable,
+}
+
+impl Outcome {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Correct => "correct",
+            Self::Wrong => "wrong",
+            Self::AbstainEnrolled => "abstain-enrolled",
+            Self::AbstainNeverEnrolled => "abstain-never-enrolled",
+            Self::CorrectNew => "correct-new",
+            Self::FalseAttach => "false-attach",
+            Self::Unattributed(why) => why.tag(),
+            Self::Unscorable => "unscorable",
+        }
+    }
+
+    fn parse(tag: &str) -> Self {
+        match tag {
+            "correct" => Self::Correct,
+            "wrong" => Self::Wrong,
+            "abstain-enrolled" => Self::AbstainEnrolled,
+            "abstain-never-enrolled" => Self::AbstainNeverEnrolled,
+            "correct-new" => Self::CorrectNew,
+            "false-attach" => Self::FalseAttach,
+            "unattributed:no-turn" => Self::Unattributed(Missing::NoTurn),
+            "unattributed:no-embedding" => Self::Unattributed(Missing::NoEmbedding),
+            "unattributed:mint-floor" => Self::Unattributed(Missing::MintFloor),
+            "unattributed:unexpected" => Self::Unattributed(Missing::Unexpected),
+            "unscorable" => Self::Unscorable,
+            other => panic!("unknown outcome {other}"),
+        }
+    }
+
+    fn scored(self) -> bool {
+        self != Self::Unscorable
+    }
+}
+
+/// One (meeting, person, outcome) with the reference speech time it holds.
+///
+/// Several rows per person per meeting, because a person's seconds can land
+/// on more than one outcome — which is the whole point of scoring segments.
+struct Event {
+    order: usize,
+    meeting: String,
+    who: String,
+    population: Population,
+    outcome: Outcome,
+    seconds: f64,
+}
+
+/// Replays one split through one embedding, into a store of its own.
+///
+/// **One store, every meeting, one declared order.** Not a gallery per
+/// series: that is not what a user's store looks like, it would hide the
+/// cross-series returners AMI has — FIE038 is in both IB and IS1008 — and on
+/// a split where every series is a closed four-person group it would leave no
+/// impostor pressure at all.
+///
+/// **The contamination is the policy under test, not a confound.** `persist`
+/// folds an accepted match back in as an exemplar with no confirmation gate,
+/// so a wrong name can damage later matching. Running with that on is the
+/// point. It does make the result depend on this history, which the report
+/// has to say.
+///
+/// **Reference-transcript speaker-time.** One segment per reference turn,
+/// identical for both models, with reference-derived boundaries and no ASR.
+/// There is no recognizer here and `persist` will not mint for a cluster that
+/// owns no words, so something has to stand in for the Transcript. Scoring
+/// reads the SpeakerID production stored on each of those segments, so what
+/// is measured is the real assignment over reference boundaries — a more
+/// generous transcript than a real one, and every number inherits that.
+fn replay(
+    chapters: &[Chapter],
+    corpus: &[Meeting],
+    segmentation: &Path,
+    embedding: &Path,
+    threshold: f32,
+) -> (Vec<Event>, BTreeMap<String, Anchor>) {
+    use evertranscript_core::store::meetings;
+    use evertranscript_core::store::schema;
+    use evertranscript_core::store::speakers;
+
+    let directory = std::env::temp_dir().join(format!(
+        "evertranscript-replay-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&directory).expect("replay store directory");
+    let mut connection =
+        rusqlite::Connection::open(directory.join("replay.db")).expect("replay store");
+    schema::configure(&connection).expect("configure");
+    schema::migrate(&mut connection).expect("migrate");
+
+    let mut events = Vec::new();
+    let mut anchors: BTreeMap<String, Anchor> = BTreeMap::new();
+    let mut seen_before: BTreeSet<String> = BTreeSet::new();
+
+    for chapter in chapters {
+        let meeting = corpus
+            .iter()
+            .find(|one| one.name == chapter.meeting)
+            .expect("manifest checked against the corpus already");
+        let inferred = observe_once(meeting, segmentation, embedding);
+        let diarization = diarize::live::cluster_observed(&inferred.observed, threshold);
+        let channel = inferred
+            .observed
+            .windows
+            .first()
+            .map(|&(channel, _, _)| channel)
+            .expect("a meeting with no windows");
+
+        // The gallery as it stands *before* this meeting, since persist is
+        // about to change it. A mixed anchor is nobody's enrollment, so it
+        // cannot make a person enrolled-before.
+        let enrolled_before: BTreeSet<String> = diarize::cluster::seeds(
+            &connection,
+            diarize::live::EMBEDDING_MODEL,
+            diarize::live::EMBEDDING_MODEL_VERSION,
+        )
+        .expect("seeds")
+        .iter()
+        .filter_map(|seed| anchors.get(&seed.speaker_id))
+        .filter(|anchor| !anchor.mixed())
+        .map(|anchor| anchor.who.clone())
+        .collect();
+        let known_speakers: BTreeSet<String> = speakers::list(&connection)
+            .expect("speakers")
+            .into_iter()
+            .map(|speaker| speaker.id)
+            .collect();
+
+        let meeting_id = meetings::start(&connection, Some(&chapter.meeting), None)
+            .expect("start")
+            .id;
+        // Evaluator-only: which reference person each segment is, and how
+        // long. Never read by production; this is the denominator.
+        let mut owner: BTreeMap<String, (String, u64)> = BTreeMap::new();
+        for span in &inferred.reference {
+            let segment = meetings::append_segment(
+                &connection,
+                &meeting_id,
+                channel,
+                span.start_ms as i64,
+                span.end_ms as i64,
+                "reference turn",
+            )
+            .expect("append segment");
+            owner.insert(
+                segment.id,
+                (span.speaker.clone(), span.end_ms - span.start_ms),
+            );
+        }
+
+        let segments = meetings::segments(&connection, &meeting_id).expect("segments");
+        let reconciliation = diarize::reconcile::reconcile(&diarization, &segments);
+        let chose: BTreeMap<&str, Option<diarize::Cluster>> = reconciliation
+            .assignments
+            .iter()
+            .map(|one| (one.segment_id.as_str(), one.cluster))
+            .collect();
+        let assigned = diarize::cluster::persist(
+            &connection,
+            &meeting_id,
+            &diarization.embeddings,
+            &reconciliation.voices(),
+            None,
+        )
+        .expect("persist");
+        diarize::reconcile::apply(
+            &connection,
+            &reconciliation,
+            &assigned,
+            speakers::Attribution::Clustered,
+        )
+        .expect("apply");
+        speakers::sweep_unreferenced(&connection).expect("sweep");
+        meetings::set_diarized(&connection, &meeting_id).expect("set diarized");
+
+        // Anchor every Speaker this meeting minted, before scoring anything
+        // against it. The oracle mapping lives here and only here: deciding
+        // what a *stored identity* is, once, is not the same question as
+        // deciding whether a segment was attributed correctly.
+        let spans = hypothesis(&diarization.turns);
+        for (cluster, speaker_id) in &assigned {
+            if known_speakers.contains(speaker_id) || anchors.contains_key(speaker_id) {
+                continue;
+            }
+            let owned: Vec<(u64, u64)> = spans
+                .iter()
+                .filter(|span| span.speaker == format!("cluster-{}", cluster.index()))
+                .map(|span| (span.start_ms, span.end_ms))
+                .collect();
+            let (who, purity) = ownership(&owned, &inferred.reference);
+            anchors.insert(
+                speaker_id.clone(),
+                Anchor {
+                    who,
+                    purity,
+                    minted_in: chapter.meeting.clone(),
+                },
+            );
+        }
+
+        // Seconds by (person, outcome), read off what production stored.
+        let mut held: BTreeMap<(String, &'static str), (Outcome, f64)> = BTreeMap::new();
+        for segment in &segments {
+            let (who, duration_ms) = owner.get(&segment.id).expect("every segment has an owner");
+            let population = if seen_before.contains(who) {
+                Population::Returning
+            } else {
+                Population::New
+            };
+            let stored =
+                speakers::attributed_speaker(&connection, &segment.id).expect("attribution");
+
+            let outcome = classify(
+                Scoring {
+                    population,
+                    unscorable_returns: chapter.unscorable_returns,
+                    meeting: &chapter.meeting,
+                    who,
+                    stored: stored.as_deref(),
+                    anchors: &anchors,
+                    enrolled_before: &enrolled_before,
+                },
+                || {
+                    why_missing(
+                        chose.get(segment.id.as_str()).copied().flatten(),
+                        &diarization,
+                        &assigned,
+                    )
+                },
+            );
+
+            let slot = held
+                .entry((who.clone(), outcome.tag()))
+                .or_insert((outcome, 0.0));
+            slot.1 += *duration_ms as f64 / 1000.0;
+        }
+
+        for ((who, _), (outcome, seconds)) in held {
+            let population = if seen_before.contains(&who) {
+                Population::Returning
+            } else {
+                Population::New
+            };
+            events.push(Event {
+                order: chapter.order,
+                meeting: chapter.meeting.clone(),
+                who,
+                population,
+                outcome,
+                seconds,
+            });
+        }
+
+        for who in &chapter.speakers {
+            seen_before.insert(who.clone());
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&directory);
+    (events, anchors)
+}
+
+/// Why no SpeakerID, from production's own signals rather than from duration.
+fn why_missing(
+    chosen: Option<diarize::Cluster>,
+    diarization: &diarize::Diarization,
+    assigned: &BTreeMap<diarize::Cluster, String>,
+) -> Missing {
+    let Some(cluster) = chosen else {
+        return Missing::NoTurn;
+    };
+    let Some(embedding) = diarization.embeddings.get(&cluster) else {
+        return Missing::NoEmbedding;
+    };
+    if assigned.contains_key(&cluster) {
+        // The cluster has an identity but this segment carries none, which
+        // `apply` does not do. Surfaced rather than explained away.
+        return Missing::Unexpected;
+    }
+    // Heard — it owns this segment — and embedded, so persist saw it and
+    // declined. Recognition has no floor, so declining means unrecognized,
+    // and the only remaining gate is the mint floor.
+    if embedding.voiced_ms < diarize::cluster::MIN_SPEAKER_MS {
+        Missing::MintFloor
+    } else {
+        Missing::Unexpected
+    }
+}
+
+/// Who holds most of these milliseconds in the reference, and what share.
+///
+/// The share is the purity the anchor records: a cluster nobody holds a
+/// majority of has no person it could later be right about.
+fn ownership(ranges: &[(u64, u64)], reference: &[Span]) -> (String, f64) {
+    let mut held: BTreeMap<&str, u64> = BTreeMap::new();
+    for (start, end) in ranges {
+        for span in reference {
+            let overlap = (*end)
+                .min(span.end_ms)
+                .saturating_sub((*start).max(span.start_ms));
+            if overlap > 0 {
+                *held.entry(span.speaker.as_str()).or_default() += overlap;
+            }
+        }
+    }
+    let total: u64 = held.values().sum();
+    match held.into_iter().max_by_key(|(_, ms)| *ms) {
+        Some((who, ms)) if total > 0 => (who.to_string(), ms as f64 / total as f64),
+        _ => (String::from("(none)"), 0.0),
+    }
+}
+
+/// Everything one segment's verdict depends on, so the rule is one function
+/// with no store behind it and can be checked offline.
+struct Scoring<'a> {
+    population: Population,
+    unscorable_returns: bool,
+    meeting: &'a str,
+    who: &'a str,
+    /// The SpeakerID production actually wrote on this segment.
+    stored: Option<&'a str>,
+    anchors: &'a BTreeMap<String, Anchor>,
+    enrolled_before: &'a BTreeSet<String>,
+}
+
+/// One segment's outcome. `missing` is only consulted when nothing was
+/// stored, so the caller does not pay to work out a reason it will not use.
+fn classify(at: Scoring<'_>, missing: impl FnOnce() -> Missing) -> Outcome {
+    if at.unscorable_returns && at.population == Population::Returning {
+        return Outcome::Unscorable;
+    }
+    let Some(id) = at.stored else {
+        return Outcome::Unattributed(missing());
+    };
+    let anchor = at
+        .anchors
+        .get(id)
+        .expect("a stored Speaker is anchored before anything scores against it");
+    let minted_here = anchor.minted_in == at.meeting;
+    match at.population {
+        Population::Returning if minted_here => {
+            if at.enrolled_before.contains(at.who) {
+                Outcome::AbstainEnrolled
+            } else {
+                Outcome::AbstainNeverEnrolled
+            }
+        }
+        Population::Returning => {
+            if !anchor.mixed() && anchor.who == at.who {
+                Outcome::Correct
+            } else {
+                Outcome::Wrong
+            }
+        }
+        Population::New if minted_here => Outcome::CorrectNew,
+        Population::New => Outcome::FalseAttach,
+    }
+}
+
+/// Events as a file, so two runs pair without either being re-run.
+fn write_events(path: &Path, events: &[Event]) {
+    let mut out = String::from("order\tmeeting\twho\tpopulation\toutcome\tseconds\n");
+    for event in events {
+        out.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{:.3}\n",
+            event.order,
+            event.meeting,
+            event.who,
+            match event.population {
+                Population::Returning => "returning",
+                Population::New => "new",
+            },
+            event.outcome.tag(),
+            event.seconds,
+        ));
+    }
+    std::fs::write(path, out).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    println!("events written to {}", path.display());
+}
+
+fn read_events(path: &Path) -> Vec<Event> {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    text.lines()
+        .skip(1)
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let field: Vec<&str> = line.split('\t').collect();
+            assert_eq!(field.len(), 6, "{}: malformed row {line}", path.display());
+            Event {
+                order: field[0].parse().expect("order"),
+                meeting: field[1].to_string(),
+                who: field[2].to_string(),
+                population: match field[3] {
+                    "returning" => Population::Returning,
+                    "new" => Population::New,
+                    other => panic!("unknown population {other}"),
+                },
+                outcome: Outcome::parse(field[4]),
+                seconds: field[5].parse().expect("seconds"),
+            }
+        })
+        .collect()
+}
+
+/// One person in one meeting: the denominator, and where their seconds went.
+struct Ledger {
+    population: Population,
+    seconds: f64,
+    by_outcome: BTreeMap<&'static str, f64>,
+}
+
+/// Folds events into per-person ledgers, refusing a file that cannot be one.
+fn ledgers(events: &[Event], source: &str) -> BTreeMap<(usize, String, String), Ledger> {
+    let mut out: BTreeMap<(usize, String, String), Ledger> = BTreeMap::new();
+    let mut seen: BTreeSet<(usize, String, String, &str)> = BTreeSet::new();
+    for event in events {
+        let key = (event.order, event.meeting.clone(), event.who.clone());
+        assert!(
+            seen.insert((
+                event.order,
+                event.meeting.clone(),
+                event.who.clone(),
+                event.outcome.tag()
+            )),
+            "{source}: {} {} {} appears twice with outcome {}",
+            event.order,
+            event.meeting,
+            event.who,
+            event.outcome.tag()
+        );
+        let slot = out.entry(key).or_insert_with(|| Ledger {
+            population: event.population,
+            seconds: 0.0,
+            by_outcome: BTreeMap::new(),
+        });
+        assert!(
+            slot.population == event.population,
+            "{source}: {} {} changes population between rows",
+            event.meeting,
+            event.who
+        );
+        slot.seconds += event.seconds;
+        *slot.by_outcome.entry(event.outcome.tag()).or_default() += event.seconds;
+    }
+    out
+}
+
+/// What one replay produced, by population, weighted by reference speech time.
+///
+/// Unscorable seconds are reported on their own and are in no scored
+/// denominator: they are time the corpus cannot adjudicate, not time anybody
+/// got wrong.
+fn report_replay(events: &[Event], anchors: &BTreeMap<String, Anchor>) {
+    for (label, population) in [
+        ("returning", Population::Returning),
+        ("new", Population::New),
+    ] {
+        let mine: Vec<&Event> = events
+            .iter()
+            .filter(|event| event.population == population)
+            .collect();
+        let scored: f64 = mine
+            .iter()
+            .filter(|event| event.outcome.scored())
+            .map(|event| event.seconds)
+            .sum();
+        let held_out: f64 = mine
+            .iter()
+            .filter(|event| !event.outcome.scored())
+            .map(|event| event.seconds)
+            .sum();
+        let people: BTreeSet<&str> = mine.iter().map(|event| event.who.as_str()).collect();
+        println!(
+            "\n{label}  {} person-meetings over {} people, {scored:.0}s scored\
+             {}",
+            mine.iter()
+                .map(|event| (&event.meeting, &event.who))
+                .collect::<BTreeSet<_>>()
+                .len(),
+            people.len(),
+            if held_out > 0.0 {
+                format!(", {held_out:.0}s unscorable and out of every denominator")
+            } else {
+                String::new()
+            }
+        );
+        let mut by_outcome: BTreeMap<&str, f64> = BTreeMap::new();
+        for event in &mine {
+            *by_outcome.entry(event.outcome.tag()).or_default() += event.seconds;
+        }
+        for (tag, held) in by_outcome {
+            let share = if scored > 0.0 {
+                held / scored * 100.0
+            } else {
+                0.0
+            };
+            if tag == "unscorable" {
+                println!("  {tag:<28} {held:>8.0}s   (not in the denominator)");
+            } else {
+                println!("  {tag:<28} {held:>8.0}s  {share:>5.1}%");
+            }
+        }
+    }
+
+    // FIE038 is the only person returning past the unverified IB4001/IB4002
+    // pair, so its later returns carry a history nothing model-free can check.
+    let tainted: Vec<&Event> = events
+        .iter()
+        .filter(|event| {
+            event.who == "FIE038"
+                && event.population == Population::Returning
+                && event.outcome.scored()
+        })
+        .collect();
+    if !tainted.is_empty() {
+        println!("\nFIE038's later returns — history includes the unverified IB4001/IB4002 pair");
+        for event in tainted {
+            println!(
+                "  {:>2} {:<9} {:>7.0}s  {}",
+                event.order,
+                event.meeting,
+                event.seconds,
+                event.outcome.tag()
+            );
+        }
+    }
+
+    let mut per_person: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut mixed = 0;
+    for anchor in anchors.values() {
+        *per_person.entry(anchor.who.as_str()).or_default() += 1;
+        if anchor.mixed() {
+            mixed += 1;
+        }
+    }
+    println!(
+        "\nstored identities  {} for {} people ({:.1} each), {mixed} anchored to nobody in particular",
+        anchors.len(),
+        per_person.len(),
+        anchors.len() as f64 / per_person.len().max(1) as f64,
+    );
+}
+
+/// Pairs two replays and reports the differences descriptively.
+///
+/// **No significance test.** The unit is the person-meeting, and they are
+/// dependent through a shared gallery and a cascading history — a sign test
+/// needs independence just as much as a t-test does, so it would be the same
+/// error in cheaper clothing. Differences are described, and every one is
+/// listed so a reader can go and look.
+fn pair_replays(left: &Path, right: &Path) {
+    let a = ledgers(&read_events(left), &left.display().to_string());
+    let b = ledgers(&read_events(right), &right.display().to_string());
+
+    // Unequal coverage means the two runs did not see the same corpus, and
+    // every aggregate below would be comparing different denominators.
+    let only_left: Vec<_> = a.keys().filter(|key| !b.contains_key(*key)).collect();
+    let only_right: Vec<_> = b.keys().filter(|key| !a.contains_key(*key)).collect();
+    assert!(
+        only_left.is_empty() && only_right.is_empty(),
+        "the two runs cover different person-meetings: {} only on the left, {} only on the right",
+        only_left.len(),
+        only_right.len()
+    );
+
+    let good = ["correct", "correct-new"];
+    let bad = ["wrong", "false-attach"];
+    let sum = |ledger: &Ledger, tags: &[&str]| -> f64 {
+        tags.iter()
+            .filter_map(|tag| ledger.by_outcome.get(*tag))
+            .sum()
+    };
+
+    println!("\ndifferences — {} vs {}", left.display(), right.display());
+    let (mut differ, mut same) = (0usize, 0usize);
+    let mut totals: BTreeMap<(&str, &str), (f64, f64)> = BTreeMap::new();
+    for (key, one) in &a {
+        let other = &b[key];
+        assert_eq!(
+            one.population == Population::Returning,
+            other.population == Population::Returning,
+            "{} {}: the runs disagree about whether this person is returning",
+            key.1,
+            key.2
+        );
+        assert!(
+            (one.seconds - other.seconds).abs() < 0.05,
+            "{} {}: {:.3}s on the left and {:.3}s on the right — the denominator moved",
+            key.1,
+            key.2,
+            one.seconds,
+            other.seconds
+        );
+        let label = if one.population == Population::Returning {
+            "returning"
+        } else {
+            "new"
+        };
+        for (tag, pick) in [("correct", &good[..]), ("wrong", &bad[..])] {
+            let slot = totals.entry((label, tag)).or_default();
+            slot.0 += sum(one, pick);
+            slot.1 += sum(other, pick);
+        }
+        if one.by_outcome == other.by_outcome {
+            same += 1;
+            continue;
+        }
+        differ += 1;
+        println!(
+            "  {:>2} {:<9} {:<10} {:>7.0}s   {:<38} vs {}",
+            key.0,
+            key.1,
+            key.2,
+            one.seconds,
+            describe(&one.by_outcome),
+            describe(&other.by_outcome)
+        );
+    }
+
+    println!("\n{same} person-meetings identical, {differ} differ");
+    for ((label, tag), (left_s, right_s)) in totals {
+        println!(
+            "{label:<10} {tag:<8} seconds   left {left_s:>8.0}   right {right_s:>8.0}   ({:+.0})",
+            right_s - left_s
+        );
+    }
+    println!(
+        "\nDescriptive only. These person-meetings share a gallery and a\n\
+         cascading history, so they are not independent trials and no\n\
+         significance test over them — sign test included — would be valid.\n\
+         Equal totals would mean a difference this sample could not resolve."
+    );
+}
+
+fn describe(by_outcome: &BTreeMap<&'static str, f64>) -> String {
+    by_outcome
+        .iter()
+        .map(|(tag, seconds)| format!("{tag} {seconds:.0}s"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Offline, and the only part of this file that runs in a plain `cargo test`.
+///
+/// It exists because the first version of this scorer was wrong in a way no
+/// corpus run would have shown: it chose one representative cluster per
+/// person and charged that person's whole speech time to it, so somebody 900
+/// seconds right and 100 wrong came out as 1000 of one or the other. The
+/// totals looked plausible either way. What catches that is an assertion that
+/// seconds are conserved and that where a boundary falls cannot move them.
+#[test]
+fn recognition_seconds_are_conserved_and_unmoved_by_where_a_segment_splits() {
+    let anchors: BTreeMap<String, Anchor> = [
+        (
+            "speaker-alice".to_string(),
+            Anchor {
+                who: "alice".into(),
+                purity: 0.95,
+                minted_in: "m1".into(),
+            },
+        ),
+        (
+            "speaker-bob".to_string(),
+            Anchor {
+                who: "bob".into(),
+                purity: 0.90,
+                minted_in: "m1".into(),
+            },
+        ),
+        (
+            "speaker-new".to_string(),
+            Anchor {
+                who: "carol".into(),
+                purity: 0.99,
+                minted_in: "m2".into(),
+            },
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let enrolled: BTreeSet<String> = ["alice".to_string(), "bob".to_string()]
+        .into_iter()
+        .collect();
+    let at = |who, stored| Scoring {
+        population: Population::Returning,
+        unscorable_returns: false,
+        meeting: "m2",
+        who,
+        stored,
+        anchors: &anchors,
+        enrolled_before: &enrolled,
+    };
+
+    // Alice, returning, mostly found and partly confused for Bob, with some
+    // of her speech never attributed at all — the shape the old scorer could
+    // not represent.
+    assert_eq!(
+        classify(at("alice", Some("speaker-alice")), || Missing::NoTurn).tag(),
+        "correct"
+    );
+    assert_eq!(
+        classify(at("alice", Some("speaker-bob")), || Missing::NoTurn).tag(),
+        "wrong"
+    );
+    assert_eq!(
+        classify(at("alice", Some("speaker-new")), || Missing::NoTurn).tag(),
+        "abstain-enrolled",
+        "a Speaker minted in this very meeting is an abstention, not a mistake"
+    );
+    assert_eq!(
+        classify(at("alice", None), || Missing::NoTurn).tag(),
+        "unattributed:no-turn"
+    );
+    assert_eq!(
+        classify(at("alice", None), || Missing::MintFloor).tag(),
+        "unattributed:mint-floor"
+    );
+
+    // The two missing reasons come from production's signals, not duration.
+    let cluster = diarize::Cluster(7);
+    let long = diarize::Embedding::new(
+        vec![1.0, 0.0],
+        diarize::live::EMBEDDING_MODEL,
+        diarize::live::EMBEDDING_MODEL_VERSION,
+        diarize::cluster::MIN_SPEAKER_MS * 2,
+    );
+    let short = diarize::Embedding::new(
+        vec![1.0, 0.0],
+        diarize::live::EMBEDDING_MODEL,
+        diarize::live::EMBEDDING_MODEL_VERSION,
+        diarize::cluster::MIN_SPEAKER_MS / 2,
+    );
+    let with = |embedding: Option<diarize::Embedding>| diarize::Diarization {
+        turns: Vec::new(),
+        embeddings: embedding
+            .map(|one| [(cluster, one)].into_iter().collect())
+            .unwrap_or_default(),
+    };
+    let none: BTreeMap<diarize::Cluster, String> = BTreeMap::new();
+    assert!(why_missing(None, &with(None), &none) == Missing::NoTurn);
+    assert!(why_missing(Some(cluster), &with(None), &none) == Missing::NoEmbedding);
+    assert!(why_missing(Some(cluster), &with(Some(short)), &none) == Missing::MintFloor);
+    assert!(
+        why_missing(Some(cluster), &with(Some(long.clone())), &none) == Missing::Unexpected,
+        "over the floor and still unstored is not something persist does; say so"
+    );
+    let stored: BTreeMap<diarize::Cluster, String> = [(cluster, "speaker-alice".to_string())]
+        .into_iter()
+        .collect();
+    assert!(
+        why_missing(Some(cluster), &with(Some(long)), &stored) == Missing::Unexpected,
+        "a cluster with an identity whose segment carries none is not a refusal"
+    );
+
+    // Seconds are conserved, and splitting a segment inside one outcome
+    // cannot move them. The denominator is the reference, fixed.
+    let coarse = vec![
+        ("alice", "correct", 900.0),
+        ("alice", "wrong", 100.0),
+        ("bob", "unattributed:mint-floor", 50.0),
+    ];
+    let split = vec![
+        ("alice", "correct", 400.0),
+        ("alice", "correct", 500.0),
+        ("alice", "wrong", 60.0),
+        ("alice", "wrong", 40.0),
+        ("bob", "unattributed:mint-floor", 20.0),
+        ("bob", "unattributed:mint-floor", 30.0),
+    ];
+    let fold = |rows: &[(&str, &str, f64)]| -> BTreeMap<String, BTreeMap<String, f64>> {
+        let mut out: BTreeMap<String, BTreeMap<String, f64>> = BTreeMap::new();
+        for (who, tag, seconds) in rows {
+            *out.entry(who.to_string())
+                .or_default()
+                .entry(tag.to_string())
+                .or_default() += seconds;
+        }
+        out
+    };
+    assert_eq!(fold(&coarse), fold(&split), "a split moved seconds");
+    let total: f64 = coarse.iter().map(|(_, _, seconds)| seconds).sum();
+    assert!(
+        (total - 1050.0).abs() < 1e-9,
+        "alice's 1000 seconds and bob's 50 are the reference denominator, \
+         whatever the outcomes underneath"
+    );
+    assert_eq!(
+        fold(&coarse)["alice"].values().sum::<f64>(),
+        1000.0,
+        "one person's seconds must not be charged wholly to one outcome"
+    );
+}
+
+/// Replays a split, or pairs two replays that already ran.
+///
+/// ```text
+/// EVERTRANSCRIPT_MEASURE_DER=1 EVERTRANSCRIPT_AMI_DIR=~/ami-dev \
+/// EVERTRANSCRIPT_REPLAY_MANIFEST=<abs>/tests/ami-replay-dev.manifest \
+/// EVERTRANSCRIPT_REPLAY_EVENTS=/tmp/dev-wespeaker.events \
+/// EVERTRANSCRIPT_EMBEDDING=wespeaker EVERTRANSCRIPT_MERGE_SWEEP=0.65 \
+///   cargo test --release -p evertranscript-core --test diarization_accuracy \
+///   -- --nocapture the_gallery
+/// ```
+#[test]
+fn the_gallery_recognizes_who_it_has_met_before() {
+    if let Ok(pair) = std::env::var("EVERTRANSCRIPT_REPLAY_PAIR") {
+        let (left, right) = pair.split_once(',').expect("two paths, comma separated");
+        pair_replays(Path::new(left), Path::new(right));
+        return;
+    }
+
+    let Ok(manifest) = std::env::var(REPLAY_ENV) else {
+        eprintln!("{REPLAY_ENV} is unset — skipping the enrollment replay");
+        return;
+    };
+    let Some(corpus) = corpus() else {
+        return;
+    };
+    let chapters = load_manifest(Path::new(&manifest), &corpus);
+
+    let (name, _, _) = embedding_under_test();
+    let (segmentation, embedding) = models();
+    let thresholds = thresholds_under_test();
+    assert_eq!(
+        thresholds.len(),
+        1,
+        "the replay runs at one merge threshold; sweeping it would tune on the split under test"
+    );
+    println!(
+        "replaying {} meetings through {name} at merge threshold {:.2}",
+        chapters.len(),
+        thresholds[0]
+    );
+    println!("reference-transcript speaker-time: reference-derived segment boundaries, no ASR");
+    println!("order within a-d is known; order across series and within IB is declared, not known");
+
+    let started = Instant::now();
+    let (events, anchors) = replay(&chapters, &corpus, &segmentation, &embedding, thresholds[0]);
+    // The ledgers refuse a file that cannot be one, so running it here means a
+    // malformed replay fails at the source rather than at the pairing.
+    let _ = ledgers(&events, "this run");
+    report_replay(&events, &anchors);
+    println!("\nreplayed in {:.0}s", started.elapsed().as_secs_f64());
+
+    if let Ok(path) = std::env::var("EVERTRANSCRIPT_REPLAY_EVENTS") {
+        write_events(Path::new(&path), &events);
+    }
 }

@@ -1,0 +1,35 @@
+# AMI replay manifest — test split, 16 meetings.
+#
+# One line per meeting: ORDER  MEETING  FLAGS  SPEAKERS
+#
+# SPEAKERS are AMI global participant IDs, read from the RTTM speaker field.
+# No new metadata: the corpus already says who is in the room, and the same
+# ID in two meetings is the same person. The harness re-reads them from the
+# corpus and refuses to run if this file disagrees, so the manifest is
+# checked against the corpus rather than trusted.
+#
+# ORDER is the sequence the replay feeds meetings to one store, and it is
+# what makes somebody a returner. **Order within a series' a-d suffix is
+# known. Order across series, and within IB, is declared, not known** —
+# AMI publishes no recording chronology for them. Any report from this
+# manifest has to say so.
+#
+# FLAGS:
+#   .                  nothing special
+#   (none used on this split)
+ 1  EN2002a   .                   FEO070 FEO072 MEE071 MEE073
+ 2  EN2002b   .                   FEO070 FEO072 MEE071 MEE073
+ 3  EN2002c   .                   FEO072 MEE071 MEE073
+ 4  EN2002d   .                   FEO070 FEO072 MEE071 MEE073
+ 5  ES2004a   .                   FEE013 FEE016 MEE014 MEO015
+ 6  ES2004b   .                   FEE013 FEE016 MEE014 MEO015
+ 7  ES2004c   .                   FEE013 FEE016 MEE014 MEO015
+ 8  ES2004d   .                   FEE013 FEE016 MEE014 MEO015
+ 9  IS1009a   .                   FIE088 FIO084 FIO087 FIO089
+10  IS1009b   .                   FIE088 FIO084 FIO087 FIO089
+11  IS1009c   .                   FIE088 FIO084 FIO087 FIO089
+12  IS1009d   .                   FIE088 FIO084 FIO087 FIO089
+13  TS3003a   .                   MTD0010ID MTD009PM MTD011UID MTD012ME
+14  TS3003b   .                   MTD0010ID MTD009PM MTD011UID MTD012ME
+15  TS3003c   .                   MTD0010ID MTD009PM MTD011UID MTD012ME
+16  TS3003d   .                   MTD0010ID MTD009PM MTD011UID MTD012ME

@@ -1,0 +1,46 @@
+# AMI replay manifest — dev split, 18 meetings.
+#
+# One line per meeting: ORDER  MEETING  FLAGS  SPEAKERS
+#
+# SPEAKERS are AMI global participant IDs, read from the RTTM speaker field.
+# No new metadata: the corpus already says who is in the room, and the same
+# ID in two meetings is the same person. The harness re-reads them from the
+# corpus and refuses to run if this file disagrees, so the manifest is
+# checked against the corpus rather than trusted.
+#
+# ORDER is the sequence the replay feeds meetings to one store, and it is
+# what makes somebody a returner. **Order within a series' a-d suffix is
+# known. Order across series, and within IB, is declared, not known** —
+# AMI publishes no recording chronology for them. Any report from this
+# manifest has to say so.
+#
+# FLAGS:
+#   .                  nothing special
+#   unscorable-returns the returning events in this meeting do not score.
+#                      IB4001 and IB4002 hold the same four people, and their
+#                      labels are permuted between the two — a different-label
+#                      nearest neighbour above 0.8 for all four can only be the
+#                      partner meeting, and only FIE038 is shared any further,
+#                      so nothing model-free says which of the pair is wrong.
+#                      Both stay in the chronology, in DER and as open-set
+#                      probes; only the four returning events stop scoring.
+#                      FIE038's later returns are reported on their own line,
+#                      tagged as carrying a history that includes this pair.
+ 1  ES2011a   .                   FEE041 FEE042 FEE043 FEE044
+ 2  ES2011b   .                   FEE041 FEE042 FEE043 FEE044
+ 3  ES2011c   .                   FEE041 FEE042 FEE043 FEE044
+ 4  ES2011d   .                   FEE041 FEE042 FEE043 FEE044
+ 5  IB4001    .                   FIE038 FIO093 MIO091 MIO092
+ 6  IB4002    unscorable-returns  FIE038 FIO093 MIO091 MIO092
+ 7  IB4003    .                   FIE037 MIO036 MIO039 MIO094
+ 8  IB4004    .                   FIE037 MIO036 MIO039 MIO094
+ 9  IB4010    .                   FIE038 MIO036 MIO046 MIO095
+10  IB4011    .                   FIE038 MIO036 MIO046 MIO095
+11  IS1008a   .                   FIE038 FIE073 MIE085 MIO086
+12  IS1008b   .                   FIE038 FIE073 MIE085 MIO086
+13  IS1008c   .                   FIE038 FIE073 MIE085 MIO086
+14  IS1008d   .                   FIE038 FIE073 MIE085 MIO086
+15  TS3004a   .                   MTD013PM MTD014ID MTD015UID MTD016ME
+16  TS3004b   .                   MTD013PM MTD014ID MTD015UID MTD016ME
+17  TS3004c   .                   MTD013PM MTD014ID MTD015UID MTD016ME
+18  TS3004d   .                   MTD013PM MTD014ID MTD015UID MTD016ME

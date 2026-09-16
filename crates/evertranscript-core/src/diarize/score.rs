@@ -157,7 +157,12 @@ pub fn der(reference: &[Span], hypothesis: &[Span]) -> Der {
 /// A speaker overlapping themselves is a reference artefact, not two people;
 /// left unmerged it would count double in the denominator and make every
 /// rate look better than it is.
-fn by_speaker(spans: &[Span]) -> BTreeMap<String, Vec<(u64, u64)>> {
+/// Public alongside [`optimal_mapping`]: a caller scoring something other
+/// than time — which persistent identity a reference speaker ended up with,
+/// say — still has to agree with `der` about which cluster answers for whom,
+/// and agreeing means running the same two functions rather than forming a
+/// second opinion.
+pub fn by_speaker(spans: &[Span]) -> BTreeMap<String, Vec<(u64, u64)>> {
     let mut grouped: BTreeMap<String, Vec<(u64, u64)>> = BTreeMap::new();
     for span in spans {
         if span.duration_ms() == 0 {
@@ -254,7 +259,7 @@ const EXACT_MAPPING_LIMIT: usize = 18;
 /// scorer's choice. Solved by a subset DP rather than by Hungarian — at five
 /// speakers it is a few thousand operations, and it is twenty lines instead
 /// of a hundred that nobody will read again.
-fn optimal_mapping(
+pub fn optimal_mapping(
     reference: &BTreeMap<String, Vec<(u64, u64)>>,
     hypothesis: &BTreeMap<String, Vec<(u64, u64)>>,
 ) -> BTreeMap<String, String> {
