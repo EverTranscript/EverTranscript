@@ -584,25 +584,60 @@ fn row_cells(line: &str) -> Option<(&str, &str)> {
 /// the better of the two.
 pub fn drop_placeholder_items(summary: &str) -> (String, usize) {
     let mut dropped = 0usize;
-    let kept: Vec<&str> = summary
-        .lines()
-        .filter(|line| {
+    let mut survivors = 0usize;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in summary.lines() {
+        match row_cells(line) {
             // Trimmed the way `is_document_label` trims, so `**Participant**`
             // is the same word. Exact past that: a `Who` this does not
             // recognise keeps today's behaviour, while a looser match could
             // take out a real person's item.
-            let placeholder = row_cells(line).is_some_and(|(who, _)| {
-                who.trim_matches(|c: char| !c.is_alphanumeric())
-                    .eq_ignore_ascii_case(generate::UNNAMED_SYSTEM)
-            });
-            if placeholder {
+            Some((who, _))
+                if who
+                    .trim_matches(|c: char| !c.is_alphanumeric())
+                    .eq_ignore_ascii_case(generate::UNNAMED_SYSTEM) =>
+            {
                 dropped += 1;
             }
-            !placeholder
-        })
-        .collect();
+            Some(_) => {
+                survivors += 1;
+                kept.push(line);
+            }
+            None => kept.push(line),
+        }
+    }
+
+    // **An emptied table is not a table.** Measured on a real undiarized
+    // Meeting: six of six items credited the placeholder, and what reached
+    // the record was a header row and a `|---|` rule with nothing under them,
+    // which reads as a rendering fault rather than a record. Rule 6 already
+    // names the shape for a table with no items, so the husk becomes that.
+    // It does not stand alone as a claim that nobody committed: a run that
+    // dropped anything always carries the note saying how many went.
+    if dropped > 0 && survivors == 0 {
+        let mut collapsed: Vec<&str> = Vec::with_capacity(kept.len());
+        let mut said = false;
+        for line in kept {
+            if line.contains('|') {
+                if !said {
+                    collapsed.push(NONE_NOTED);
+                    said = true;
+                }
+            } else {
+                collapsed.push(line);
+            }
+        }
+        return (collapsed.join("\n"), dropped);
+    }
     (kept.join("\n"), dropped)
 }
+
+/// What rule 6 asks for in place of a table with no items.
+///
+/// Shared with [`DEFAULT_SYSTEM_PROMPT`] by intent rather than by
+/// construction — the prompt names it in a sentence, and a Summary the Core
+/// edited should say what the model would have said.
+const NONE_NOTED: &str = "None noted.";
 
 /// Whether a table's `Who` names the speaker the transcript recorded.
 ///
@@ -630,11 +665,22 @@ const DOCUMENT_LABELS: &[&str] = &[
     "meeting notes",
     "minutes",
     "meeting minutes",
+    "recap",
+    "meeting recap",
     "摘要",
     "会议摘要",
     "纪要",
     "会议纪要",
     "会议记录",
+    // 总结 leaked on the first real run after Q122 shipped: an untitled
+    // Meeting was named 会议总结, which is "Meeting Summary". The bare form
+    // and the 会议-prefixed form go in together, because every other entry
+    // here comes in that pair and leaving one half out is how this list
+    // found its hole the first time.
+    "总结",
+    "会议总结",
+    "小结",
+    "会议小结",
 ];
 
 /// Whether a heading names the document rather than the meeting.
@@ -914,6 +960,40 @@ mod tests {
     }
 
     #[test]
+    fn a_table_emptied_by_the_drop_becomes_what_rule_six_asks_for() {
+        // Measured on a real undiarized Meeting: six of six items credited
+        // the placeholder, and what reached the record was a header row and
+        // a `|---|` rule with nothing under them.
+        let summary = format!(
+            "# Planning\n\nDiscussed things.\n\n**Action items:**\n\n\
+             | Who | What | When | Said at |\n|---|---|---|---|\n\
+             | {p} | first thing | Friday | 00:00:05 |\n\
+             | {p} | second thing | Monday | 00:00:09 |\n",
+            p = generate::UNNAMED_SYSTEM
+        );
+        let (left, dropped) = drop_placeholder_items(&summary);
+        assert_eq!(dropped, 2);
+        assert!(!left.contains('|'), "the husk must not survive:\n{left}");
+        assert!(left.contains("None noted."), "got:\n{left}");
+        // The prose the Summary is mostly made of is untouched.
+        assert!(left.contains("Discussed things."));
+        assert!(left.contains("**Action items:**"));
+
+        // A table that still has a row is left as a table, husk rule or not.
+        let mixed = format!(
+            "| Who | What | When | Said at |\n|---|---|---|---|\n\
+             | {p} | dropped | Friday | 00:00:05 |\n\
+             | Raj | Revisit the hiring freeze next week | Monday | 00:00:12 |\n",
+            p = generate::UNNAMED_SYSTEM
+        );
+        let (left, dropped) = drop_placeholder_items(&mixed);
+        assert_eq!(dropped, 1);
+        assert!(left.contains("| Who |"), "got:\n{left}");
+        assert!(!left.contains("None noted."), "got:\n{left}");
+        assert_eq!(verify(&left, DICTATED), Ok(()));
+    }
+
+    #[test]
     fn the_operators_own_placeholder_is_left_alone() {
         // "You" is the mic channel — one person, the Operator — so it names
         // somebody and `verify` can check it against what they said.
@@ -1136,6 +1216,18 @@ mod tests {
             None
         );
         assert_eq!(title_from("# 会议摘要\n\n讨论了存储。"), None);
+        // **The word the first version of this list missed.** Q122 shipped
+        // 摘要/纪要/记录 and not 总结, and on the first real run after it
+        // installed, an untitled Meeting was named 会议总结 — the same defect
+        // in the one Chinese word for "summary" the list did not carry.
+        assert_eq!(title_from("# 会议总结\n\n讨论了存储。"), None);
+        assert_eq!(title_from("# 总结\n\n讨论了存储。"), None);
+        // And the prefixed form still keeps the name under it, in Chinese
+        // too — the colon the model actually uses there is the full-width one.
+        assert_eq!(
+            title_from("# 会议总结：存储层技术方案\n\n讨论了存储。"),
+            Some("存储层技术方案".to_string())
+        );
         // Punctuation does not smuggle it through.
         assert_eq!(title_from("# Summary.\n\nBody."), None);
         // A name wearing the label keeps the name.

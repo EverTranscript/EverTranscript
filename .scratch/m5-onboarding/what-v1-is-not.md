@@ -154,6 +154,17 @@ from somewhere else, and each is already labelled that way in its ticket.
   statement of the finding above: a 35-attempt sweep is not a precise number,
   and the fix is not what moved most of this — the placeholder drop fired 8
   times in 70, so most of the change is the reverted clause and the draw.
+- **On an undiarized Meeting the drop can take the whole table.** Filling the
+  four real Meetings that had no Summary found it: both undiarized ones had
+  nearly every action item credited to the placeholder — six of six in one,
+  eight of ten in the other — so what reached the record was an Action items
+  header and a `|---|` rule with nothing under them. That husk is now
+  collapsed to `None noted.`, rule 6's own phrase, and never stands alone as
+  a claim that nobody committed, because a run that dropped anything always
+  carries the note saying how many went (Q124). It is still the honest shape
+  of the ceiling: **a Meeting with no Speakers gets a Summary with prose and
+  no action items**, and diarizing it is what would give those items a person
+  to belong to.
 - **A Summary could name the Meeting after itself, and now cannot in two
   languages.** `prompt::title_from` takes the Summary's first `#` heading and
   the store applies it where a Meeting has no name (ADR-0030 as amended by
@@ -169,7 +180,16 @@ from somewhere else, and each is already labelled that way in its ticket.
   (Q122). **The list is English and Chinese**, for the same reason
   `asr::filters` carries both, and a label in a third language is the standing
   ceiling: the model would have to head a summary `# Zusammenfassung`, and what
-  it costs is a wrong name rather than a wrong Summary.
+  it costs is a wrong name rather than a wrong Summary. **The ceiling was reached on the
+  first real run after it installed**, in Chinese rather than a third
+  language: an untitled Meeting was named 会议总结, because the list carried
+  摘要/纪要/记录 and not 总结. Every other entry comes as a bare form and a
+  会议-prefixed pair, and this was the one word with neither half present; the
+  pair is in now, with 小结 and recap alongside (Q124). The other half of Q122
+  works on real output — `# Meeting Summary: Technical Discussion and
+  Planning` produced the title "Technical Discussion and Planning". A known
+  set is only as good as the set, and writing the ceiling down did not hold
+  it.
 - **Diarization is measured on real meetings now, and the number is 26.3%.**
   This entry used to say DER 3.9% on a construction — one speaker and their
   own resampling. AMI, scored the way pyannote publishes it, said 51.4%
