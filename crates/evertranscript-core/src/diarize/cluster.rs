@@ -136,6 +136,22 @@ pub fn resolve(
     clusters: &BTreeMap<Cluster, Embedding>,
     seeds: &[SeedVoice],
 ) -> BTreeMap<Cluster, Resolved> {
+    resolve_with(clusters, seeds, MATCH_FLOOR, MATCH_MARGIN)
+}
+
+/// [`resolve`] with the floor and margin named rather than taken from the
+/// constants.
+///
+/// One implementation, so a harness that varies them exercises the rules
+/// production runs rather than a copy that can drift from them. **Production
+/// has no way to reach it:** `resolve` is what the pipeline calls and it
+/// passes the constants.
+pub fn resolve_with(
+    clusters: &BTreeMap<Cluster, Embedding>,
+    seeds: &[SeedVoice],
+    floor: f32,
+    margin: f32,
+) -> BTreeMap<Cluster, Resolved> {
     let mut resolved = BTreeMap::new();
     if seeds.is_empty() {
         for cluster in clusters.keys() {
@@ -175,7 +191,7 @@ pub fn resolve(
         };
         let runner_up = ranked.get(1).map(|(_, score)| *score).unwrap_or(0.0);
 
-        let clears_floor = best_score >= MATCH_FLOOR;
+        let clears_floor = best_score >= floor;
 
         // The margin is what turns "too close to call" into no match rather
         // than a coin flip. ADR-0008 as amended names the one exception:
@@ -190,7 +206,7 @@ pub fn resolve(
         let confirmation_breaks_the_tie = ranked.get(1).is_some_and(|(runner_index, _)| {
             seeds[best_index].confirmed && !seeds[*runner_index].confirmed
         });
-        let clears_margin = (best_score - runner_up) >= MATCH_MARGIN || confirmation_breaks_the_tie;
+        let clears_margin = (best_score - runner_up) >= margin || confirmation_breaks_the_tie;
         let mutual = best_cluster_for(clusters, &scores, best_index) == Some(*cluster);
 
         resolved.insert(
@@ -650,6 +666,34 @@ pub fn persist(
     heard: &BTreeSet<Cluster>,
     withheld: Option<&str>,
 ) -> anyhow::Result<BTreeMap<Cluster, String>> {
+    persist_with(
+        connection,
+        meeting_id,
+        embeddings,
+        heard,
+        withheld,
+        MATCH_FLOOR,
+        MATCH_MARGIN,
+    )
+}
+
+/// [`persist`] with the matching thresholds named rather than taken from the
+/// constants.
+///
+/// The whole lifecycle, unchanged — the withdrawal of the previous run's
+/// exemplars, the mint floor, the sweep the caller owes afterwards — with
+/// only the two numbers [`resolve_with`] applies coming from the caller.
+/// **Production has no way to reach it:** `persist` is what the pipeline
+/// calls and it passes the constants.
+pub fn persist_with(
+    connection: &rusqlite::Connection,
+    meeting_id: &str,
+    embeddings: &BTreeMap<Cluster, Embedding>,
+    heard: &BTreeSet<Cluster>,
+    withheld: Option<&str>,
+    floor: f32,
+    margin: f32,
+) -> anyhow::Result<BTreeMap<Cluster, String>> {
     use crate::store::speakers;
 
     // The first real re-runs showed why this comes first: the previous
@@ -679,7 +723,7 @@ pub fn persist(
     if let Some(withheld) = withheld {
         known.retain(|seed| seed.speaker_id != withheld);
     }
-    let resolved = resolve(embeddings, &known);
+    let resolved = resolve_with(embeddings, &known, floor, margin);
     let mut assigned = BTreeMap::new();
 
     for (cluster, outcome) in resolved {
@@ -1799,6 +1843,35 @@ mod tests {
     /// which puts A and B in one cluster without any step having compared
     /// them. The refusal has to come from the survivor inheriting A's
     /// constraint.
+    /// The named form must agree with the constants form, or a grid that
+    /// varies the thresholds is not measuring production's rules.
+    #[test]
+    fn naming_the_thresholds_defaults_to_the_shipped_ones() {
+        let clusters: BTreeMap<Cluster, Embedding> = [
+            (Cluster(0), embedding(&[1.0, 0.0, 0.0])),
+            (Cluster(1), embedding(&[0.0, 1.0, 0.0])),
+            (Cluster(2), embedding(&[0.70, 0.71, 0.0])),
+        ]
+        .into_iter()
+        .collect();
+        let seeds = vec![
+            SeedVoice {
+                speaker_id: "alice".into(),
+                vector: vec![1.0, 0.0, 0.0],
+                confirmed: false,
+            },
+            SeedVoice {
+                speaker_id: "bob".into(),
+                vector: vec![0.0, 1.0, 0.0],
+                confirmed: false,
+            },
+        ];
+        assert_eq!(
+            resolve_with(&clusters, &seeds, MATCH_FLOOR, MATCH_MARGIN),
+            resolve(&clusters, &seeds)
+        );
+    }
+
     #[test]
     fn a_forbidden_pair_is_still_refused_when_a_third_cluster_would_carry_them_together() {
         let unit = |vector: &[f32]| embedding(vector);

@@ -449,6 +449,60 @@ fn cannot_link_enabled() -> bool {
     std::env::var("EVERTRANSCRIPT_CANNOT_LINK").as_deref() == Ok("1")
 }
 
+/// The one place the harness decides which clusterer to run.
+///
+/// Scoring and the replay both come through here. They did not always: the
+/// replay called `cluster_observed` directly while only scoring honoured the
+/// switch, so setting the environment variable measured DER under the
+/// constraint and recognition without it, and nothing in the output said so.
+/// The flag is a parameter rather than a read of the environment so an
+/// offline test can exercise both sides of it.
+fn clustered(
+    observed: &diarize::live::Observed,
+    threshold: f32,
+    constrained: bool,
+) -> diarize::Diarization {
+    if constrained {
+        diarize::live::cluster_observed_constrained(observed, threshold)
+    } else {
+        diarize::live::cluster_observed(observed, threshold)
+    }
+}
+
+/// Floors and margins the matcher grid crosses, plus the shipped point.
+///
+/// Coarse on purpose: a diagnostic of where the matcher's behaviour changes,
+/// not a search for an operating point to adopt.
+const GRID_FLOORS: [f32; 8] = [0.30, 0.45, 0.55, 0.62, 0.70, 0.80, 0.90, 0.95];
+const GRID_MARGINS: [f32; 4] = [0.00, 0.08, 0.15, 0.25];
+
+/// The matcher settings to replay, from `EVERTRANSCRIPT_MATCHER_GRID=1`.
+///
+/// Unset is the shipped pair alone, so an ordinary replay is the run it
+/// always was.
+fn matcher_grid() -> Vec<(f32, f32)> {
+    if std::env::var("EVERTRANSCRIPT_MATCHER_GRID").as_deref() != Ok("1") {
+        return vec![(
+            diarize::cluster::MATCH_FLOOR,
+            diarize::cluster::MATCH_MARGIN,
+        )];
+    }
+    let mut grid: Vec<(f32, f32)> = GRID_FLOORS
+        .iter()
+        .flat_map(|floor| GRID_MARGINS.iter().map(move |margin| (*floor, *margin)))
+        .collect();
+    assert!(
+        grid.contains(&(
+            diarize::cluster::MATCH_FLOOR,
+            diarize::cluster::MATCH_MARGIN
+        )),
+        "the shipped point has to be in the grid or the grid cannot be read \
+         against what production does today"
+    );
+    grid.sort_by(|a, b| a.partial_cmp(b).expect("no NaN in a literal grid"));
+    grid
+}
+
 fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64) {
     let provisional = diarize::live::provisional_of(&one.observed);
     // Scored against whichever clusterer actually ran, or a constrained
@@ -508,11 +562,7 @@ fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64) {
 
 fn score_at(one: &Inferred, threshold: f32, with_windows: bool) -> Measured {
     let reference = &one.reference;
-    let result = if cannot_link_enabled() {
-        diarize::live::cluster_observed_constrained(&one.observed, threshold)
-    } else {
-        diarize::live::cluster_observed(&one.observed, threshold)
-    };
+    let result = clustered(&one.observed, threshold, cannot_link_enabled());
     let spans = hypothesis(&result.turns);
     let cannot_link = same_window_merges(one, threshold);
 
@@ -928,7 +978,7 @@ impl Anchor {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Population {
     /// Spoke in an earlier meeting of this order — whether or not either
     /// system managed to enrol them. Reference decides this, not the store.
@@ -1024,6 +1074,7 @@ impl Outcome {
 ///
 /// Several rows per person per meeting, because a person's seconds can land
 /// on more than one outcome — which is the whole point of scoring segments.
+#[derive(Clone)]
 struct Event {
     order: usize,
     meeting: String,
@@ -1056,10 +1107,11 @@ struct Event {
 /// generous transcript than a real one, and every number inherits that.
 fn replay(
     chapters: &[Chapter],
-    corpus: &[Meeting],
-    segmentation: &Path,
-    embedding: &Path,
+    inferred: &BTreeMap<String, Inferred>,
     threshold: f32,
+    constrained: bool,
+    floor: f32,
+    margin: f32,
 ) -> (Vec<Event>, BTreeMap<String, Anchor>) {
     use evertranscript_core::store::meetings;
     use evertranscript_core::store::schema;
@@ -1083,12 +1135,10 @@ fn replay(
     let mut seen_before: BTreeSet<String> = BTreeSet::new();
 
     for chapter in chapters {
-        let meeting = corpus
-            .iter()
-            .find(|one| one.name == chapter.meeting)
-            .expect("manifest checked against the corpus already");
-        let inferred = observe_once(meeting, segmentation, embedding);
-        let diarization = diarize::live::cluster_observed(&inferred.observed, threshold);
+        let inferred = inferred
+            .get(&chapter.meeting)
+            .expect("every chapter was inferred before the grid started");
+        let diarization = clustered(&inferred.observed, threshold, constrained);
         let channel = inferred
             .observed
             .windows
@@ -1145,12 +1195,14 @@ fn replay(
             .iter()
             .map(|one| (one.segment_id.as_str(), one.cluster))
             .collect();
-        let assigned = diarize::cluster::persist(
+        let assigned = diarize::cluster::persist_with(
             &connection,
             &meeting_id,
             &diarization.embeddings,
             &reconciliation.voices(),
             None,
+            floor,
+            margin,
         )
         .expect("persist");
         diarize::reconcile::apply(
@@ -1345,6 +1397,57 @@ fn classify(at: Scoring<'_>, missing: impl FnOnce() -> Missing) -> Outcome {
         Population::New if minted_here => Outcome::CorrectNew,
         Population::New => Outcome::FalseAttach,
     }
+}
+
+/// Grid events as a file: the same rows, with the settings that produced
+/// them, so one file carries every configuration.
+///
+/// Separate from [`write_events`] rather than replacing it, because the
+/// pairing reads that format and the runs already on disk are in it.
+fn write_grid_events(path: &Path, rows: &[(f32, f32, Event)]) {
+    let mut out =
+        String::from("floor\tmargin\torder\tmeeting\twho\tpopulation\toutcome\tseconds\n");
+    for (floor, margin, event) in rows {
+        out.push_str(&format!(
+            "{floor:.2}\t{margin:.2}\t{}\t{}\t{}\t{}\t{}\t{:.3}\n",
+            event.order,
+            event.meeting,
+            event.who,
+            match event.population {
+                Population::Returning => "returning",
+                Population::New => "new",
+            },
+            event.outcome.tag(),
+            event.seconds
+        ));
+    }
+    std::fs::write(path, out).expect("write grid events");
+}
+
+/// One line per configuration, so 32 of them stay readable.
+fn ledger_line(floor: f32, margin: f32, events: &[Event]) {
+    let mut totals: BTreeMap<(Population, &str), f64> = BTreeMap::new();
+    for event in events {
+        *totals
+            .entry((event.population, event.outcome.tag()))
+            .or_default() += event.seconds;
+    }
+    let get =
+        |population: Population, tag: &str| totals.get(&(population, tag)).copied().unwrap_or(0.0);
+    println!(
+        "  floor {floor:.2} margin {margin:.2}   returning correct {:8.0} wrong {:7.0} \
+         abstain {:7.0} unattributed {:7.0}   new correct {:7.0} false-attach {:6.0}",
+        get(Population::Returning, "correct"),
+        get(Population::Returning, "wrong"),
+        get(Population::Returning, "abstain-enrolled")
+            + get(Population::Returning, "abstain-never-enrolled"),
+        get(Population::Returning, "unattributed:mint-floor")
+            + get(Population::Returning, "unattributed:no-turn")
+            + get(Population::Returning, "unattributed:no-embedding")
+            + get(Population::Returning, "unattributed:unexpected"),
+        get(Population::New, "correct-new"),
+        get(Population::New, "false-attach"),
+    );
 }
 
 /// Events as a file, so two runs pair without either being re-run.
@@ -1633,6 +1736,64 @@ fn describe(by_outcome: &BTreeMap<&'static str, f64>) -> String {
 
 /// Offline, and the only part of this file that runs in a plain `cargo test`.
 ///
+/// The switch has to reach the replay, not only the scorer.
+///
+/// It did not: the replay called `cluster_observed` directly, so a run with
+/// `EVERTRANSCRIPT_CANNOT_LINK=1` measured DER under the constraint and
+/// recognition without it, silently. Both call sites now go through
+/// `clustered`, and this is what fails if one of them stops.
+#[test]
+fn the_constrained_path_is_the_one_the_replay_gets() {
+    use evertranscript_protocol::AudioChannel;
+
+    let voice = |cluster: u32, at: u64, vector: Vec<f32>| diarize::live::Observation {
+        channel: AudioChannel::Mic,
+        cluster: diarize::Cluster(cluster),
+        vector,
+        runs: vec![(at, at + 4_000)],
+        clean_runs: vec![(at, at + 4_000)],
+    };
+    // Two local speakers of one window, close enough that an unconstrained
+    // merge at this threshold takes them for one voice.
+    let observed = diarize::live::Observed {
+        observations: vec![
+            voice(0, 1_000, vec![1.0, 0.10, 0.0]),
+            voice(1, 2_000, vec![1.0, -0.10, 0.0]),
+        ],
+        windows: vec![(AudioChannel::Mic, 0, 10_000)],
+    };
+
+    let free = clustered(&observed, 0.5, false);
+    let held = clustered(&observed, 0.5, true);
+    assert_eq!(
+        free.embeddings.len(),
+        1,
+        "unconstrained, these two are one voice at this threshold"
+    );
+    assert_eq!(
+        held.embeddings.len(),
+        2,
+        "constrained, one window's two local speakers stay two voices"
+    );
+}
+
+/// The grid has to contain the point production runs, or none of it can be
+/// read against what ships today.
+#[test]
+fn the_matcher_grid_holds_the_shipped_point() {
+    assert!(
+        GRID_FLOORS.contains(&diarize::cluster::MATCH_FLOOR),
+        "shipped floor {} is not on the grid",
+        diarize::cluster::MATCH_FLOOR
+    );
+    assert!(
+        GRID_MARGINS.contains(&diarize::cluster::MATCH_MARGIN),
+        "shipped margin {} is not on the grid",
+        diarize::cluster::MATCH_MARGIN
+    );
+}
+
+/// It exists because the first version of this scorer was wrong in a way no
 /// It exists because the first version of this scorer was wrong in a way no
 /// corpus run would have shown: it chose one representative cluster per
 /// person and charged that person's whole speech time to it, so somebody 900
@@ -1817,23 +1978,85 @@ fn the_gallery_recognizes_who_it_has_met_before() {
         1,
         "the replay runs at one merge threshold; sweeping it would tune on the split under test"
     );
+    let constrained = cannot_link_enabled();
+    let grid = matcher_grid();
     println!(
         "replaying {} meetings through {name} at merge threshold {:.2}",
         chapters.len(),
         thresholds[0]
     );
+    println!(
+        "same-window cannot-link: {}",
+        if constrained {
+            "enforced"
+        } else {
+            "off (shipped clusterer)"
+        }
+    );
+    println!(
+        "matcher: {} configuration(s){}",
+        grid.len(),
+        if grid.len() == 1 {
+            format!(" at floor {:.2} margin {:.2}", grid[0].0, grid[0].1)
+        } else {
+            String::from(", each with its own fresh store and gallery")
+        }
+    );
     println!("reference-transcript speaker-time: reference-derived segment boundaries, no ASR");
     println!("order within a-d is known; order across series and within IB is declared, not known");
 
     let started = Instant::now();
-    let (events, anchors) = replay(&chapters, &corpus, &segmentation, &embedding, thresholds[0]);
-    // The ledgers refuse a file that cannot be one, so running it here means a
-    // malformed replay fails at the source rather than at the pairing.
-    let _ = ledgers(&events, "this run");
-    report_replay(&events, &anchors);
+
+    // Inference once per meeting, then every configuration replays from the
+    // same observations. Re-inferring per configuration would cost 32 passes
+    // to vary two numbers that clustering never sees.
+    let inferred: BTreeMap<String, Inferred> = chapters
+        .iter()
+        .map(|chapter| {
+            let meeting = corpus
+                .iter()
+                .find(|one| one.name == chapter.meeting)
+                .expect("manifest checked against the corpus already");
+            let one = observe_once(meeting, &segmentation, &embedding);
+            (chapter.meeting.clone(), one)
+        })
+        .collect();
+    println!("inferred in {:.0}s\n", started.elapsed().as_secs_f64());
+
+    let mut rows: Vec<(f32, f32, Event)> = Vec::new();
+    let mut last: Option<(Vec<Event>, BTreeMap<String, Anchor>)> = None;
+    for (floor, margin) in &grid {
+        // A fresh store per configuration. Applying a new floor to a gallery
+        // another floor already contaminated would measure neither.
+        let (events, anchors) = replay(
+            &chapters,
+            &inferred,
+            thresholds[0],
+            constrained,
+            *floor,
+            *margin,
+        );
+        // The ledgers refuse a file that cannot be one, so running it here
+        // means a malformed replay fails at the source, not at the pairing.
+        let _ = ledgers(&events, &format!("floor {floor:.2} margin {margin:.2}"));
+        if grid.len() > 1 {
+            ledger_line(*floor, *margin, &events);
+        }
+        rows.extend(events.iter().cloned().map(|one| (*floor, *margin, one)));
+        last = Some((events, anchors));
+    }
+
+    if grid.len() == 1 {
+        let (events, anchors) = last.as_ref().expect("one configuration ran");
+        report_replay(events, anchors);
+    }
     println!("\nreplayed in {:.0}s", started.elapsed().as_secs_f64());
 
     if let Ok(path) = std::env::var("EVERTRANSCRIPT_REPLAY_EVENTS") {
-        write_events(Path::new(&path), &events);
+        if grid.len() == 1 {
+            write_events(Path::new(&path), &last.expect("one configuration ran").0);
+        } else {
+            write_grid_events(Path::new(&path), &rows);
+        }
     }
 }
