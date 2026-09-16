@@ -467,6 +467,51 @@ pub const PENDING_MODEL_CHANGE_WIPE: &str = r#"
            voiceprint_model_version = NULL;
 "#;
 
+/// The backlog a model change re-runs History with, **written and
+/// deliberately not registered**.
+///
+/// Ticket 12. The work itself lives in [`super::diarize_queue`], which
+/// already outlives the process; what these two tables hold is only what the
+/// queue cannot say — which model the backlog is for, how big it was, whether
+/// the Operator stopped it, and which Meetings are its own.
+///
+/// **Absent from [`MIGRATIONS`] for the same reason as
+/// [`PENDING_MODEL_CHANGE_WIPE`]**, which it is the other half of: a re-run
+/// without the wipe re-diarizes a History whose Voiceprints are still the old
+/// model's, and a wipe without the re-run leaves a History nobody is
+/// recognized in.
+///
+/// `diarize_rerun` is one row by primary key rather than by every writer
+/// remembering: two re-runs of different models at once is not a state this
+/// product has, and a table that can hold one is a table somebody will have
+/// to reconcile. `cancelled` outlives the emptied queue, or the next start
+/// would find a drained backlog and read it as finished; `abandoned` is what
+/// cancelling threw away, without which done — total minus remaining — jumps
+/// to total and an Operator who stopped a re-run at 1 of 40 is told all forty
+/// were walked.
+///
+/// `diarize_rerun_backlog` is **which Meetings are the re-run's own**, and it
+/// exists because the queue's `Back` priority is a scheduling class, not a
+/// job. Production already enqueues at `Back` for Meetings that were never
+/// diarized, so counting the whole backlog would report that catch-up work as
+/// re-run progress and cancelling would delete it.
+pub const PENDING_MODEL_CHANGE_RERUN: &str = r#"
+    CREATE TABLE diarize_rerun (
+        id             INTEGER PRIMARY KEY CHECK (id = 1),
+        model          TEXT NOT NULL,
+        model_version  TEXT NOT NULL,
+        total          INTEGER NOT NULL,
+        cancelled      INTEGER NOT NULL DEFAULT 0 CHECK (cancelled IN (0, 1)),
+        abandoned      INTEGER NOT NULL DEFAULT 0,
+        started_at     TEXT NOT NULL
+    ) STRICT;
+
+    CREATE TABLE diarize_rerun_backlog (
+        meeting_id TEXT PRIMARY KEY NOT NULL
+                   REFERENCES meetings(id) ON DELETE CASCADE
+    ) STRICT;
+"#;
+
 /// Applies every migration the database has not seen yet.
 pub fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
     let applied: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -741,6 +786,20 @@ mod tests {
             !MIGRATIONS.contains(&PENDING_MODEL_CHANGE_WIPE),
             "ticket 05 activates on the user's model decision and on ticket 12 existing; \
              neither has happened"
+        );
+    }
+
+    /// The same gate for ticket 12's half.
+    ///
+    /// Registering it would create the tables on the next Core start, which
+    /// is harmless on its own — nothing reads them — but it is the step that
+    /// turns dormant groundwork into schema the product carries, and it
+    /// belongs with the swap rather than before it.
+    #[test]
+    fn the_pending_rerun_is_not_registered() {
+        assert!(
+            !MIGRATIONS.contains(&PENDING_MODEL_CHANGE_RERUN),
+            "ticket 12 activates with ticket 05 and the user's model decision"
         );
     }
 

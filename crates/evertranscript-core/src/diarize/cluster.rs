@@ -804,8 +804,10 @@ pub struct Claims {
     /// belonged to the same Speaker, so the Operator has already said whose
     /// voice it is. Assigned rather than resolved.
     pub claimed: BTreeMap<Cluster, String>,
-    /// Speakers a correction took a whole cluster's words *away* from.
-    /// Written as negative evidence by [`relearn`].
+    /// Speakers a correction took every one of a cluster's *transcript
+    /// segments* away from. Evidence of what the Operator denied, for a
+    /// writer that can bound a vector to those segments — see the
+    /// provenance note on [`claims`]. Nothing writes it today.
     pub denied: BTreeSet<(String, Cluster)>,
 }
 
@@ -861,12 +863,27 @@ pub struct Claims {
 ///
 /// **The other half of a correction is what it denied**, and it is held to
 /// the same standard: a cluster is denied to a Speaker only where *every*
-/// segment in it was corrected away from them. [`relearn`] writes that as a
-/// negative exemplar cut from the cluster's centroid, and a centroid is
-/// evidence of "not them" only if all of it was taken from them. One
-/// corrected segment in thirty denies nothing — the other twenty-nine are
-/// audio the Operator never disputed, and suppressing a voice against them
-/// is the same mistake as enrolling one from them.
+/// one of its segments was corrected away from them. One corrected segment
+/// in thirty denies nothing — the other twenty-nine are audio the Operator
+/// never disputed.
+///
+/// # This is evidence about attribution, not permission to enrol a centroid
+///
+/// **Neither half licenses writing this run's cluster vector as an exemplar,
+/// positive or negative.** The two are about different things.
+/// [`super::live::assemble`] builds each cluster's vector with [`centroid`]
+/// over every grouped `Observation`, before reconciliation has run; a
+/// transcript segment is mapped to a cluster only afterwards. So a cluster's
+/// vector can carry speech no segment covers at all, and the parts of each
+/// observation window that fall outside the segments over it. Unanimity here
+/// is unanimity among the segments — it cannot speak for the rest of what
+/// went into the vector.
+///
+/// A writer wanting to enrol or suppress a voice from this needs an
+/// embedding **bounded to the ranges the claim actually covers**, which this
+/// API does not carry and this module does not compute. Until it exists, a
+/// claim is a fact about who owned some words, to be used by a path that
+/// re-embeds those words.
 pub fn claims(
     connection: &rusqlite::Connection,
     reconciliation: &super::reconcile::Reconciliation,
@@ -927,81 +944,6 @@ pub fn claims(
     denied.retain(|(speaker, cluster)| claimed.get(cluster) != Some(speaker));
 
     Ok(Claims { claimed, denied })
-}
-
-/// Writes the negative half of the Operator's corrections, in this run's
-/// vector space. Answers how many were written.
-///
-/// The positive half rides along with the assignment — a claimed cluster is
-/// filed under its Speaker as it is persisted. What is left over is what the
-/// corrections *denied*, "these words were not yours", which has no
-/// assignment to travel with and so is written here, from the centroid of
-/// the cluster the words turned out to be.
-///
-/// **Whole clusters only**, by [`claims`]'s construction: the vector this
-/// files against a Speaker is cut entirely from audio the Operator took away
-/// from them. A centroid that mixed disputed audio with audio nobody
-/// questioned would suppress a voice using evidence *for* it.
-///
-/// **Idempotent, and it deletes nothing.** A negative the Speaker already
-/// holds for the same vector in the same Meeting is left where it is rather
-/// than rewritten, so a Meeting re-run twice inside one pass writes its
-/// negatives once — copies are votes in [`centroid`]. Withdrawing a previous
-/// model's evidence is ticket 05's wipe, which takes every exemplar; nothing
-/// here removes anything, because a negative exemplar deleted by a path that
-/// cannot re-derive it is a correction the Operator made and the system
-/// quietly forgot.
-pub fn relearn(
-    connection: &rusqlite::Connection,
-    meeting_id: &str,
-    embeddings: &BTreeMap<Cluster, Embedding>,
-    claims: &Claims,
-) -> anyhow::Result<usize> {
-    use crate::store::speakers;
-
-    let mut written = 0;
-    for (speaker_id, cluster) in &claims.denied {
-        // A cluster this run never embedded has no centroid to file.
-        let Some(embedding) = embeddings.get(cluster) else {
-            continue;
-        };
-        // Exact comparison is right here: both sides are the same vector
-        // through a BLOB round-trip, with no arithmetic between them.
-        let held = speakers::exemplars(connection, speaker_id)?;
-        let already = held.iter().any(|exemplar| {
-            exemplar.is_negative
-                && exemplar.meeting_id.as_deref() == Some(meeting_id)
-                && exemplar.model == embedding.model
-                && exemplar.model_version == embedding.model_version
-                && exemplar.vector == embedding.vector
-        });
-        if !already {
-            speakers::add_exemplar(
-                connection,
-                speakers::NewExemplar {
-                    speaker_id,
-                    meeting_id: Some(meeting_id),
-                    vector: &embedding.vector,
-                    model: &embedding.model,
-                    model_version: &embedding.model_version,
-                    voiced_ms: embedding.voiced_ms as i64,
-                    from_operator: true,
-                    is_negative: true,
-                    // Never played back as this Speaker: it is somebody
-                    // else's voice, which is the whole content of the claim.
-                    sample: None,
-                },
-            )?;
-            written += 1;
-        }
-        // Refreshed whether or not this call wrote, not only after a write:
-        // a run interrupted between the exemplar and the Voiceprint leaves
-        // the evidence recorded and the vector stale, and a retry that
-        // skipped the refresh because the evidence was already there would
-        // leave it stale for good.
-        refresh_voiceprint(connection, speaker_id)?;
-    }
-    Ok(written)
 }
 
 /// What rebuilding stale evidence did.
@@ -1957,70 +1899,6 @@ mod tests {
         let said = claims(&connection, &reconciliation).expect("claims");
         assert_eq!(said.claimed[&Cluster(0)], alice);
         assert!(said.denied.is_empty());
-    }
-
-    #[test]
-    fn relearn_files_the_denied_cluster_against_the_voice_it_was_not() {
-        use crate::store::{meetings, speakers};
-        let connection = db();
-        let meeting = meetings::start(&connection, None, None).expect("meeting");
-        let alice = named(&connection, "Alice");
-        let bob = named(&connection, "Bob");
-
-        let reconciliation = spoken(&connection, &meeting.id, &[(Some(0), Some(&alice))]);
-        speakers::correct_attribution(&connection, &reconciliation.assignments[0].segment_id, &bob)
-            .expect("correct");
-        let said = claims(&connection, &reconciliation).expect("claims");
-        let voices = clusters(&[(0, &[1.0, 0.0])]);
-
-        assert_eq!(
-            relearn(&connection, &meeting.id, &voices, &said).expect("relearn"),
-            1
-        );
-        let evidence = speakers::exemplars(&connection, &alice).expect("exemplars");
-        assert_eq!(evidence.len(), 1);
-        assert!(evidence[0].is_negative, "against, not for");
-        assert!(
-            evidence[0].from_operator,
-            "the Operator said so, not a guess"
-        );
-        assert_eq!(evidence[0].vector, voices[&Cluster(0)].vector);
-        assert!(
-            evidence[0].sample.is_none(),
-            "never played back as this voice: it is somebody else's"
-        );
-    }
-
-    #[test]
-    fn relearning_the_same_meeting_twice_writes_the_evidence_once() {
-        // Copies are votes in `centroid`, so a retried Meeting that stacked
-        // its negatives would suppress the voice harder each attempt.
-        use crate::store::{meetings, speakers};
-        let connection = db();
-        let meeting = meetings::start(&connection, None, None).expect("meeting");
-        let alice = named(&connection, "Alice");
-        let bob = named(&connection, "Bob");
-
-        let reconciliation = spoken(&connection, &meeting.id, &[(Some(0), Some(&alice))]);
-        speakers::correct_attribution(&connection, &reconciliation.assignments[0].segment_id, &bob)
-            .expect("correct");
-        let said = claims(&connection, &reconciliation).expect("claims");
-        let voices = clusters(&[(0, &[1.0, 0.0])]);
-
-        assert_eq!(
-            relearn(&connection, &meeting.id, &voices, &said).expect("first"),
-            1
-        );
-        assert_eq!(
-            relearn(&connection, &meeting.id, &voices, &said).expect("second"),
-            0
-        );
-        assert_eq!(
-            speakers::exemplars(&connection, &alice)
-                .expect("exemplars")
-                .len(),
-            1
-        );
     }
 
     #[test]
