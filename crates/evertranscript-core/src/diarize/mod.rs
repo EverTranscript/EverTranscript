@@ -39,6 +39,7 @@ pub mod live;
 pub mod operator;
 pub mod reconcile;
 pub mod runner;
+pub mod score;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
