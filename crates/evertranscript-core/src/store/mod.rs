@@ -6,6 +6,7 @@
 //! Reads take a separate pool so History search never waits behind the live
 //! transcript writer — the shape Granola's storage process ships.
 
+pub mod diarize_queue;
 pub mod meetings;
 pub mod schema;
 pub mod speakers;

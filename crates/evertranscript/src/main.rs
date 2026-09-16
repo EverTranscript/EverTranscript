@@ -1613,9 +1613,21 @@ async fn run_diarize(command: DiarizeCommand) -> Result<()> {
                     Some(serde_json::json!({ "meetingId": meeting })),
                 )
                 .await?;
-            println!(
-                "Diarizing in the background. Follow it with `evertranscript diarize status`."
-            );
+            let ahead = started
+                .queued
+                .iter()
+                .position(|id| Some(id) == started.meeting_id.as_ref())
+                .unwrap_or(0);
+            if ahead > 0 {
+                println!(
+                    "Queued behind {ahead} {}. Follow it with `evertranscript diarize status`.",
+                    plural(ahead as i64, "Meeting", "Meetings")
+                );
+            } else {
+                println!(
+                    "Diarizing in the background. Follow it with `evertranscript diarize status`."
+                );
+            }
             started
         }
         DiarizeCommand::Cancel { ref meeting } => {
@@ -1646,6 +1658,13 @@ async fn run_diarize(command: DiarizeCommand) -> Result<()> {
                 "Diarizing {} — {percent}%",
                 response.meeting_id.as_deref().unwrap_or("a Meeting")
             );
+            let waiting = response.queued.len().saturating_sub(1);
+            if waiting > 0 {
+                println!(
+                    "  {waiting} more {} waiting.",
+                    plural(waiting as i64, "Meeting is", "Meetings are")
+                );
+            }
         }
     }
     Ok(())

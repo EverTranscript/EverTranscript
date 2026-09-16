@@ -92,6 +92,12 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
             .run(core.mirror_wake(), shutdown.clone()),
     );
 
+    // Diarization works a persistent queue beside the server, for the same
+    // reason the Mirror does: two neural models must never be between a
+    // Client and its answer. One worker is what makes "at most one run at a
+    // time" structural.
+    let diarize_task = tokio::spawn(Arc::clone(&core).run_diarization_queue(shutdown.clone()));
+
     let server = Server::new(Arc::clone(&core));
     let server_shutdown = shutdown.clone();
     let server_task = tokio::spawn(server.run(events_rx, server_shutdown));
@@ -113,6 +119,7 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
         transport::serve(listener, events_tx, shutdown).await;
         let _ = server_task.await;
         let _ = mirror_task.await;
+        let _ = diarize_task.await;
         if let Some(detection) = detection_task {
             let _ = detection.await;
         }

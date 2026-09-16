@@ -5,4 +5,14 @@ export type DiarizeStatusResponse = { state: DiarizeState,
 /**
  * The Meeting being diarized, when one is.
  */
-meetingId?: string, doneMs: number, totalMs: number, };
+meetingId?: string, doneMs: number, totalMs: number, 
+/**
+ * The Meetings waiting their turn, in the order they will be worked,
+ * the running one first.
+ *
+ * Additive, so a Client that does not read it sees the running job
+ * exactly as it did before (ADR-0028). Empty rather than absent when
+ * nothing is queued: a Client drawing a backlog should not have to tell
+ * "nothing waiting" from "a Core too old to have a queue".
+ */
+queued: Array<string>, };
