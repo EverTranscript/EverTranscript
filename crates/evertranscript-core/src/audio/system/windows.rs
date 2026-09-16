@@ -183,6 +183,7 @@ pub(crate) fn output_is_headphones() -> Option<bool> {
     use windows::Win32::Media::Audio::Headset;
     use windows::Win32::Media::Audio::IMMDeviceEnumerator;
     use windows::Win32::Media::Audio::MMDeviceEnumerator;
+    use windows::Win32::Media::Audio::PKEY_AudioEndpoint_FormFactor;
     use windows::Win32::Media::Audio::eMultimedia;
     use windows::Win32::Media::Audio::eRender;
     use windows::Win32::Media::Audio::{RemoteNetworkDevice, SPDIF, UnknownFormFactor};
@@ -191,7 +192,6 @@ pub(crate) fn output_is_headphones() -> Option<bool> {
     use windows::Win32::System::Com::CoCreateInstance;
     use windows::Win32::System::Com::CoInitializeEx;
     use windows::Win32::System::Com::STGM_READ;
-    use windows::Win32::Media::Audio::PKEY_AudioEndpoint_FormFactor;
 
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);

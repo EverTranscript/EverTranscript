@@ -2261,9 +2261,7 @@ impl Core {
             if let Some(isolated) = outcome.mic_isolated {
                 let id = meeting.id.clone();
                 self.store
-                    .write(move |connection| {
-                        meetings::set_mic_isolated(connection, &id, isolated)
-                    })
+                    .write(move |connection| meetings::set_mic_isolated(connection, &id, isolated))
                     .await?;
             }
             if !outcome.degraded.is_empty() {
@@ -3676,7 +3674,9 @@ mod tests {
             "one 'You', which is the whole point"
         );
         assert!(
-            speakers::get(&connection, &minted.id).expect("get").is_none(),
+            speakers::get(&connection, &minted.id)
+                .expect("get")
+                .is_none(),
             "and the freshly minted row was folded in rather than left beside it"
         );
     }

@@ -2131,5 +2131,4 @@ mod tests {
         );
         assert!(by_name(&connection, "Bob").expect("by_name").is_none());
     }
-
 }

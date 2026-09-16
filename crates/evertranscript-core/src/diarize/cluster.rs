@@ -929,7 +929,8 @@ mod tests {
 
         let monday = meetings::start(&connection, Some("Monday"), None).expect("m1");
         let first = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
-        let monday_map = persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist");
+        let monday_map =
+            persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist");
         assert_eq!(monday_map.len(), 2, "two new voices");
 
         let friday = meetings::start(&connection, Some("Friday"), None).expect("m2");
@@ -1045,7 +1046,8 @@ mod tests {
 
         let monday = meetings::start(&connection, None, None).expect("m1");
         let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let before = persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist");
+        let before =
+            persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist");
 
         // The very same vector, stamped by a different model of equal width.
         let friday = meetings::start(&connection, None, None).expect("m2");
@@ -1081,7 +1083,8 @@ mod tests {
 
         let friday = meetings::start(&connection, None, None).expect("m2");
         let again = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let after = persist(&connection, &friday.id, &again, &heard(&again), None).expect("persist");
+        let after =
+            persist(&connection, &friday.id, &again, &heard(&again), None).expect("persist");
         assert_ne!(
             after[&Cluster(0)],
             speaker_id,
@@ -1114,7 +1117,8 @@ mod tests {
         let withheld =
             persist(&connection, &friday.id, &again, &heard(&again), Some(&me)).expect("persist");
         assert_ne!(
-            withheld[&Cluster(0)], me,
+            withheld[&Cluster(0)],
+            me,
             "the withheld seed must not be able to claim the cluster by the back door"
         );
         // The control is `the_same_voice_in_two_meetings_is_one_speaker`:
@@ -1143,7 +1147,8 @@ mod tests {
         let voices = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
 
         let only_first: BTreeSet<Cluster> = [Cluster(0)].into_iter().collect();
-        let assigned = persist(&connection, &meeting.id, &voices, &only_first, None).expect("persist");
+        let assigned =
+            persist(&connection, &meeting.id, &voices, &only_first, None).expect("persist");
 
         assert_eq!(assigned.len(), 1, "the voice with words is somebody");
         assert!(!assigned.contains_key(&Cluster(1)));
@@ -1172,7 +1177,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let assigned = persist(&connection, &meeting.id, &brief, &heard(&brief), None).expect("persist");
+        let assigned =
+            persist(&connection, &meeting.id, &brief, &heard(&brief), None).expect("persist");
 
         assert!(assigned.is_empty());
         assert!(
@@ -1204,7 +1210,8 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        let again = persist(&connection, &friday.id, &brief, &heard(&brief), None).expect("persist");
+        let again =
+            persist(&connection, &friday.id, &brief, &heard(&brief), None).expect("persist");
 
         assert_eq!(again[&Cluster(0)], alice, "recognized");
         let evidence = crate::store::speakers::exemplars(&connection, &alice).expect("exemplars");
@@ -1239,7 +1246,8 @@ mod tests {
             [(Cluster(0), embedding(&[1.0, 0.0, 0.0]).with_sample(window))]
                 .into_iter()
                 .collect();
-        let map = persist(&connection, &meeting.id, &voices, &heard(&voices), None).expect("persist");
+        let map =
+            persist(&connection, &meeting.id, &voices, &heard(&voices), None).expect("persist");
 
         let source = crate::store::speakers::sample_source(&connection, &map[&Cluster(0)])
             .expect("query")
@@ -1340,8 +1348,7 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        let map =
-            persist(&connection, &friday.id, &again, &heard(&again), None).expect("persist");
+        let map = persist(&connection, &friday.id, &again, &heard(&again), None).expect("persist");
         assert_eq!(
             map[&Cluster(0)],
             speaker_id,
@@ -1517,8 +1524,8 @@ mod tests {
         .expect("segment");
 
         let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let stale = persist(&connection, &meeting.id, &first, &heard(&first), None).expect("persist")
-            [&Cluster(0)]
+        let stale = persist(&connection, &meeting.id, &first, &heard(&first), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
         speakers::attribute_segment(
             &connection,
@@ -1530,8 +1537,8 @@ mod tests {
 
         // The same voice, exactly, as the re-run clusters it.
         let again = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let fresh = persist(&connection, &meeting.id, &again, &heard(&again), None).expect("persist")
-            [&Cluster(0)]
+        let fresh = persist(&connection, &meeting.id, &again, &heard(&again), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
         assert_ne!(
             fresh, stale,
@@ -1570,8 +1577,8 @@ mod tests {
         let meeting = meetings::start(&connection, None, None).expect("m");
 
         let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let alice = persist(&connection, &meeting.id, &first, &heard(&first), None).expect("persist")
-            [&Cluster(0)]
+        let alice = persist(&connection, &meeting.id, &first, &heard(&first), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
         speakers::rename(&connection, &alice, "Alice").expect("rename");
 
@@ -1602,16 +1609,16 @@ mod tests {
 
         let monday = meetings::start(&connection, None, None).expect("m1");
         let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let voice = persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist")
-            [&Cluster(0)]
+        let voice = persist(&connection, &monday.id, &first, &heard(&first), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
         let friday = meetings::start(&connection, None, None).expect("m2");
         let second = clusters(&[(0, &[0.97, 0.05, 0.0])]);
         persist(&connection, &friday.id, &second, &heard(&second), None).expect("persist");
 
         let again = clusters(&[(0, &[0.99, 0.02, 0.0])]);
-        let recognized = persist(&connection, &monday.id, &again, &heard(&again), None).expect("persist")
-            [&Cluster(0)]
+        let recognized = persist(&connection, &monday.id, &again, &heard(&again), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
 
         assert_eq!(recognized, voice);
