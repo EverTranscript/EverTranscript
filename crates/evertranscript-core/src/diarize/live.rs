@@ -371,14 +371,10 @@ impl LiveDiarizer {
                             self.embedder.embed_frames(&rows)?
                         }
                         Frontend::Waveform => {
-                            let alone = runs_of(masks, |mask| mask == bit);
-                            let picked = if alone.len() > 1
-                                || alone.iter().map(|(a, b)| b - a).sum::<usize>()
-                                    > MIN_EMBED_FRAMES
-                            {
-                                alone
+                            let picked = if alone_is_enough(masks, bit, samples_per_frame) {
+                                runs_of(masks, |mask| mask == bit)
                             } else {
-                                runs_of(masks, |mask| mask & bit != 0)
+                                runs.clone()
                             };
                             let mut voiced: Vec<f32> = Vec::new();
                             for (from, to) in picked {
@@ -461,12 +457,30 @@ pub fn chosen_rows(masks: &[u8], bit: u8, samples_per_frame: f64) -> Vec<usize> 
             .map(|(row, _)| row)
             .collect()
     };
-    let alone = rows(&|mask| mask == bit);
-    if alone.len() > MIN_EMBED_FRAMES {
-        alone
+    if alone_is_enough(masks, bit, samples_per_frame) {
+        rows(&|mask| mask == bit)
     } else {
         rows(&|mask| mask & bit != 0)
     }
+}
+
+/// Whether one local speaker holds enough frames alone to be embedded from
+/// them, rather than from all of its frames, overlap included.
+///
+/// **Both front ends ask this one function**, which is the whole point of it.
+/// `chosen_rows` spends the answer as feature rows and the waveform path as
+/// sample offsets, but they must be spending the same answer: a comparison
+/// between two embeddings is only about the embeddings if everything upstream
+/// picked the same audio. Counting is in feature rows either way — the
+/// threshold was chosen against a 10 ms row, and segmentation frames are
+/// nearer 17 ms, so counting those instead silently moves the bar.
+pub fn alone_is_enough(masks: &[u8], bit: u8, samples_per_frame: f64) -> bool {
+    (0..)
+        .map(|row| ((row * FRAME_SHIFT + FRAME_LENGTH / 2) as f64 / samples_per_frame) as usize)
+        .take_while(|frame| *frame < masks.len())
+        .filter(|frame| masks[*frame] == bit)
+        .count()
+        > MIN_EMBED_FRAMES
 }
 
 /// The sub-span of a clean stretch to hold a voice up by: its middle, at
@@ -703,6 +717,60 @@ mod tests {
             last_centre < 295.0 * SAMPLES_PER_FRAME,
             "none from the overlap"
         );
+    }
+
+    #[test]
+    fn both_front_ends_choose_the_same_frames() {
+        // The A/B between two embeddings is only about the embeddings if
+        // everything upstream picks the same audio. `chosen_rows` spends
+        // the answer as feature rows and the waveform path as sample
+        // offsets; this pins that they are spending the same answer.
+        //
+        // Two short alone-runs is the case that used to diverge: the
+        // waveform path branched on the *number of runs*, so it took the
+        // clean frames where the fbank path, counting rows against the
+        // minimum, took everything. Different audio, silently.
+        let mut masks = vec![0_u8; 589];
+        masks[100..200].fill(0b11);
+        masks[200..202].fill(0b10);
+        masks[300..302].fill(0b10); // two alone-runs, four frames between them
+        assert!(
+            !alone_is_enough(&masks, 0b10, SAMPLES_PER_FRAME),
+            "four frames is under the minimum however many runs they arrive in"
+        );
+
+        for (masks, bit, alone) in [
+            (masks.clone(), 0b10_u8, false),
+            (
+                {
+                    let mut m = vec![0b01_u8; 589];
+                    m[295..].fill(0b11);
+                    m
+                },
+                0b01_u8,
+                true,
+            ),
+        ] {
+            let enough = alone_is_enough(&masks, bit, SAMPLES_PER_FRAME);
+            assert_eq!(enough, alone);
+            // The fbank path's rows and the waveform path's runs must come
+            // from the same predicate, so every row's centre falls inside
+            // some run the waveform path would have taken.
+            let runs = if enough {
+                runs_of(&masks, |mask| mask == bit)
+            } else {
+                runs_of(&masks, |mask| mask & bit != 0)
+            };
+            for row in chosen_rows(&masks, bit, SAMPLES_PER_FRAME) {
+                let centre =
+                    ((row * FRAME_SHIFT + FRAME_LENGTH / 2) as f64 / SAMPLES_PER_FRAME) as usize;
+                assert!(
+                    runs.iter()
+                        .any(|(from, to)| centre >= *from && centre < *to),
+                    "row {row} (frame {centre}) is outside every run the waveform path takes"
+                );
+            }
+        }
     }
 
     #[test]

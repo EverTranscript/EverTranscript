@@ -1664,3 +1664,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The whole point of this rig is that Q111's bake-off moved two variables and attributed the result to one. Main's own Q115 records that it "compared three models through the same wrong front end, which is why WeSpeaker looked so much worse than the ReDimNets there." Letting each model window differently would reintroduce the same confound with the sign flipped. Per-model tuning is a later question and a real one; it is not answerable until the single-variable number exists.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q131 — diarization-independent/ab — deviation
+
+**Question:** The waveform front end branched on `alone.len() > 1` — the number of alone-*runs* — and summed *segmentation* frames against `MIN_EMBED_FRAMES`, while `chosen_rows` counted *feature rows*. Two different predicates. Fix, or accept as a corner case?
+**Options considered:** accept / one predicate both front ends ask
+**Chosen:** Extracted `alone_is_enough`, asked by both. `chosen_rows` spends the answer as feature rows, the waveform path as sample offsets.
+**Decided-by:** agent
+**Justification:** Not a corner case, and it invalidated the measurement it was part of. Segmentation frames are ~17 ms and feature rows 10 ms, so counting the wrong one moves the bar by 1.7x; and branching on run *count* rather than frame count meant a speaker with two short clean stretches took the alone branch under waveform and the all-frames branch under fbank. That regime is overlapped speech — the hard cases that drive confusion error — so the two embeddings would have been fed different audio exactly where it matters most, reintroducing the second variable Q130 exists to remove. Found by reading the path after it had already been committed and smoke-tested; the smoke numbers were plausible, which is the point. Q130 stands as the intent; this is the implementation finally matching it. `both_front_ends_choose_the_same_frames` pins it, and the first draft of that test asserted the wrong thing for the same unit confusion.
+**Outcome:** applied
+**Ref:** (pending)
