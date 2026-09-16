@@ -49,7 +49,7 @@ WeSpeaker Voiceprints to a ReDimNet2 resolve without a word (DECISIONS Q154).
 | 05 | A model change clears Voiceprints. Migration written and tested, **not registered**; Registry messaging and activation remain — see below. |
 | 06 | ReDimNet2-B3 replaces WeSpeaker. Measured on both halves; the decision is the user's and is unanswered. See below. |
 | 07 | Recognition thresholds are re-derived. Dev curve and held-out validation done; no point selected, for the same reason as 06. |
-| 12 | A model change re-runs History. Ticket rewritten against current code; still blocked by 05, which is now the only thing in front of it — see below. |
+| 12 | A model change re-runs History. `cluster::claims` built and unwired (`058bcad`); the rest wants 05, a migration or the protocol — see below. |
 
 ### 05 and 12, audited against this branch rather than their old Done flags
 
@@ -100,10 +100,17 @@ and for a hypothetical next model, which is what stops the lazy rebuild path
 reintroducing the old model's cuts behind the wipe. **05 is not done**: the
 Registry messaging and the activation remain.
 
-**The next independent piece of 12 is `cluster::claims`** — no table, no
-migration, no protocol method, nothing that runs on its own. Two traps from
-the old branch's version are written into the ticket so a rewrite cannot lose
-them: `begin_if_the_model_changed` treats an *absent* metadata row as a model
+**12's first independent piece is built**: `cluster::claims` (`058bcad`) — no
+table, no migration, no protocol method, nothing that runs on its own, and
+nothing calls it. It hands a cluster whose segments a relearnable Speaker
+already owned to that Speaker, reading through `attributed_speaker` so a
+correction outranks what it replaced, and excluding the Operator. It carries
+one judgement the ticket did not settle, flagged for the user: a plurality
+with **no floor**, so one named segment claims a cluster a pseudonym owns the
+rest of, and the Voiceprint the re-run then builds is cut from all of it. The
+positive half only; `relearn`'s denials want two store functions this code
+does not have. Two traps from the old branch's version are written into the
+ticket so a rewrite cannot lose them: `begin_if_the_model_changed` treats an *absent* metadata row as a model
 change and would enqueue all of History on a first start, and `relearnable`
 includes the Operator while 12 forbids relearning the Operator from old
 attributions, so `claims` must exclude it and leave the channel rules

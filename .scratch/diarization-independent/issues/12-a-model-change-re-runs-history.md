@@ -108,19 +108,36 @@ Same two dependencies as 05, plus one of its own:
 No part of this may be run against a real History before (1) and (2). Writing
 and testing it is safe; adding the trigger is not.
 
-## The next independent piece: `cluster::claims`
+## Built: `cluster::claims` (`058bcad`)
 
-Buildable now, before 05 lands and without touching activation, because it
-adds no table, no migration, no protocol method and nothing that runs on its
-own. It is a read over the record plus a set operation, testable against a
-fixture database.
+Landed ahead of the rest because it adds no table, no migration, no protocol
+method and nothing that runs on its own. **Nothing calls it yet**; the re-run
+it belongs to is still gated behind 05 and the model decision.
 
 `claims` reads who owned each segment **before** the run overwrites it — the
 previous model's attribution with the Operator's corrections on top — and
 hands a cluster whose segments a relearnable Speaker already owned to that
-Speaker outright, skipping both the resolve and the minting floor. It must go
-through `store::speakers::attributed_speaker`, never `speaker_id` directly, or
-it reads a correction the Operator made as though it had been ignored.
+Speaker outright, skipping both the resolve and the minting floor. It reads
+through `store::speakers::attributed_speaker`, never `speaker_id` directly, so
+a correction the Operator made outranks the attribution it replaced. Both
+traps below are honoured: the Operator is filtered out of `relearnable`, and
+nothing here enqueues anything.
+
+It returns a plain `BTreeMap<Cluster, String>` rather than the old branch's
+`Claims { claimed, denied }`. The denial half wants `replaced_speaker` and
+`delete_correction_exemplars`, neither of which exists on this code, and
+deleting a negative exemplar that nothing yet re-derives would destroy
+evidence. That is `relearn`'s work.
+
+**One judgement this ticket did not settle: a plurality with no floor under
+it.** One named segment in a cluster otherwise owned by a pseudonym claims the
+whole cluster, because pseudonyms are not relearnable and so do not vote. It
+matches the old branch, and the alternatives — a floor, or letting pseudonyms
+outvote a name — are rules nobody asked for. The cost is real and is pinned in
+`one_named_segment_outvotes_a_pseudonym_that_owns_the_rest`: the Voiceprint
+the re-run then builds is cut from the whole cluster, most of which that
+person may not have said. Worth the user's eye before activation, not before
+the code existed.
 
 Everything else in the ticket wants either 05 (the state it re-runs into),
 a migration (`store::rerun`'s backlog row), or the protocol (`diarize/status`,
