@@ -100,21 +100,33 @@ and for a hypothetical next model, which is what stops the lazy rebuild path
 reintroducing the old model's cuts behind the wipe. **05 is not done**: the
 Registry messaging and the activation remain.
 
-**12's first independent piece is built**: `cluster::claims` (`058bcad`) — no
-table, no migration, no protocol method, nothing that runs on its own, and
-nothing calls it. It hands a cluster whose segments a relearnable Speaker
-already owned to that Speaker, reading through `attributed_speaker` so a
-correction outranks what it replaced, and excluding the Operator. It carries
-one judgement the ticket did not settle, flagged for the user: a plurality
-with **no floor**, so one named segment claims a cluster a pseudonym owns the
-rest of, and the Voiceprint the re-run then builds is cut from all of it. The
-positive half only; `relearn`'s denials want two store functions this code
-does not have. Two traps from the old branch's version are written into the
-ticket so a rewrite cannot lose them: `begin_if_the_model_changed` treats an *absent* metadata row as a model
-change and would enqueue all of History on a first start, and `relearnable`
-includes the Operator while 12 forbids relearning the Operator from old
-attributions, so `claims` must exclude it and leave the channel rules
-responsible.
+**12's first two pieces are built and unwired**: `cluster::claims` (`058bcad`)
+and `cluster::relearn` (`c72bb74`) — no table, no migration, no protocol
+method, and nothing calls either. `claims` hands back the clusters a Speaker
+owns outright and the Speakers a correction took a whole cluster away from,
+reading through `attributed_speaker` and `replaced_speaker` so the Operator's
+latest word counts in both directions, and excluding the Operator. `relearn`
+files the denials as negative exemplars.
+
+**The rule on both halves is unanimity, not a vote.** A cluster is claimed only
+where every segment in it belongs to the same eligible Speaker, and denied only
+where every segment was corrected away from the same one; anything mixed or
+unvouched yields nothing. A first draft used a plurality, which would have
+enrolled a cluster's unsupported audio under whichever name held the most of it
+and broken a two-name tie by comparing UUIDs. The test is over the set of
+owners rather than a count, so splitting an utterance into more segments cannot
+change who claims it. An absent claim withholds the shortcut past the resolve,
+not the person: the Voiceprint is still there to match against, and the seeding
+path can still rebuild from the ranges that are theirs. `relearn` deletes
+nothing and is idempotent, and writes only whole-cluster denials — a
+per-segment negative needs a per-segment vector, which its inputs do not carry.
+
+Two traps from the old branch's version are written into the ticket so a
+rewrite cannot lose them: `begin_if_the_model_changed` treats an *absent*
+metadata row as a model change and would enqueue all of History on a first
+start, and `relearnable` includes the Operator while 12 forbids relearning the
+Operator from old attributions, so `claims` excludes it and leaves the channel
+rules responsible.
 
 Checked while auditing and found already correct: `feed_correction` copies the
 mistaken exemplar's own model and version rather than stamping the current

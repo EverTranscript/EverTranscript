@@ -108,40 +108,78 @@ Same two dependencies as 05, plus one of its own:
 No part of this may be run against a real History before (1) and (2). Writing
 and testing it is safe; adding the trigger is not.
 
-## Built: `cluster::claims` (`058bcad`)
+## Built: `cluster::claims` and `cluster::relearn` (`058bcad`, `c72bb74`)
 
-Landed ahead of the rest because it adds no table, no migration, no protocol
-method and nothing that runs on its own. **Nothing calls it yet**; the re-run
-it belongs to is still gated behind 05 and the model decision.
+Landed ahead of the rest because they add no table, no migration, no protocol
+method and nothing that runs on its own. **Nothing calls either of them**; the
+re-run they belong to is still gated behind 05 and the model decision.
 
 `claims` reads who owned each segment **before** the run overwrites it — the
 previous model's attribution with the Operator's corrections on top — and
-hands a cluster whose segments a relearnable Speaker already owned to that
-Speaker outright, skipping both the resolve and the minting floor. It reads
-through `store::speakers::attributed_speaker`, never `speaker_id` directly, so
-a correction the Operator made outranks the attribution it replaced. Both
-traps below are honoured: the Operator is filtered out of `relearnable`, and
+hands back two things: the clusters a Speaker owns outright, and the Speakers
+a correction took a whole cluster away from. It reads through
+`store::speakers::attributed_speaker` and `store::speakers::replaced_speaker`,
+never `speaker_id` directly, so the Operator's latest word counts in both
+directions. Both traps below are honoured: the Operator is filtered out, and
 nothing here enqueues anything.
 
-It returns a plain `BTreeMap<Cluster, String>` rather than the old branch's
-`Claims { claimed, denied }`. The denial half wants `replaced_speaker` and
-`delete_correction_exemplars`, neither of which exists on this code, and
-deleting a negative exemplar that nothing yet re-derives would destroy
-evidence. That is `relearn`'s work.
+### The rule: unanimity, not a vote
 
-**One judgement this ticket did not settle: a plurality with no floor under
-it.** One named segment in a cluster otherwise owned by a pseudonym claims the
-whole cluster, because pseudonyms are not relearnable and so do not vote. It
-matches the old branch, and the alternatives — a floor, or letting pseudonyms
-outvote a name — are rules nobody asked for. The cost is real and is pinned in
-`one_named_segment_outvotes_a_pseudonym_that_owns_the_rest`: the Voiceprint
-the re-run then builds is cut from the whole cluster, most of which that
-person may not have said. Worth the user's eye before activation, not before
-the code existed.
+**A cluster is claimed only where every one of its segments belongs to the
+same eligible Speaker.** Conflicting or unsupported ownership yields no claim
+at all rather than a winner.
 
-Everything else in the ticket wants either 05 (the state it re-runs into),
-a migration (`store::rerun`'s backlog row), or the protocol (`diarize/status`,
-`diarize/rerunCancel`). Those wait.
+This ticket seeds a named Speaker **from their own attributed segments**.
+Naming a cluster the old model drew was never confirmation of every voice in a
+new, differently drawn one — and the re-run redraws them, so a cluster can
+arrive holding two people's words, or one person's mixed with audio nobody has
+vouched for. A vote would hand that whole cluster to whoever held the most of
+it, and the Voiceprint the re-run then built would be cut from all of it,
+enrolling unsupported audio under a name the Operator trusts. Two named owners
+are worse: the tie would be broken by comparing two UUIDs, which say nothing
+about whose voice it is.
+
+The test is over the **set** of owners, never a count, so splitting one
+utterance into more segments cannot change who claims it —
+`splitting_an_utterance_cannot_change_which_identity_is_claimed`. A tally or a
+coverage percentage would make transcription granularity an input to identity.
+
+**An absent claim is not a lost person.** `claims` is the coarse fast path: a
+claimed cluster is assigned rather than resolved, skipping the resolve and the
+minting floor. Where it abstains, the Speaker still has their Voiceprint for
+the resolve to match against, and the seeding path can still rebuild them from
+the ranges that *are* theirs. What an absent claim withholds is the shortcut,
+not the identity.
+
+### The negative half
+
+`relearn` writes what the corrections denied — "these words were not yours" —
+as a negative exemplar cut from the denied cluster's centroid, after the
+assignment that decided whose the words actually were.
+
+Held to the same standard: a cluster is denied to a Speaker only where **every**
+segment in it was corrected away from them. A centroid is evidence of "not
+them" only if all of it was taken from them; one corrected segment in thirty
+would suppress a voice using twenty-nine segments of audio the Operator never
+disputed, which is the same mistake as enrolling one from them.
+
+It **deletes nothing** and is idempotent. A negative already held for the same
+vector in the same Meeting is left alone rather than rewritten, so a Meeting
+retried inside one pass writes its negatives once — copies are votes in
+`centroid`. The Voiceprint is refreshed whether or not the call wrote, so a
+run interrupted between the exemplar and the Voiceprint converges on a retry
+instead of leaving the vector stale for good. Withdrawing a *previous model's*
+evidence is 05's wipe, which takes every exemplar; a negative deleted by a path
+that cannot re-derive it is a correction the Operator made and the system
+quietly forgot.
+
+**One gap, stated rather than narrowed silently.** The ticket says negatives
+are rebuilt "from corrections that took a segment away" — per segment. A
+per-segment negative needs a per-segment vector, and `relearn`'s inputs carry
+one vector per cluster. The whole-cluster denial is the part of that the
+current data flow can support with sound provenance; the per-segment case
+belongs with the seeding path, which will have the ranges in hand because it
+re-embeds them.
 
 ## Two traps in the old branch's version, checked against this code
 
