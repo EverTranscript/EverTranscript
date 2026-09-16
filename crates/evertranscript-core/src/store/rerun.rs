@@ -35,7 +35,8 @@ pub struct Rerun {
     /// the queue it left behind carry on.
     pub model: String,
     pub model_version: String,
-    /// Meetings enqueued when it began.
+    /// Meetings this backlog owns. Set when it began, and carried across a
+    /// replacement for the ones still in line — see [`begin`].
     pub total: usize,
     /// How many of *its own* Meetings are still in line — not the size of
     /// the queue, which also carries work this re-run never asked for.
@@ -119,13 +120,28 @@ pub fn state(connection: &Connection) -> Result<Option<Rerun>> {
 /// corrections and the names all stand; only recognition of the voices in it
 /// is gone, which is what a model change costs.
 ///
-/// A Meeting already in line is left where it is and is **not** counted: one
-/// that just ended, or one the Operator asked for, is ahead of this and stays
-/// there, so it is not the re-run's to cancel either.
+/// A Meeting already in line that this backlog does **not** already own is
+/// left where it is and is not counted: one that just ended, or one the
+/// Operator asked for, is ahead of this and stays there, so it is not the
+/// re-run's to cancel either.
+///
+/// **Replacing a backlog carries the work it still owns.** A second model
+/// change mid-walk finds its own Meetings already queued, and `enqueue`
+/// answers `false` for every one of them — it has nothing to add. Dropping
+/// membership on that answer would leave those Meetings queued and ownerless:
+/// `total` would be the handful that happened to have finished, `remaining`
+/// zero, and cancelling would empty nothing while the machine kept working.
+/// So ownership is reconciled rather than rebuilt, and only Meetings this
+/// backlog neither owns nor enqueued are left alone.
 pub fn begin(connection: &Connection, model: &str, model_version: &str) -> Result<usize> {
     let transaction = connection.unchecked_transaction()?;
-    // A previous backlog's membership is not this one's.
-    transaction.execute("DELETE FROM diarize_rerun_backlog", [])?;
+
+    // Read before anything moves: what the previous backlog still owns.
+    let owned: std::collections::BTreeSet<String> = {
+        let mut statement = transaction.prepare("SELECT meeting_id FROM diarize_rerun_backlog")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
 
     // Oldest first, with `id` behind `started_at` so two Meetings that began
     // in the same second still have an order — `Uuid::now_v7` makes the id
@@ -139,16 +155,24 @@ pub fn begin(connection: &Connection, model: &str, model_version: &str) -> Resul
         rows.collect::<rusqlite::Result<_>>()?
     };
 
-    let mut total = 0;
+    let mut mine: Vec<&String> = Vec::new();
     for meeting_id in &meetings {
-        if diarize_queue::enqueue(&transaction, meeting_id, diarize_queue::Priority::Back)? {
-            transaction.execute(
-                "INSERT INTO diarize_rerun_backlog (meeting_id) VALUES (?1)",
-                params![meeting_id],
-            )?;
-            total += 1;
+        let joined =
+            diarize_queue::enqueue(&transaction, meeting_id, diarize_queue::Priority::Back)?;
+        // Newly in line, or already in line and already this backlog's.
+        if joined || owned.contains(meeting_id) {
+            mine.push(meeting_id);
         }
     }
+
+    transaction.execute("DELETE FROM diarize_rerun_backlog", [])?;
+    for meeting_id in &mine {
+        transaction.execute(
+            "INSERT INTO diarize_rerun_backlog (meeting_id) VALUES (?1)",
+            params![meeting_id],
+        )?;
+    }
+    let total = mine.len();
     record(&transaction, model, model_version, total)?;
     transaction.commit()?;
     Ok(total)
@@ -202,17 +226,40 @@ pub fn begin_if_the_model_changed(
 /// and only those still waiting at `Back` — one promoted to `Front` because
 /// somebody asked for it is no longer this job's to cancel.
 ///
+/// **A Meeting it cannot cancel it also does not disown.** Promotion is not
+/// completion: that Meeting is still in line and will still be walked, so it
+/// stays counted in `remaining` until it is. Clearing membership wholesale
+/// here would drop it out of `remaining`, and `done` — total minus remaining
+/// minus abandoned — would report it as walked the moment it was promoted.
+///
 /// The mark outlives the emptied queue, or the next start would find a
 /// drained backlog for the current model and read it as finished.
 pub fn cancel(connection: &Connection) -> Result<usize> {
     let transaction = connection.unchecked_transaction()?;
-    let dropped = transaction.execute(
-        "DELETE FROM diarize_queue \
-          WHERE priority = ?1 \
-            AND meeting_id IN (SELECT meeting_id FROM diarize_rerun_backlog)",
-        params![diarize_queue::Priority::Back as i64],
-    )?;
-    transaction.execute("DELETE FROM diarize_rerun_backlog", [])?;
+    // Named before they are deleted, so membership can be given up for
+    // exactly the rows the queue gave up and no others.
+    let giving_up: Vec<String> = {
+        let mut statement = transaction.prepare(
+            "SELECT backlog.meeting_id FROM diarize_rerun_backlog backlog \
+               JOIN diarize_queue queue ON queue.meeting_id = backlog.meeting_id \
+              WHERE queue.priority = ?1",
+        )?;
+        let rows = statement.query_map(params![diarize_queue::Priority::Back as i64], |row| {
+            row.get(0)
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for meeting_id in &giving_up {
+        transaction.execute(
+            "DELETE FROM diarize_queue WHERE meeting_id = ?1",
+            params![meeting_id],
+        )?;
+        transaction.execute(
+            "DELETE FROM diarize_rerun_backlog WHERE meeting_id = ?1",
+            params![meeting_id],
+        )?;
+    }
+    let dropped = giving_up.len();
     // Recorded, not just counted out of the queue: emptying the line would
     // otherwise make done — total minus remaining — jump to total, and an
     // Operator who stopped a re-run at 1 of 40 would be told all forty had
@@ -462,5 +509,44 @@ mod tests {
             vec!["b".to_string(), "later".to_string()],
             "what somebody is waiting for, and what the re-run never asked for"
         );
+
+        // And promotion is not completion. `b` was not cancelled because it
+        // is no longer this job's to cancel, but it has not been walked
+        // either, so it stays owed until it is.
+        let stopped = state(&connection).expect("state").expect("a row");
+        assert_eq!(
+            (stopped.remaining, stopped.abandoned, stopped.done()),
+            (1, 2, 0),
+            "nothing was processed, so nothing is done"
+        );
+        diarize_queue::finish(&connection, "b").expect("walked");
+        assert_eq!(state(&connection).expect("state").expect("a row").done(), 1);
+    }
+
+    /// A second model change part-way through the first one's backlog.
+    ///
+    /// `enqueue` has nothing to add for Meetings already in line and answers
+    /// `false` for every one of them. Rebuilding membership from that answer
+    /// would leave them queued and ownerless — `total` the handful that
+    /// happened to have finished, `remaining` zero, and cancelling emptying
+    /// nothing while the machine kept working.
+    #[test]
+    fn beginning_again_mid_backlog_keeps_the_work_it_already_owns() {
+        let connection = db();
+        history(&connection);
+        assert_eq!(begin(&connection, "redimnet2-b3", "1").expect("first"), 3);
+        diarize_queue::finish(&connection, "a").expect("walked");
+
+        // Two still queued from the first backlog, one to enqueue again.
+        assert_eq!(begin(&connection, "redimnet2-b3", "2").expect("second"), 3);
+        let again = state(&connection).expect("state").expect("a row");
+        assert_eq!((again.total, again.remaining, again.done()), (3, 3, 0));
+
+        assert_eq!(
+            cancel(&connection).expect("cancel"),
+            3,
+            "all three are this backlog's to give up"
+        );
+        assert!(diarize_queue::list(&connection).expect("list").is_empty());
     }
 }
