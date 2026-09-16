@@ -392,6 +392,17 @@ client_request_definitions! {
         params: DiarizeCancelParams,
         response: DiarizeStatusResponse,
     },
+    /// Stops the bulk re-run of History a model change started.
+    ///
+    /// Separate from `diarize/cancel`, which names one Meeting: the backlog
+    /// is one job in the Operator's eyes and cancelling it Meeting by Meeting
+    /// would not be cancelling it. Every Meeting already walked keeps what
+    /// that walk concluded, and a Meeting somebody is waiting for stays in
+    /// line.
+    DiarizeRerunCancel => "diarize/rerunCancel" {
+        params: DiarizeStatusParams,
+        response: DiarizeStatusResponse,
+    },
 }
 
 server_notification_definitions! {
@@ -1500,6 +1511,51 @@ pub struct DiarizeStatusResponse {
     /// "nothing waiting" from "a Core too old to have a queue".
     #[serde(default)]
     pub queued: Vec<String>,
+    /// The bulk re-run of History a model change started, while one is owed.
+    ///
+    /// Absent when none has ever run and once one has finished, so a Client
+    /// that ignores it behaves exactly as it did before (ADR-0028). It is
+    /// here rather than on its own method because an Operator asking "what
+    /// is diarization doing" during a multi-hour backlog is asking about
+    /// this, and two places to look is how one of them goes unread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rerun: Option<DiarizeRerunStatus>,
+}
+
+/// A re-run of all of History after the embedding changed.
+///
+/// An unannounced multi-hour job that reprocesses everything is, from
+/// outside, indistinguishable from the product misbehaving — so it is
+/// reported whether or not anyone asked for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiarizeRerunStatus {
+    /// Meetings walked so far, out of `total`.
+    #[ts(type = "number")]
+    pub done: i64,
+    #[ts(type = "number")]
+    pub total: i64,
+    /// Standing down because a Meeting is being recorded. The backlog is
+    /// hours of two neural models, and the recording comes first.
+    pub paused: bool,
+    /// Stopped by the Operator. Every Meeting already walked keeps what that
+    /// walk concluded.
+    pub cancelled: bool,
+    /// Named Speakers whose Voiceprint the re-run has earned back.
+    #[ts(type = "number")]
+    pub relearned: i64,
+    /// Named Speakers still without one: voices History knows by name and
+    /// can no longer recognize. Reported rather than left to be discovered
+    /// the next time one of them is not identified.
+    #[ts(type = "number")]
+    pub without_voiceprint: i64,
+    /// Pseudonymous Speakers after the re-run. A re-run re-mints them, so
+    /// "Speaker 3" is not the Speaker 3 anyone saw before it — which the
+    /// Operator should be told rather than notice.
+    #[ts(type = "number")]
+    pub pseudonyms: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1776,5 +1832,90 @@ mod tests {
         let (method, params) = notification.to_wire();
         assert_eq!(method, "core/stateChanged");
         assert_eq!(params, serde_json::json!({ "state": "recording" }));
+    }
+}
+
+/// The re-run's fields, which ADR-0028 requires be additive.
+#[cfg(test)]
+mod rerun_is_additive {
+    use super::*;
+
+    /// A status as a Core that predates the re-run would have sent it.
+    const OLDER_CORE: &str = r#"{"state":"running","doneMs":100,"totalMs":200}"#;
+
+    #[test]
+    fn a_status_without_a_rerun_still_decodes() {
+        let response: DiarizeStatusResponse =
+            serde_json::from_str(OLDER_CORE).expect("an older Core's status still decodes");
+        assert_eq!(response.rerun, None);
+        assert!(response.queued.is_empty());
+    }
+
+    #[test]
+    fn a_core_with_no_rerun_sends_no_rerun_field() {
+        // The other direction, and the one a Client notices: a newer Core
+        // with nothing to report is byte-identical to the old shape, so a
+        // Client that never heard of re-runs sees exactly what it did
+        // before.
+        let quiet = DiarizeStatusResponse {
+            state: DiarizeState::Running,
+            meeting_id: None,
+            done_ms: 100,
+            total_ms: 200,
+            queued: Vec::new(),
+            rerun: None,
+        };
+        let json = serde_json::to_value(&quiet).expect("encode");
+        assert!(json.get("rerun").is_none(), "absent, not null: {json}");
+    }
+
+    #[test]
+    fn a_running_rerun_reports_progress_pause_and_cancellation() {
+        let busy = DiarizeStatusResponse {
+            state: DiarizeState::Running,
+            meeting_id: Some("m".into()),
+            done_ms: 0,
+            total_ms: 0,
+            queued: vec!["m".into()],
+            rerun: Some(DiarizeRerunStatus {
+                done: 7,
+                total: 40,
+                paused: true,
+                cancelled: false,
+                relearned: 3,
+                without_voiceprint: 1,
+                pseudonyms: 12,
+            }),
+        };
+        let json = serde_json::to_value(&busy).expect("encode");
+        let rerun = json.get("rerun").expect("reported");
+        assert_eq!(rerun.get("done").and_then(|v| v.as_i64()), Some(7));
+        assert_eq!(rerun.get("total").and_then(|v| v.as_i64()), Some(40));
+        assert_eq!(rerun.get("paused").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            rerun.get("cancelled").and_then(|v| v.as_bool()),
+            Some(false)
+        );
+        assert_eq!(
+            rerun.get("withoutVoiceprint").and_then(|v| v.as_i64()),
+            Some(1),
+            "the voices History knows by name and can no longer recognize"
+        );
+        assert_eq!(
+            serde_json::from_value::<DiarizeStatusResponse>(json).expect("round trip"),
+            busy
+        );
+    }
+
+    #[test]
+    fn cancelling_the_rerun_is_a_method_of_its_own() {
+        // Not a flag on `diarize/cancel`, which names one Meeting: a new
+        // method is additive, a changed meaning for an existing one is not.
+        let request: ClientRequest = serde_json::from_value(serde_json::json!({
+            "method": "diarize/rerunCancel",
+            "params": {}
+        }))
+        .expect("decodes");
+        assert!(matches!(request, ClientRequest::DiarizeRerunCancel(_)));
     }
 }

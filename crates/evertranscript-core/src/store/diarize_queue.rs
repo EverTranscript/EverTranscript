@@ -24,6 +24,19 @@ pub enum Priority {
     Back = 1,
 }
 
+impl Priority {
+    /// The column's value, read back. The `CHECK` constraint allows only the
+    /// two, so anything else is a database written by something that is not
+    /// this program, and bulk is the safe reading of it: it waits its turn.
+    fn from_column(value: i64) -> Self {
+        if value == Priority::Front as i64 {
+            Priority::Front
+        } else {
+            Priority::Back
+        }
+    }
+}
+
 /// Puts a Meeting in line. Answers whether it was added.
 ///
 /// `false` means it was already queued — the caller's cue to say so rather
@@ -65,14 +78,44 @@ pub fn enqueue(connection: &Connection, meeting_id: &str, priority: Priority) ->
 /// Left in place on purpose: a Core that crashes mid-run comes back owing
 /// the same Meeting. Removed by `finish` once the run is over, whatever its
 /// outcome.
-pub fn peek(connection: &Connection) -> Result<Option<String>> {
+///
+/// The priority comes back with it because the worker treats the two kinds
+/// of work differently: bulk work waits while a Meeting is being recorded,
+/// and a just-ended Meeting does not.
+pub fn peek(connection: &Connection) -> Result<Option<(String, Priority)>> {
     Ok(connection
         .query_row(
-            "SELECT meeting_id FROM diarize_queue ORDER BY priority, enqueued_at LIMIT 1",
+            "SELECT meeting_id, priority FROM diarize_queue \
+              ORDER BY priority, enqueued_at LIMIT 1",
             [],
-            |row| row.get(0),
+            |row| {
+                let id: String = row.get(0)?;
+                let priority: i64 = row.get(1)?;
+                Ok((id, Priority::from_column(priority)))
+            },
         )
         .optional()?)
+}
+
+/// How much bulk work is still owed.
+pub fn backlog(connection: &Connection) -> Result<usize> {
+    Ok(connection.query_row(
+        "SELECT COUNT(*) FROM diarize_queue WHERE priority = ?1",
+        params![Priority::Back as i64],
+        |row| row.get::<_, i64>(0),
+    )? as usize)
+}
+
+/// Empties the bulk backlog, leaving work somebody is waiting for.
+///
+/// A cancelled re-run must not take the Meeting that just ended down with
+/// it: they are in the same line for scheduling, not because they are the
+/// same job.
+pub fn clear_backlog(connection: &Connection) -> Result<usize> {
+    Ok(connection.execute(
+        "DELETE FROM diarize_queue WHERE priority = ?1",
+        params![Priority::Back as i64],
+    )?)
 }
 
 /// Takes a Meeting out of the line.
@@ -162,14 +205,17 @@ mod tests {
     fn a_run_that_crashes_is_still_owed_and_a_finished_one_is_not() {
         let connection = db();
         enqueue(&connection, "a", Priority::Front).expect("queue");
-        assert_eq!(peek(&connection).expect("peek").as_deref(), Some("a"));
         assert_eq!(
-            peek(&connection).expect("peek again").as_deref(),
-            Some("a"),
+            peek(&connection).expect("peek"),
+            Some(("a".to_string(), Priority::Front))
+        );
+        assert_eq!(
+            peek(&connection).expect("peek again"),
+            Some(("a".to_string(), Priority::Front)),
             "peeking does not consume: a Core that dies mid-run comes back owing it"
         );
         finish(&connection, "a").expect("finish");
-        assert_eq!(peek(&connection).expect("peek").as_deref(), None);
+        assert_eq!(peek(&connection).expect("peek"), None);
     }
 
     #[test]

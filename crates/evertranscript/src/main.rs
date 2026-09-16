@@ -277,6 +277,10 @@ enum DiarizeCommand {
     Run { meeting: String },
     /// Stop a running Diarization. Whatever attribution finished is kept.
     Cancel { meeting: String },
+    /// Stop the re-run of History a model change started. Every Meeting it
+    /// already walked keeps what that walk concluded, and the voices it had
+    /// not reached stay unrecognized until you ask for those Meetings again.
+    CancelRerun,
 }
 
 #[derive(Subcommand)]
@@ -1644,6 +1648,7 @@ async fn run_diarize(command: DiarizeCommand) -> Result<()> {
                 )
                 .await?
         }
+        DiarizeCommand::CancelRerun => client.request("diarize/rerunCancel", None).await?,
     };
     if matches!(command, DiarizeCommand::Status { json: true }) {
         println!("{}", serde_json::to_string_pretty(&response)?);
@@ -1671,6 +1676,47 @@ async fn run_diarize(command: DiarizeCommand) -> Result<()> {
                     plural(waiting as i64, "Meeting is", "Meetings are")
                 );
             }
+        }
+    }
+
+    // Said rather than left to be worked out from the Registry: a model
+    // change renumbers every pseudonym and leaves some named voices
+    // unrecognizable until their Meetings are reached, and both look like
+    // faults if they are discovered instead of announced.
+    if let Some(rerun) = &response.rerun {
+        if rerun.cancelled {
+            println!(
+                "\nThe re-run of History was cancelled at {} of {}.",
+                rerun.done, rerun.total
+            );
+        } else {
+            println!(
+                "\nRe-running History after a model change — {} of {}{}.",
+                rerun.done,
+                rerun.total,
+                if rerun.paused {
+                    ", paused while a Meeting records"
+                } else {
+                    ""
+                }
+            );
+        }
+        println!(
+            "  {} {} recognizable again; {} still {} a Voiceprint.",
+            rerun.relearned,
+            plural(rerun.relearned, "voice is", "voices are"),
+            rerun.without_voiceprint,
+            plural(rerun.without_voiceprint, "needs", "need"),
+        );
+        if rerun.pseudonyms > 0 {
+            println!(
+                "  {} unnamed {} renumbered: \"Speaker 3\" is not who it was before.",
+                rerun.pseudonyms,
+                plural(rerun.pseudonyms, "voice was", "voices were")
+            );
+        }
+        if !rerun.cancelled {
+            println!("  Stop it with `evertranscript diarize cancel-rerun`.");
         }
     }
     Ok(())

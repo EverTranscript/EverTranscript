@@ -1533,12 +1533,21 @@ impl Core {
                 let withheld = (!gate).then(|| known.as_ref().map(|seed| seed.speaker_id.clone()));
                 let withheld = withheld.flatten();
 
+                // Read before `apply` overwrites it, and it is the whole
+                // reason this ordering matters: the attribution standing on
+                // these segments right now is the previous model's
+                // conclusion with the Operator's corrections on top, and
+                // after a model change it is the only surviving record of
+                // who these voices are (ADR-0037, ticket 12).
+                let claims = diarize::cluster::claims(&transaction, &meeting_id, &reconciliation)?;
+
                 let assigned = diarize::cluster::persist(
                     &transaction,
                     &meeting_id,
                     &diarization.embeddings,
                     &reconciliation.voices(),
                     withheld.as_deref(),
+                    &claims.claimed,
                 )?;
 
                 let facts = diarize::operator::MeetingFacts {
@@ -1562,6 +1571,18 @@ impl Core {
                 let operator_id =
                     Self::attach_operator(&transaction, &found, &assigned, &meeting_id)?;
 
+                // The negative half of the Operator's corrections, in this
+                // run's vector space. The positives rode along with the
+                // claimed clusters `persist` assigned; what is left is
+                // "these words were not yours", which has no cluster of its
+                // own to travel with.
+                let relearned = diarize::cluster::relearn(
+                    &transaction,
+                    &meeting_id,
+                    &diarization.embeddings,
+                    &claims,
+                )?;
+
                 // The other half of "a re-run replaces the run" (`persist`
                 // did the first): the Speakers the previous run of this
                 // Meeting minted and this one did not re-attribute now own
@@ -1576,6 +1597,7 @@ impl Core {
                     speakers = assigned.len(),
                     operator = ?operator_id,
                     operator_rule = ?std::mem::discriminant(&found),
+                    relearned,
                     swept,
                     "diarization reconciled"
                 );
@@ -1671,14 +1693,30 @@ impl Core {
                     None
                 });
 
-            let Some(meeting_id) = next else {
+            // Bulk work waits while a Meeting is being recorded. A re-run of
+            // all of History is hours of both neural models on the machine
+            // the Operator is recording with, and nothing about it is
+            // urgent; a Meeting that just ended is the opposite on both
+            // counts, so only the backlog stands down.
+            let next = match next {
+                Some((_, crate::store::diarize_queue::Priority::Back))
+                    if self.is_recording().await =>
+                {
+                    None
+                }
+                other => other,
+            };
+
+            let Some((meeting_id, _)) = next else {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
                     _ = self.diarize_wake.notified() => continue,
                     // A timer as well as the notify: a wake that arrives
                     // while this loop is between selects is lost, and the
                     // cost of that should be a delay rather than a Meeting
-                    // that waits until the next restart.
+                    // that waits until the next restart. It is also what
+                    // resumes the backlog once recording stops, since
+                    // nothing notifies this loop about that.
                     _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => continue,
                 }
             };
@@ -1760,6 +1798,7 @@ impl Core {
             .read(crate::store::diarize_queue::list)
             .await
             .unwrap_or_default();
+        let rerun = self.rerun_status().await;
         match self.diarization.lock().await.as_ref() {
             Some(job) => DiarizeStatusResponse {
                 state: DiarizeState::Running,
@@ -1767,6 +1806,7 @@ impl Core {
                 done_ms: job.done_ms as i64,
                 total_ms: job.total_ms as i64,
                 queued,
+                rerun,
             },
             None => DiarizeStatusResponse {
                 state: if queued.is_empty() {
@@ -1782,8 +1822,117 @@ impl Core {
                 done_ms: 0,
                 total_ms: 0,
                 queued,
+                rerun,
             },
         }
+    }
+
+    /// The bulk re-run, as a Client should see it, or `None` when none is
+    /// owed.
+    ///
+    /// Reported only while there is something to say — running, paused or
+    /// cancelled. A finished re-run goes quiet: it is the ordinary state of
+    /// every Core that has been up for a day, and a permanent "re-run:
+    /// 40/40" is a notice nobody reads twice.
+    async fn rerun_status(&self) -> Option<evertranscript_protocol::DiarizeRerunStatus> {
+        let state = self
+            .store
+            .read(crate::store::rerun::state)
+            .await
+            .unwrap_or_else(|error| {
+                warn!(%error, "could not read the History re-run");
+                None
+            })?;
+        if !state.running() && !state.cancelled {
+            return None;
+        }
+
+        // Counted at read time rather than tallied as the walk goes: the
+        // Registry is the truth about which voices History can recognize,
+        // and a counter kept beside it is a counter that can disagree with
+        // it.
+        let voices = self
+            .store
+            .read(|connection| {
+                let relearnable = crate::store::speakers::relearnable(connection)?;
+                let relearned = relearnable
+                    .iter()
+                    .filter(|speaker| speaker.has_voiceprint)
+                    .count();
+                let pseudonyms = crate::store::speakers::list(connection)?
+                    .iter()
+                    .filter(|speaker| speaker.display_name.is_none() && !speaker.is_operator)
+                    .count();
+                Ok((relearned, relearnable.len() - relearned, pseudonyms))
+            })
+            .await
+            .unwrap_or((0, 0, 0));
+
+        Some(evertranscript_protocol::DiarizeRerunStatus {
+            done: state.done() as i64,
+            total: state.total as i64,
+            // Paused rather than idle: there is work owed, a worker ready to
+            // do it, and a recording in the way.
+            paused: state.running() && self.is_recording().await,
+            cancelled: state.cancelled,
+            relearned: voices.0 as i64,
+            without_voiceprint: voices.1 as i64,
+            pseudonyms: voices.2 as i64,
+        })
+    }
+
+    /// Puts all of History in line when the embedding has changed.
+    ///
+    /// Called once at every start. The stored model identity is both the
+    /// trigger and the guard, so a Core restarted mid-backlog resumes the
+    /// queue it left rather than enqueueing History a second time
+    /// (ADR-0037, ticket 12).
+    ///
+    /// Never fatal. A re-run that could not be started leaves History
+    /// exactly as it was — every word, every name and every correction
+    /// intact, and only recognition waiting on a later start.
+    pub async fn rerun_history_if_the_model_changed(&self) {
+        let model = crate::models::registry::DIARIZE_EMBEDDING;
+        match self
+            .store
+            .write(move |connection| {
+                crate::store::rerun::begin_if_the_model_changed(
+                    connection,
+                    model.key,
+                    model.version,
+                )
+            })
+            .await
+        {
+            Ok(Some(total)) => {
+                info!(
+                    model = model.key,
+                    meetings = total,
+                    "the embedding changed; re-running History to relearn every voice"
+                );
+                self.diarize_wake.notify_one();
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!(%error, "could not start the History re-run; recognition waits for the next start")
+            }
+        }
+    }
+
+    /// Stops the bulk re-run. Answers the status the Operator should see.
+    ///
+    /// Every Meeting already walked keeps what that walk concluded: this
+    /// empties the line, it does not undo attribution.
+    pub async fn diarize_rerun_cancel(&self) -> DiarizeStatusResponse {
+        match self
+            .store
+            .write(|connection| crate::store::rerun::cancel(connection))
+            .await
+        {
+            Ok(dropped) => info!(dropped, "the History re-run was cancelled"),
+            Err(error) => warn!(%error, "could not cancel the History re-run"),
+        }
+        self.diarize_status().await
     }
 
     /// Stops a running Diarization, keeping whatever attribution completed.
@@ -2139,9 +2288,7 @@ impl Core {
             if let Some(isolated) = outcome.mic_isolated {
                 let id = meeting.id.clone();
                 self.store
-                    .write(move |connection| {
-                        meetings::set_mic_isolated(connection, &id, isolated)
-                    })
+                    .write(move |connection| meetings::set_mic_isolated(connection, &id, isolated))
                     .await?;
             }
             if !outcome.degraded.is_empty() {
@@ -3264,6 +3411,10 @@ impl Server {
                 self.core.diarize_cancel(&params.meeting_id).await,
             )?),
 
+            ClientRequest::DiarizeRerunCancel(_) => Ok(serde_json::to_value(
+                self.core.diarize_rerun_cancel().await,
+            )?),
+
             ClientRequest::TranscriptUnsubscribe(_) => {
                 if let Some(connection) = self.connections.get_mut(&connection_id) {
                     connection.captions = false;
@@ -3554,7 +3705,9 @@ mod tests {
             "one 'You', which is the whole point"
         );
         assert!(
-            speakers::get(&connection, &minted.id).expect("get").is_none(),
+            speakers::get(&connection, &minted.id)
+                .expect("get")
+                .is_none(),
             "and the freshly minted row was folded in rather than left beside it"
         );
     }

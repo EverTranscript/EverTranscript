@@ -258,4 +258,3 @@ mod tests {
         assert_eq!(isolation.verdict(), Some(true));
     }
 }
-

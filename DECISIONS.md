@@ -1725,3 +1725,33 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The process peaks around 500 MB on the corpus's longest meeting, so it is not the pipeline that is large — the guard fires on system-wide pressure, and retrying a 1.7-hour run against it loses the whole corpus each time. Per meeting, a kill costs one meeting and the loop skips what is already measured. The cost is that cross-meeting EER cannot be computed this way, because it needs every meeting's voiceprints in one process; that is ticket 07's bar and is recorded as owed rather than quietly skipped. The pooled DER is unaffected: pooling weights each meeting by its reference speech exactly as the harness does, and the reference total matches an independent sum over the RTTMs.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q137 — diarization-pyannote-redimnet2/12 — deviation
+
+**Question:** Ticket 12 says a named Speaker is seeded from its own attributed segments. Should that evidence enter the resolve as a seed, or outrank it?
+**Options considered:** seed it among the other Voiceprints and let cosine decide / assign the cluster to the Speaker outright / relearn only from explicit corrections, not from names
+**Chosen:** Assign outright. A cluster whose segments a relearnable Speaker already owned is given to that Speaker, skipping the resolve and the minting floor.
+**Decided-by:** agent
+**Justification:** Seeding cannot work in the case the ticket exists for: after migration 11 there is no vector to seed with, so the first Meeting of a re-run would hand a named voice to a fresh pseudonym and the Operator would watch the product forget people it has known for months. The ticket's own wording settles the precedence — "that uses the Operator's confirmation of a whole cluster, which ADR-0009 already puts outside the machine's reach". The deviation is that this now applies to *every* re-run, not only a model-change one: an ordinary re-diarize also honours prior naming over the cosine. That is one code path rather than two, it agrees with ADR-0008 as amended (naming is confirmation), and where the two would differ it prefers what the Operator said to what the model guessed. The existing re-run tests were left unchanged and still pass, which is the check that it did not alter the ordinary case.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q138 — diarization-pyannote-redimnet2/12 — tradeoff
+
+**Question:** Where should the bulk re-run keep its progress, given the queue already survives restarts?
+**Options considered:** a column on `meetings` recording which model last diarized it / a single-row `diarize_rerun` table / derive everything from the queue
+**Chosen:** A single-row `diarize_rerun` table holding the model identity, the backlog's original size, and what cancelling abandoned.
+**Decided-by:** agent
+**Justification:** Deriving from the queue alone cannot express two things the Operator needs: how big the job was (the queue only says what is left) and that it was deliberately stopped (a drained queue and a cancelled one look identical, so the next start would begin it again). A per-Meeting column would carry progress but needs a write per Meeting and still cannot record cancellation. The model identity doubles as the trigger and the guard, which is what makes "restarting resumes rather than restarts" structural rather than a flag someone has to clear. `abandoned` was added after a test caught the arithmetic: done is total minus remaining, so emptying the queue on cancel reported a re-run stopped at 1 of 3 as 3 of 3.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q139 — diarization-pyannote-redimnet2/12 — deviation
+
+**Question:** A re-run rebuilds correction-derived exemplars. How is the previous run's copy withdrawn, given `delete_machine_exemplars` deliberately spares the Operator's evidence?
+**Options considered:** mark re-run exemplars with a third source / delete every operator-sourced exemplar for the Meeting and rebuild / leave them and accept duplicates
+**Chosen:** Delete every operator-sourced exemplar carrying that `meeting_id`, then rebuild from the hints.
+**Decided-by:** agent
+**Justification:** `feed_correction` is the only production writer of operator-sourced exemplars, so every one carrying a `meeting_id` is derivable from that Meeting's hints plus the run's embeddings — which is exactly what the re-run recomputes. Replacing the set is therefore lossless and makes a second walk idempotent, which matters because a Core killed mid-backlog re-walks the Meeting it died inside. Duplicates were the alternative and are not benign: copies are votes in `centroid`, so evidence that stacks is evidence that drifts. A third source value was rejected as a column nobody else would ever read.
+**Outcome:** applied
+**Ref:** (pending)

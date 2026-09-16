@@ -439,6 +439,53 @@ const MIGRATIONS: &[&str] = &[
     CREATE UNIQUE INDEX speakers_one_operator
         ON speakers (is_operator) WHERE is_operator = 1;
     "#,
+    // 15 — the bulk re-run a model change starts (ADR-0037, ticket 12).
+    //
+    // Migration 11 clears every vector; this is what earns them back. The
+    // work itself lives in `diarize_queue`, which already survives a restart,
+    // so what is left to remember is only what the queue cannot say: which
+    // model the backlog is for, how big it was when it started, and whether
+    // the Operator stopped it.
+    //
+    // **The model identity is the trigger and the guard at once.** Compared
+    // against the registry's at every start: different means a model changed
+    // and History owes a re-run, equal means this one has already been
+    // started — which is what stops a Core restarted mid-backlog from
+    // enqueueing all of History a second time on top of what it still owes.
+    // It is deliberately not derived from the schema version: a model swap
+    // that needs no migration is the ordinary case from here on, and a
+    // trigger that only fires on schema changes would miss it silently.
+    //
+    // `total` is the size of the backlog when it was enqueued, kept because
+    // the queue can only say what is left. Done is total minus remaining,
+    // which is the one number an Operator watching a multi-hour job wants.
+    //
+    // `cancelled` outlives the queue on purpose. Cancelling empties the
+    // backlog, and without a mark the next start would see a model identity
+    // it has no row for — or a drained queue — and begin the whole thing
+    // again, which is not a reading of "cancel" anybody would choose.
+    //
+    // `abandoned` is what cancelling threw away, and it exists because
+    // emptying the queue would otherwise make done — total minus remaining —
+    // jump to total. An Operator who stopped a re-run at 1 of 40 would be
+    // told it finished all forty, which is the one thing the number is there
+    // to prevent.
+    //
+    // One row, enforced by the primary key rather than by every writer
+    // remembering: two re-runs of different models at once is not a state
+    // this product has, and a table that can hold one is a table somebody
+    // will eventually have to reconcile.
+    r#"
+    CREATE TABLE diarize_rerun (
+        id             INTEGER PRIMARY KEY CHECK (id = 1),
+        model          TEXT NOT NULL,
+        model_version  TEXT NOT NULL,
+        total          INTEGER NOT NULL,
+        cancelled      INTEGER NOT NULL DEFAULT 0 CHECK (cancelled IN (0, 1)),
+        abandoned      INTEGER NOT NULL DEFAULT 0,
+        started_at     TEXT NOT NULL
+    ) STRICT;
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.
@@ -737,8 +784,15 @@ mod tests {
         let heard = BTreeSet::from([crate::diarize::Cluster(0)]);
 
         let first = meetings::start(&connection, None, None).expect("m1");
-        let after_upgrade = cluster::persist(&connection, &first.id, &voice(&[1.0, 0.0]), &heard, None)
-            .expect("persist");
+        let after_upgrade = cluster::persist(
+            &connection,
+            &first.id,
+            &voice(&[1.0, 0.0]),
+            &heard,
+            None,
+            &BTreeMap::new(),
+        )
+        .expect("persist");
         let minted = after_upgrade[&crate::diarize::Cluster(0)].clone();
         assert_ne!(
             minted, "alice",
@@ -763,10 +817,18 @@ mod tests {
 
         // And from here recognition is ordinary again.
         let second = meetings::start(&connection, None, None).expect("m2");
-        let later = cluster::persist(&connection, &second.id, &voice(&[0.99, 0.1]), &heard, None)
-            .expect("persist");
+        let later = cluster::persist(
+            &connection,
+            &second.id,
+            &voice(&[0.99, 0.1]),
+            &heard,
+            None,
+            &BTreeMap::new(),
+        )
+        .expect("persist");
         assert_eq!(
-            later[&crate::diarize::Cluster(0)], minted,
+            later[&crate::diarize::Cluster(0)],
+            minted,
             "the voice the new model learned last Meeting is recognized this one"
         );
     }
@@ -786,7 +848,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("history.sqlite3");
 
-        let before = MIGRATIONS.len() - 1;
+        // Pinned rather than counted back from the end: this is the History
+        // that existed before migration 14, and a later migration must not
+        // silently move which one that means. Counting back did, and the
+        // seed below then failed against the very index it is about.
+        let before = 13;
         {
             let mut connection = Connection::open(&path).expect("open");
             configure(&connection).expect("configure");
@@ -851,9 +917,11 @@ mod tests {
             )
             .expect("meeting");
         let unasked: Option<i64> = connection
-            .query_row("SELECT mic_isolated FROM meetings WHERE id = 'm'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT mic_isolated FROM meetings WHERE id = 'm'",
+                [],
+                |row| row.get(0),
+            )
             .expect("read");
         assert_eq!(unasked, None, "never asked is not the same as no");
         assert!(

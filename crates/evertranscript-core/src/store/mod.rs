@@ -8,6 +8,7 @@
 
 pub mod diarize_queue;
 pub mod meetings;
+pub mod rerun;
 pub mod schema;
 pub mod speakers;
 pub mod watchlist;

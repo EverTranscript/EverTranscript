@@ -528,6 +528,14 @@ fn refresh_voiceprint(connection: &rusqlite::Connection, speaker_id: &str) -> an
 ///
 /// `withheld` names a Speaker whose Voiceprint this run may not see at all.
 ///
+/// `claimed` names the clusters the Operator has already settled — see
+/// [`claims`]. They skip the resolve entirely rather than joining it as
+/// seeds: the Operator's word about whose voice a set of words is does not
+/// compete with a cosine, and after a model change it is the only word
+/// anyone has. The observation is filed under that Speaker as the
+/// Operator's, so a later re-run replaces it rather than the machine
+/// withdrawing it.
+///
 /// **A re-run replaces the run.** What the previous run of this Meeting
 /// taught History about anonymous Speakers is withdrawn before the seeds
 /// are read, and each Speaker this run recognizes has its earlier hearing
@@ -541,6 +549,7 @@ pub fn persist(
     embeddings: &BTreeMap<Cluster, Embedding>,
     heard: &BTreeSet<Cluster>,
     withheld: Option<&str>,
+    claimed: &BTreeMap<Cluster, String>,
 ) -> anyhow::Result<BTreeMap<Cluster, String>> {
     use crate::store::speakers;
 
@@ -583,10 +592,18 @@ pub fn persist(
         if !heard.contains(&cluster) {
             continue;
         }
-        let speaker_id = match outcome {
-            Resolved::Existing(id) => id,
-            Resolved::New if embedding.voiced_ms < MIN_SPEAKER_MS => continue,
-            Resolved::New => speakers::create(connection, false)?.id,
+        // A cluster the Operator already settled is not the resolve's to
+        // decide, and has no minting floor to clear: the Operator said whose
+        // voice it is, and "too short to be anybody" is an answer to a
+        // question nobody is asking about it.
+        let claim = claimed.get(&cluster);
+        let speaker_id = match claim {
+            Some(id) => id.clone(),
+            None => match outcome {
+                Resolved::Existing(id) => id,
+                Resolved::New if embedding.voiced_ms < MIN_SPEAKER_MS => continue,
+                Resolved::New => speakers::create(connection, false)?.id,
+            },
         };
 
         // This run's hearing replaces the previous run's, never sits beside
@@ -602,7 +619,7 @@ pub fn persist(
                 model: &embedding.model,
                 model_version: &embedding.model_version,
                 voiced_ms: embedding.voiced_ms as i64,
-                from_operator: false,
+                from_operator: claim.is_some(),
                 is_negative: false,
                 sample: embedding.sample.map(|window| speakers::Sample {
                     channel: window.channel,
@@ -617,16 +634,181 @@ pub fn persist(
     Ok(assigned)
 }
 
+/// What the Operator has already said about the voices in one Meeting,
+/// carried across a model change.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Claims {
+    /// Clusters this run may not guess about: the Operator already said
+    /// whose voice they are. Handed to [`persist`], which assigns them
+    /// rather than resolving them.
+    pub claimed: BTreeMap<Cluster, String>,
+    /// Speakers the Operator took words *away* from, and the cluster those
+    /// words turned out to be. Written by [`relearn`] as negative evidence.
+    denied: BTreeSet<(String, Cluster)>,
+}
+
+/// Reads the Operator's word about a Meeting before this run overwrites it.
+///
+/// **Must be called before [`super::reconcile::apply`].** The evidence it
+/// reads is the attribution standing on the segments now — the previous
+/// model's conclusion with the Operator's corrections on top — and `apply`
+/// replaces exactly that. A model change deletes every vector (migration 11)
+/// and leaves this behind as the only surviving record of who these voices
+/// were, so reading it late reads what this run just guessed.
+///
+/// A cluster goes to the Speaker that owned most of its segments, among
+/// Speakers a re-run may relearn. That is the Operator's confirmation of a
+/// whole cluster, which ADR-0009 already puts outside the machine's reach,
+/// applied to the same words in a new vector space — so it outranks the
+/// resolve rather than seeding it. Without that, the first Meeting of a
+/// re-run hands a named voice to a fresh pseudonym, and the Operator watches
+/// the product forget people it has known for months.
+///
+/// Corrections outrank the machine's attribution because
+/// [`crate::store::speakers::attributed_speaker`] is the display join: the
+/// newest hint wins, and the machine shows through only where nobody
+/// disagreed.
+///
+/// Only [`crate::store::speakers::relearnable`] Speakers. A Speaker the
+/// Operator forgot is not swept back in by a re-run nobody asked for, which
+/// is the whole reason the mark exists (ADR-0009, ticket 09), and a
+/// pseudonym is not something to relearn — it is re-derived.
+pub fn claims(
+    connection: &rusqlite::Connection,
+    meeting_id: &str,
+    reconciliation: &super::reconcile::Reconciliation,
+) -> anyhow::Result<Claims> {
+    use crate::store::speakers;
+
+    // Withdrawn before anything is written: a second re-run of the same
+    // Meeting would otherwise stack another copy of this evidence on top of
+    // the first, and copies are votes in `centroid`. Safe to replace
+    // wholesale because every operator-sourced exemplar carrying a
+    // `meeting_id` is derivable from that Meeting's hints, which is what
+    // this function and `relearn` between them re-derive.
+    speakers::delete_correction_exemplars(connection, meeting_id)?;
+
+    let relearnable: BTreeSet<String> = speakers::relearnable(connection)?
+        .into_iter()
+        .map(|speaker| speaker.id)
+        .collect();
+    if relearnable.is_empty() {
+        return Ok(Claims::default());
+    }
+
+    // How much of each cluster each Speaker owned, and who this run's
+    // clusters took words away from.
+    let mut votes: BTreeMap<Cluster, BTreeMap<String, usize>> = BTreeMap::new();
+    let mut denied = BTreeSet::new();
+    for assignment in &reconciliation.assignments {
+        let Some(cluster) = assignment.cluster else {
+            continue;
+        };
+        if let Some(owner) = speakers::attributed_speaker(connection, &assignment.segment_id)?
+            && relearnable.contains(&owner)
+        {
+            *votes.entry(cluster).or_default().entry(owner).or_default() += 1;
+        }
+        // The other half of a correction: it says whose voice this was *and*
+        // whose it was not. Keeping only the first half leaves the machine
+        // free to make the same mistake next Meeting, having been told.
+        if let Some(wrong) = speakers::replaced_speaker(connection, &assignment.segment_id)?
+            && relearnable.contains(&wrong)
+        {
+            denied.insert((wrong, cluster));
+        }
+    }
+
+    let claimed: BTreeMap<Cluster, String> = votes
+        .into_iter()
+        .filter_map(|(cluster, owners)| {
+            owners
+                .into_iter()
+                // Most segments wins; the id breaks a tie, so two runs over
+                // the same History reach the same answer.
+                .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
+                .map(|(owner, _)| (cluster, owner))
+        })
+        .collect();
+    // A Speaker that claims a cluster is not also denied it: the Operator's
+    // latest word about those words is that they are theirs.
+    denied.retain(|(speaker, cluster)| claimed.get(cluster) != Some(speaker));
+
+    Ok(Claims { claimed, denied })
+}
+
+/// Writes the negative half of the Operator's corrections, in this run's
+/// vector space. Answers how many were written.
+///
+/// The positives are [`persist`]'s: a claimed cluster is filed under its
+/// Speaker as it is assigned. What is left is what the corrections denied —
+/// "these words were not yours" — which has no cluster to ride along with
+/// and so is written here, after the assignment that decided whose they
+/// actually were.
+pub fn relearn(
+    connection: &rusqlite::Connection,
+    meeting_id: &str,
+    embeddings: &BTreeMap<Cluster, Embedding>,
+    claims: &Claims,
+) -> anyhow::Result<usize> {
+    use crate::store::speakers;
+
+    let mut written = 0;
+    for (speaker_id, cluster) in &claims.denied {
+        let Some(embedding) = embeddings.get(cluster) else {
+            continue;
+        };
+        speakers::add_exemplar(
+            connection,
+            speakers::NewExemplar {
+                speaker_id,
+                meeting_id: Some(meeting_id),
+                vector: &embedding.vector,
+                model: &embedding.model,
+                model_version: &embedding.model_version,
+                voiced_ms: embedding.voiced_ms as i64,
+                from_operator: true,
+                is_negative: true,
+                // Never played back as this Speaker: it is somebody else.
+                sample: None,
+            },
+        )?;
+        refresh_voiceprint(connection, speaker_id)?;
+        written += 1;
+    }
+    Ok(written)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// [`super::persist`] with nothing claimed, which is every run the
+    /// Operator has not corrected — the ordinary case, and what every test
+    /// below but the claiming ones is about.
+    pub(super) fn persist(
+        connection: &rusqlite::Connection,
+        meeting_id: &str,
+        embeddings: &BTreeMap<Cluster, Embedding>,
+        heard: &BTreeSet<Cluster>,
+        withheld: Option<&str>,
+    ) -> anyhow::Result<BTreeMap<Cluster, String>> {
+        super::persist(
+            connection,
+            meeting_id,
+            embeddings,
+            heard,
+            withheld,
+            &BTreeMap::new(),
+        )
+    }
 
     /// Long enough to be minted: the floor is a separate test's subject.
     fn embedding(vector: &[f32]) -> Embedding {
         Embedding::new(vector.to_vec(), "test", "1", 30_000)
     }
 
-    fn clusters(entries: &[(u32, &[f32])]) -> BTreeMap<Cluster, Embedding> {
+    pub(super) fn clusters(entries: &[(u32, &[f32])]) -> BTreeMap<Cluster, Embedding> {
         entries
             .iter()
             .map(|(index, vector)| (Cluster(*index), embedding(vector)))
@@ -635,7 +817,7 @@ mod tests {
 
     /// Every cluster owns words, which is the ordinary case the persistence
     /// tests below are about.
-    fn heard(clusters: &BTreeMap<Cluster, Embedding>) -> BTreeSet<Cluster> {
+    pub(super) fn heard(clusters: &BTreeMap<Cluster, Embedding>) -> BTreeSet<Cluster> {
         clusters.keys().copied().collect()
     }
 
@@ -855,7 +1037,8 @@ mod tests {
 
         let monday = meetings::start(&connection, Some("Monday"), None).expect("m1");
         let first = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
-        let monday_map = persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist");
+        let monday_map =
+            persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist");
         assert_eq!(monday_map.len(), 2, "two new voices");
 
         let friday = meetings::start(&connection, Some("Friday"), None).expect("m2");
@@ -970,7 +1153,8 @@ mod tests {
 
         let monday = meetings::start(&connection, None, None).expect("m1");
         let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let before = persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist");
+        let before =
+            persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist");
 
         // The very same vector, stamped by a different model of equal width.
         let friday = meetings::start(&connection, None, None).expect("m2");
@@ -1006,7 +1190,8 @@ mod tests {
 
         let friday = meetings::start(&connection, None, None).expect("m2");
         let again = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let after = persist(&connection, &friday.id, &again, &heard(&again), None).expect("persist");
+        let after =
+            persist(&connection, &friday.id, &again, &heard(&again), None).expect("persist");
         assert_ne!(
             after[&Cluster(0)],
             speaker_id,
@@ -1039,7 +1224,8 @@ mod tests {
         let withheld =
             persist(&connection, &friday.id, &again, &heard(&again), Some(&me)).expect("persist");
         assert_ne!(
-            withheld[&Cluster(0)], me,
+            withheld[&Cluster(0)],
+            me,
             "the withheld seed must not be able to claim the cluster by the back door"
         );
         // The control is `the_same_voice_in_two_meetings_is_one_speaker`:
@@ -1068,7 +1254,8 @@ mod tests {
         let voices = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
 
         let only_first: BTreeSet<Cluster> = [Cluster(0)].into_iter().collect();
-        let assigned = persist(&connection, &meeting.id, &voices, &only_first, None).expect("persist");
+        let assigned =
+            persist(&connection, &meeting.id, &voices, &only_first, None).expect("persist");
 
         assert_eq!(assigned.len(), 1, "the voice with words is somebody");
         assert!(!assigned.contains_key(&Cluster(1)));
@@ -1097,7 +1284,8 @@ mod tests {
         .into_iter()
         .collect();
 
-        let assigned = persist(&connection, &meeting.id, &brief, &heard(&brief), None).expect("persist");
+        let assigned =
+            persist(&connection, &meeting.id, &brief, &heard(&brief), None).expect("persist");
 
         assert!(assigned.is_empty());
         assert!(
@@ -1129,7 +1317,8 @@ mod tests {
         )]
         .into_iter()
         .collect();
-        let again = persist(&connection, &friday.id, &brief, &heard(&brief), None).expect("persist");
+        let again =
+            persist(&connection, &friday.id, &brief, &heard(&brief), None).expect("persist");
 
         assert_eq!(again[&Cluster(0)], alice, "recognized");
         let evidence = crate::store::speakers::exemplars(&connection, &alice).expect("exemplars");
@@ -1164,7 +1353,8 @@ mod tests {
             [(Cluster(0), embedding(&[1.0, 0.0, 0.0]).with_sample(window))]
                 .into_iter()
                 .collect();
-        let map = persist(&connection, &meeting.id, &voices, &heard(&voices), None).expect("persist");
+        let map =
+            persist(&connection, &meeting.id, &voices, &heard(&voices), None).expect("persist");
 
         let source = crate::store::speakers::sample_source(&connection, &map[&Cluster(0)])
             .expect("query")
@@ -1200,8 +1390,8 @@ mod tests {
         .expect("segment");
 
         let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let stale = persist(&connection, &meeting.id, &first, &heard(&first), None).expect("persist")
-            [&Cluster(0)]
+        let stale = persist(&connection, &meeting.id, &first, &heard(&first), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
         speakers::attribute_segment(
             &connection,
@@ -1213,8 +1403,8 @@ mod tests {
 
         // The same voice, exactly, as the re-run clusters it.
         let again = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let fresh = persist(&connection, &meeting.id, &again, &heard(&again), None).expect("persist")
-            [&Cluster(0)]
+        let fresh = persist(&connection, &meeting.id, &again, &heard(&again), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
         assert_ne!(
             fresh, stale,
@@ -1253,8 +1443,8 @@ mod tests {
         let meeting = meetings::start(&connection, None, None).expect("m");
 
         let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let alice = persist(&connection, &meeting.id, &first, &heard(&first), None).expect("persist")
-            [&Cluster(0)]
+        let alice = persist(&connection, &meeting.id, &first, &heard(&first), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
         speakers::rename(&connection, &alice, "Alice").expect("rename");
 
@@ -1285,16 +1475,16 @@ mod tests {
 
         let monday = meetings::start(&connection, None, None).expect("m1");
         let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let voice = persist(&connection, &monday.id, &first, &heard(&first), None).expect("persist")
-            [&Cluster(0)]
+        let voice = persist(&connection, &monday.id, &first, &heard(&first), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
         let friday = meetings::start(&connection, None, None).expect("m2");
         let second = clusters(&[(0, &[0.97, 0.05, 0.0])]);
         persist(&connection, &friday.id, &second, &heard(&second), None).expect("persist");
 
         let again = clusters(&[(0, &[0.99, 0.02, 0.0])]);
-        let recognized = persist(&connection, &monday.id, &again, &heard(&again), None).expect("persist")
-            [&Cluster(0)]
+        let recognized = persist(&connection, &monday.id, &again, &heard(&again), None)
+            .expect("persist")[&Cluster(0)]
             .clone();
 
         assert_eq!(recognized, voice);
@@ -1422,5 +1612,304 @@ mod tests {
         let merged = agglomerate(&windows);
         let groups: BTreeSet<Cluster> = merged.values().copied().collect();
         assert_eq!(groups.len(), 3, "the late arrival is their own voice");
+    }
+}
+
+/// What a model change does to a History the Operator has already corrected.
+///
+/// These are ticket 12's subject: migration 11 deletes every vector, so the
+/// attributions and the correction hints are the only surviving record of
+/// who the voices in each Meeting are, and a re-run has to read that record
+/// before it overwrites it.
+#[cfg(test)]
+mod relearning {
+    use super::tests::{clusters, heard, persist};
+    use super::*;
+    use crate::diarize::reconcile::{Assignment, Reconciliation};
+    use crate::store::{meetings, speakers};
+    use evertranscript_protocol::AudioChannel;
+
+    fn db() -> rusqlite::Connection {
+        let mut connection = rusqlite::Connection::open_in_memory().expect("open");
+        crate::store::schema::migrate(&mut connection).expect("migrate");
+        connection
+    }
+
+    /// What `reconcile` produces, without a Diarization to produce it from.
+    fn reconciled(pairs: &[(&str, u32)]) -> Reconciliation {
+        Reconciliation {
+            assignments: pairs
+                .iter()
+                .map(|(segment_id, cluster)| Assignment {
+                    segment_id: (*segment_id).into(),
+                    cluster: Some(Cluster(*cluster)),
+                    straddles_boundary: false,
+                })
+                .collect(),
+            boundary_flips: 0,
+        }
+    }
+
+    /// Migration 11, as a function: every vector gone, every name, flag,
+    /// attribution and correction left standing.
+    fn a_model_change(connection: &rusqlite::Connection) {
+        connection
+            .execute_batch(
+                "UPDATE speakers SET voiceprint = NULL;
+                 DELETE FROM speaker_exemplars;",
+            )
+            .expect("wipe");
+    }
+
+    /// One Meeting, two voices, the second of them named.
+    ///
+    /// Answers the Meeting, its two segment ids, and the named Speaker.
+    fn a_corrected_history(connection: &rusqlite::Connection) -> (String, String, String, String) {
+        let meeting = meetings::start(connection, None, None).expect("meeting");
+        let first = meetings::append_segment(
+            connection,
+            &meeting.id,
+            AudioChannel::System,
+            0,
+            5_000,
+            "hi",
+        )
+        .expect("segment")
+        .id;
+        let second = meetings::append_segment(
+            connection,
+            &meeting.id,
+            AudioChannel::System,
+            5_000,
+            10_000,
+            "hello",
+        )
+        .expect("segment")
+        .id;
+
+        let voices = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
+        let assigned = persist(connection, &meeting.id, &voices, &heard(&voices), None)
+            .expect("the first run, under the old model");
+        for (segment, cluster) in [(&first, 0u32), (&second, 1)] {
+            speakers::attribute_segment(
+                connection,
+                segment,
+                Some(&assigned[&Cluster(cluster)]),
+                speakers::Attribution::Clustered,
+            )
+            .expect("attribute");
+        }
+        let alice = assigned[&Cluster(1)].clone();
+        speakers::rename(connection, &alice, "Alice").expect("the Operator names her");
+        (meeting.id, first, second, alice)
+    }
+
+    #[test]
+    fn a_named_voice_keeps_its_meeting_and_is_recognized_in_the_next_one() {
+        // The whole point of the re-run. Alice was named months ago; a model
+        // change deleted the vector that recognized her. Her Meeting knows
+        // which words were hers, and that is enough to rebuild her voice in
+        // the new model's space — after which the next Meeting recognizes
+        // her the ordinary way.
+        let connection = db();
+        let (meeting, first, second, alice) = a_corrected_history(&connection);
+        a_model_change(&connection);
+        assert!(
+            cluster_seeds(&connection).is_empty(),
+            "the model change left nothing to be recognized from"
+        );
+
+        // The re-run. New model, so the vectors are unrecognizable — which
+        // is exactly why the attributions have to be read first.
+        let reconciliation = reconciled(&[(&first, 0), (&second, 1)]);
+        let claims = claims(&connection, &meeting, &reconciliation).expect("claims");
+        assert_eq!(
+            claims.claimed.get(&Cluster(1)),
+            Some(&alice),
+            "the cluster carrying Alice's words is Alice's, not the resolve's to guess at"
+        );
+
+        let voices = clusters(&[(0, &[0.0, 0.0, 1.0]), (1, &[0.6, 0.8, 0.0])]);
+        let assigned = super::persist(
+            &connection,
+            &meeting,
+            &voices,
+            &heard(&voices),
+            None,
+            &claims.claimed,
+        )
+        .expect("persist");
+        assert_eq!(
+            assigned[&Cluster(1)],
+            alice,
+            "she keeps her own Meeting rather than watching it go to a fresh pseudonym"
+        );
+        assert_ne!(
+            assigned[&Cluster(0)],
+            alice,
+            "and the other voice is not her"
+        );
+
+        // Tuesday, in the new model's space, the ordinary way.
+        let tuesday = meetings::start(&connection, None, None).expect("m2");
+        let again = clusters(&[(0, &[0.62, 0.78, 0.0])]);
+        let recognized = persist(&connection, &tuesday.id, &again, &heard(&again), None)
+            .expect("persist")[&Cluster(0)]
+            .clone();
+        assert_eq!(recognized, alice, "Alice is recognized again");
+    }
+
+    #[test]
+    fn a_correction_outranks_the_machine_and_its_denial_is_rebuilt() {
+        // A correction says two things, and after a model change the hint is
+        // all that is left of either: these words were Alice's, and they
+        // were not Bob's. Rebuilding only the first half leaves the machine
+        // free to make the same mistake next Meeting, having been told.
+        let connection = db();
+        let (meeting, first, second, alice) = a_corrected_history(&connection);
+        let bob = speakers::get(&connection, &first_cluster_speaker(&connection, &first))
+            .expect("get")
+            .expect("the machine's first guess")
+            .id;
+        speakers::rename(&connection, &bob, "Bob").expect("Bob is named too");
+        speakers::correct_attribution(&connection, &first, &alice)
+            .expect("the Operator says that was Alice, not Bob");
+        a_model_change(&connection);
+
+        let reconciliation = reconciled(&[(&first, 0), (&second, 0)]);
+        let claims = claims(&connection, &meeting, &reconciliation).expect("claims");
+        assert_eq!(
+            claims.claimed.get(&Cluster(0)),
+            Some(&alice),
+            "the correction outranks the machine's attribution"
+        );
+
+        let voices = clusters(&[(0, &[0.6, 0.8, 0.0])]);
+        super::persist(
+            &connection,
+            &meeting,
+            &voices,
+            &heard(&voices),
+            None,
+            &claims.claimed,
+        )
+        .expect("persist");
+        assert_eq!(
+            relearn(&connection, &meeting, &voices, &claims).expect("relearn"),
+            1,
+            "and the denial is rebuilt against Bob"
+        );
+
+        let against_bob = speakers::exemplars(&connection, &bob).expect("exemplars");
+        assert_eq!(against_bob.len(), 1);
+        assert!(
+            against_bob[0].is_negative && against_bob[0].from_operator,
+            "the Operator's word, and it is a denial: {:?}",
+            against_bob[0]
+        );
+        assert!(
+            speakers::get(&connection, &bob)
+                .expect("get")
+                .expect("Bob")
+                .display_name
+                .is_some(),
+            "Bob keeps his name — he was wrong about these words, not deleted"
+        );
+    }
+
+    #[test]
+    fn a_forgotten_voice_is_not_relearned_by_the_re_run() {
+        // Ticket 09's mark, doing the job it exists for. After a model change
+        // a forgotten Speaker is indistinguishable by its columns from one
+        // the migration cleared, and without the mark this re-run would sweep
+        // the deleted voice back in with nobody told.
+        let connection = db();
+        let (meeting, first, second, alice) = a_corrected_history(&connection);
+        speakers::delete_voiceprint(&connection, &alice).expect("the Operator forgets her");
+        a_model_change(&connection);
+
+        let reconciliation = reconciled(&[(&first, 0), (&second, 1)]);
+        let claims = claims(&connection, &meeting, &reconciliation).expect("claims");
+        assert!(
+            !claims.claimed.values().any(|id| id == &alice),
+            "a forgotten voice claims nothing"
+        );
+
+        let voices = clusters(&[(0, &[0.0, 0.0, 1.0]), (1, &[0.6, 0.8, 0.0])]);
+        super::persist(
+            &connection,
+            &meeting,
+            &voices,
+            &heard(&voices),
+            None,
+            &claims.claimed,
+        )
+        .expect("persist");
+        assert!(
+            speakers::exemplars(&connection, &alice)
+                .expect("exemplars")
+                .is_empty(),
+            "and is given no vector to be recognized by"
+        );
+        assert!(
+            speakers::get(&connection, &alice)
+                .expect("get")
+                .expect("she is still in the Registry")
+                .display_name
+                .is_some(),
+            "she keeps her name and her appearances; only recognition is gone"
+        );
+    }
+
+    #[test]
+    fn re_running_the_same_meeting_twice_does_not_double_the_operators_evidence() {
+        // Copies are votes in `centroid`, so evidence that stacks is
+        // evidence that drifts. A re-run of a re-run must reach the same
+        // place as a single one — which is what makes "resumes rather than
+        // restarts" safe when a Core dies between two Meetings.
+        let connection = db();
+        let (meeting, first, second, alice) = a_corrected_history(&connection);
+        a_model_change(&connection);
+
+        let reconciliation = reconciled(&[(&first, 0), (&second, 1)]);
+        let voices = clusters(&[(0, &[0.0, 0.0, 1.0]), (1, &[0.6, 0.8, 0.0])]);
+        for _ in 0..2 {
+            let claims = claims(&connection, &meeting, &reconciliation).expect("claims");
+            super::persist(
+                &connection,
+                &meeting,
+                &voices,
+                &heard(&voices),
+                None,
+                &claims.claimed,
+            )
+            .expect("persist");
+            relearn(&connection, &meeting, &voices, &claims).expect("relearn");
+        }
+
+        assert_eq!(
+            speakers::exemplars(&connection, &alice)
+                .expect("exemplars")
+                .len(),
+            1,
+            "one hearing of one Meeting, however many times it was walked"
+        );
+    }
+
+    /// The Speaker the machine first gave a segment to.
+    fn first_cluster_speaker(connection: &rusqlite::Connection, segment_id: &str) -> String {
+        speakers::attributed_speaker(connection, segment_id)
+            .expect("attributed")
+            .expect("the machine had an opinion")
+    }
+
+    /// Every voice History could offer a clusterer, whatever the model.
+    fn cluster_seeds(connection: &rusqlite::Connection) -> Vec<String> {
+        speakers::list(connection)
+            .expect("list")
+            .into_iter()
+            .filter(|speaker| speaker.has_voiceprint)
+            .map(|speaker| speaker.id)
+            .collect()
     }
 }

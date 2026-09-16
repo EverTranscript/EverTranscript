@@ -46,9 +46,9 @@ use super::Diarizer;
 use super::Embedding;
 use super::MeetingAudio;
 use super::Progress;
+use super::SAMPLE_RATE;
 use super::SampleWindow;
 use super::Turn;
-use super::SAMPLE_RATE;
 
 /// Window the segmentation model was trained on: 10 s at 16 kHz.
 pub const SEGMENT_WINDOW: usize = 10 * SAMPLE_RATE as usize;

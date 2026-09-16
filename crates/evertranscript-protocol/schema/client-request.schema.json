@@ -631,6 +631,23 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "Stops the bulk re-run of History a model change started.\n\nSeparate from `diarize/cancel`, which names one Meeting: the backlog\nis one job in the Operator's eyes and cancelling it Meeting by Meeting\nwould not be cancelling it. Every Meeting already walked keeps what\nthat walk concluded, and a Meeting somebody is waiting for stays in\nline.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "diarize/rerunCancel"
+        },
+        "params": {
+          "$ref": "#/$defs/DiarizeStatusParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {

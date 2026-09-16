@@ -502,7 +502,10 @@ mod tests {
             vector: vec![1.0, 0.0],
             confirmed: true,
         };
-        assert!(match_gate_met(&d), "the match is admissible; the voice is not");
+        assert!(
+            match_gate_met(&d),
+            "the match is admissible; the voice is not"
+        );
         assert_eq!(identify(&d, Some(&known), &unsaid()), Identified::Nobody);
     }
 

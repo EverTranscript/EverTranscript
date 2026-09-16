@@ -538,6 +538,25 @@ pub fn delete_machine_exemplars(
     )?)
 }
 
+/// Removes every correction-derived exemplar one Meeting produced.
+///
+/// The counterpart to [`delete_machine_exemplars`], for the one case where
+/// the Operator's evidence *is* the machine's to withdraw: a re-run is about
+/// to rebuild it. Every operator-sourced exemplar carrying a `meeting_id`
+/// was written by [`feed_correction`] from that Meeting's hints, so the
+/// hints plus this run's embeddings reproduce the whole set — which is what
+/// makes replacing it safe and re-running it twice idempotent.
+///
+/// Scoped to the Meeting rather than to a Speaker: a correction teaches two
+/// Speakers at once, and withdrawing one side of a pair would leave the
+/// negative standing against a voice with no positive to answer it.
+pub fn delete_correction_exemplars(connection: &Connection, meeting_id: &str) -> Result<usize> {
+    Ok(connection.execute(
+        "DELETE FROM speaker_exemplars WHERE meeting_id = ?1 AND source = 'operator'",
+        params![meeting_id],
+    )?)
+}
+
 pub fn exemplars(connection: &Connection, speaker_id: &str) -> Result<Vec<Exemplar>> {
     let mut statement = connection.prepare(
         "SELECT id, speaker_id, meeting_id, embedding, model, model_version, voiced_ms, source, \
@@ -746,6 +765,25 @@ pub fn attributed_speaker(connection: &Connection, segment_id: &str) -> Result<O
     Ok(connection
         .query_row(
             "SELECT speaker_id FROM transcript_segments WHERE id = ?1",
+            params![segment_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten())
+}
+
+/// Who a correction took a segment away from, if one did.
+///
+/// The machine's attribution as it stood when the Operator disagreed — which
+/// is the negative half of what the correction taught, and after a model
+/// change the only surviving record of it. The newest hint, matching
+/// [`attributed_speaker`]: the Operator's latest word is the one that counts
+/// in both directions.
+pub fn replaced_speaker(connection: &Connection, segment_id: &str) -> Result<Option<String>> {
+    Ok(connection
+        .query_row(
+            "SELECT replaced_speaker_id FROM attribution_hints WHERE segment_id = ?1 \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
             params![segment_id],
             |row| row.get(0),
         )

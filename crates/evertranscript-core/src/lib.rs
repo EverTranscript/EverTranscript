@@ -98,6 +98,12 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
     // time" structural.
     let diarize_task = tokio::spawn(Arc::clone(&core).run_diarization_queue(shutdown.clone()));
 
+    // After the worker is up, so the backlog it enqueues is picked up at
+    // once rather than on the next 30-second tick. Idempotent, so a Core
+    // restarted mid-backlog resumes what it left rather than starting over
+    // (ADR-0037).
+    core.rerun_history_if_the_model_changed().await;
+
     let server = Server::new(Arc::clone(&core));
     let server_shutdown = shutdown.clone();
     let server_task = tokio::spawn(server.run(events_rx, server_shutdown));
