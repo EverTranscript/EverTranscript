@@ -481,6 +481,25 @@ const GRID_MARGINS: [f32; 4] = [0.00, 0.08, 0.15, 0.25];
 /// Unset is the shipped pair alone, so an ordinary replay is the run it
 /// always was.
 fn matcher_grid() -> Vec<(f32, f32)> {
+    // Named points, for a held-out run whose configurations were declared
+    // before anyone looked at a held-out number. Not a sweep: the whole
+    // value of a declared point is that the split cannot choose it.
+    if let Ok(points) = std::env::var("EVERTRANSCRIPT_MATCHER_POINTS") {
+        let declared: Vec<(f32, f32)> = points
+            .split(',')
+            .map(|point| {
+                let (floor, margin) = point
+                    .split_once(':')
+                    .unwrap_or_else(|| panic!("{point}: expected floor:margin"));
+                (
+                    floor.trim().parse().expect("floor"),
+                    margin.trim().parse().expect("margin"),
+                )
+            })
+            .collect();
+        assert!(!declared.is_empty(), "no matcher points given");
+        return declared;
+    }
     if std::env::var("EVERTRANSCRIPT_MATCHER_GRID").as_deref() != Ok("1") {
         return vec![(
             diarize::cluster::MATCH_FLOOR,
