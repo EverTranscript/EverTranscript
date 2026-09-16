@@ -432,6 +432,41 @@ const MIGRATIONS: &[&str] = &[
     "#,
 ];
 
+/// The wipe a model change owes, **written and deliberately not registered**.
+///
+/// Ticket 05. ADR-0037: when the embedding changes, old and new vectors
+/// cannot be compared, so every Voiceprint and every exemplar goes and the
+/// record stays. Re-learning is ticket 12's, from the Operator's attributed
+/// whole clusters — *not* from these exemplars' stored sample offsets, which
+/// are the old model's choice of cuts.
+///
+/// **Absent from [`MIGRATIONS`] on purpose.** Applying it while the model is
+/// unchanged would clear Voiceprints for no swap, and applying it without
+/// ticket 12 would leave a History nobody is recognized in, which ADR-0037's
+/// *Considered options* rejected by name. It is here so it is written and
+/// tested before the swap rather than during it; appending it to `MIGRATIONS`
+/// is the whole of its activation.
+///
+/// What it keeps and why:
+///
+/// - **`display_name`, `is_operator`, `forgotten`** — the Operator's acts,
+///   none of which was a statement about a vector.
+/// - **`confirmed`** — naming *is* confirmation (ADR-0008 as amended), and
+///   the name survives, so the confirmation does. Clearing it would make
+///   ticket 12 hand a named Speaker a Voiceprint ranking below an
+///   unconfirmed one, having been vouched for.
+/// - **`transcript_segments.speaker_id` and every `attribution_hints` row** —
+///   after this runs they are the only surviving record of who the voices
+///   are, and ticket 12's seeding reads them.
+pub const PENDING_MODEL_CHANGE_WIPE: &str = r#"
+    DELETE FROM speaker_exemplars;
+
+    UPDATE speakers
+       SET voiceprint = NULL,
+           voiceprint_model = NULL,
+           voiceprint_model_version = NULL;
+"#;
+
 /// Applies every migration the database has not seen yet.
 pub fn migrate(connection: &mut Connection) -> rusqlite::Result<()> {
     let applied: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -691,5 +726,258 @@ mod tests {
             })
             .expect("count");
         assert_eq!(remaining, 0, "whole-Meeting delete must be complete");
+    }
+
+    // ---- Ticket 05: the wipe that is written but not registered ----
+
+    /// The activation gate, as a test rather than as a comment.
+    ///
+    /// Appending it to `MIGRATIONS` is the whole of activating it, so doing
+    /// that by accident — a stray paste, a merge — would clear Voiceprints on
+    /// the next Core start with no model swap behind it.
+    #[test]
+    fn the_pending_wipe_is_not_registered() {
+        assert!(
+            !MIGRATIONS.contains(&PENDING_MODEL_CHANGE_WIPE),
+            "ticket 05 activates on the user's model decision and on ticket 12 existing; \
+             neither has happened"
+        );
+    }
+
+    /// A History as the current build leaves one, on disk.
+    ///
+    /// A named Speaker with a Voiceprint and both signs of evidence, the
+    /// Operator, a forgotten Speaker, an attributed segment and a correction
+    /// hint — one of each thing the wipe promises to keep or to take.
+    fn populated_history(path: &std::path::Path) -> (String, String, String, String) {
+        use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
+        use crate::store::speakers::{self, NewExemplar};
+        use rusqlite::params;
+
+        let mut connection = Connection::open(path).expect("open");
+        configure(&connection).expect("configure");
+        migrate(&mut connection).expect("migrate");
+
+        connection
+            .execute(
+                "INSERT INTO meetings (id, started_at, created_at, updated_at, audio_path)
+                 VALUES ('m1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                         '2026-01-01T00:00:00Z', 'm1.wav')",
+                [],
+            )
+            .expect("meeting");
+
+        let alice = speakers::create(&connection, false).expect("alice").id;
+        speakers::rename(&connection, &alice, "Alice").expect("name");
+        let me = speakers::create(&connection, true).expect("operator").id;
+        speakers::rename(&connection, &me, "Me").expect("name");
+        let gone = speakers::create(&connection, false).expect("gone").id;
+        speakers::rename(&connection, &gone, "Gone").expect("name");
+
+        for (id, vector) in [(&alice, [1.0f32, 0.0]), (&me, [0.0, 1.0])] {
+            for is_negative in [false, true] {
+                speakers::add_exemplar(
+                    &connection,
+                    NewExemplar {
+                        speaker_id: id,
+                        meeting_id: Some("m1"),
+                        vector: &vector,
+                        model: EMBEDDING_MODEL,
+                        model_version: EMBEDDING_MODEL_VERSION,
+                        voiced_ms: 30_000,
+                        from_operator: is_negative,
+                        is_negative,
+                        sample: Some(speakers::Sample {
+                            channel: evertranscript_protocol::AudioChannel::Mic,
+                            start_ms: 0,
+                            end_ms: 30_000,
+                        }),
+                    },
+                )
+                .expect("exemplar");
+            }
+            speakers::set_voiceprint(
+                &connection,
+                id,
+                &vector,
+                EMBEDDING_MODEL,
+                EMBEDDING_MODEL_VERSION,
+            )
+            .expect("voiceprint");
+        }
+
+        // Forgotten after it had evidence, which is the state that has to
+        // survive: the wipe must not look like an un-forgetting.
+        speakers::delete_voiceprint(&connection, &gone).expect("forget");
+
+        let segment = {
+            let id = "s1".to_string();
+            connection
+                .execute(
+                    "INSERT INTO transcript_segments (id, meeting_id, sequence, channel,
+                     start_ms, end_ms, text, speaker_id)
+                     VALUES (?1, 'm1', 0, 'mic', 0, 1000, 'hello', ?2)",
+                    params![id, alice],
+                )
+                .expect("segment");
+            id
+        };
+        // The Operator disagreeing, which is the hint that must outlive this.
+        speakers::correct_attribution(&connection, &segment, &me).expect("correct");
+
+        (alice, me, gone, segment)
+    }
+
+    /// The state the fixture leaves, so both tests below assert the same
+    /// things about it and a drift shows up once rather than twice.
+    fn record_survives(connection: &Connection, alice: &str, me: &str, gone: &str, segment: &str) {
+        use crate::store::speakers;
+
+        let named = speakers::get(connection, alice)
+            .expect("get")
+            .expect("alice");
+        assert_eq!(named.display_name.as_deref(), Some("Alice"));
+        assert!(
+            named.confirmed,
+            "naming is confirmation and the name stayed"
+        );
+        assert!(!named.forgotten);
+
+        let operator = speakers::operator(connection)
+            .expect("operator")
+            .expect("one");
+        assert_eq!(operator.id, me);
+
+        let forgotten = speakers::get(connection, gone).expect("get").expect("gone");
+        assert!(forgotten.forgotten, "a forgotten Speaker stays forgotten");
+        assert_eq!(forgotten.display_name.as_deref(), Some("Gone"));
+
+        assert_eq!(
+            speakers::attributed_speaker(connection, segment).expect("attributed"),
+            Some(me.to_string()),
+            "the correction hint is the record of who the voice is"
+        );
+        let machine: Option<String> = connection
+            .query_row(
+                "SELECT speaker_id FROM transcript_segments WHERE id = ?1",
+                rusqlite::params![segment],
+                |row| row.get(0),
+            )
+            .expect("segment");
+        assert_eq!(
+            machine.as_deref(),
+            Some(alice),
+            "and the machine's attribution underneath it, which makes the correction legible"
+        );
+    }
+
+    /// The build as it ships must leave a current History exactly alone.
+    ///
+    /// The control for the wipe below: if merely opening and migrating moved
+    /// something, the wipe test would be measuring that instead.
+    #[test]
+    fn opening_a_current_history_leaves_its_voiceprints_alone() {
+        use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
+        use crate::store::speakers;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.sqlite3");
+        let (alice, me, gone, segment) = populated_history(&path);
+
+        // Closed and reopened, because the claim is about what the next Core
+        // opens rather than about in-memory state.
+        let mut connection = Connection::open(&path).expect("reopen");
+        configure(&connection).expect("configure");
+        migrate(&mut connection).expect("migrate again");
+
+        record_survives(&connection, &alice, &me, &gone, &segment);
+        assert_eq!(
+            speakers::voiceprints(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
+                .expect("voiceprints")
+                .len(),
+            2,
+            "Alice and the Operator are still recognizable"
+        );
+        assert!(
+            speakers::stale_exemplars(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
+                .expect("stale")
+                .is_empty(),
+            "nothing in a current History is from another space"
+        );
+    }
+
+    /// Ticket 05, on disk: the vectors go and the record stays.
+    #[test]
+    fn the_pending_wipe_takes_every_vector_and_keeps_the_record() {
+        use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
+        use crate::store::speakers;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("history.sqlite3");
+        let (alice, me, gone, segment) = populated_history(&path);
+
+        {
+            let connection = Connection::open(&path).expect("open to wipe");
+            configure(&connection).expect("configure");
+            connection
+                .execute_batch(PENDING_MODEL_CHANGE_WIPE)
+                .expect("wipe");
+        }
+
+        let connection = Connection::open(&path).expect("reopen");
+        configure(&connection).expect("configure");
+
+        record_survives(&connection, &alice, &me, &gone, &segment);
+
+        let exemplars: i64 = connection
+            .query_row("SELECT count(*) FROM speaker_exemplars", [], |row| {
+                row.get(0)
+            })
+            .expect("count");
+        assert_eq!(exemplars, 0, "positive and negative alike");
+        let vectors: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM speakers WHERE voiceprint IS NOT NULL
+                    OR voiceprint_model IS NOT NULL OR voiceprint_model_version IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count");
+        assert_eq!(vectors, 0, "no vector and no label claiming there is one");
+        assert!(
+            speakers::voiceprints(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
+                .expect("voiceprints")
+                .is_empty()
+        );
+
+        // The one that stops the lazy rebuild path reintroducing the old
+        // model's cuts behind the wipe: with no exemplars left there is
+        // nothing for `runner::rebuild` to re-embed, whatever model asks.
+        for (model, version) in [
+            (EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION),
+            ("some-next-model", "1"),
+        ] {
+            assert!(
+                speakers::stale_exemplars(&connection, model, version)
+                    .expect("stale")
+                    .is_empty(),
+                "{model} v{version} found evidence the wipe was supposed to have taken"
+            );
+        }
+
+        // And the Speakers ticket 12 may give a Voiceprint back to are the
+        // named, unforgotten ones — which is only true because the wipe kept
+        // the names and the mark.
+        let relearnable: Vec<String> = speakers::relearnable(&connection)
+            .expect("relearnable")
+            .into_iter()
+            .map(|speaker| speaker.id)
+            .collect();
+        // The Operator is in this set because a re-run does give them a
+        // Voiceprint back — by ADR-0029's channel rules, never by seeding
+        // from the old model's attributions, which is ticket 12's
+        // `claims` to exclude rather than this query's.
+        assert!(relearnable.contains(&alice) && relearnable.contains(&me));
+        assert!(!relearnable.contains(&gone), "still forgotten");
     }
 }

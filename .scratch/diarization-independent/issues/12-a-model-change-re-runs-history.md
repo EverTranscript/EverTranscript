@@ -108,6 +108,50 @@ Same two dependencies as 05, plus one of its own:
 No part of this may be run against a real History before (1) and (2). Writing
 and testing it is safe; adding the trigger is not.
 
+## The next independent piece: `cluster::claims`
+
+Buildable now, before 05 lands and without touching activation, because it
+adds no table, no migration, no protocol method and nothing that runs on its
+own. It is a read over the record plus a set operation, testable against a
+fixture database.
+
+`claims` reads who owned each segment **before** the run overwrites it — the
+previous model's attribution with the Operator's corrections on top — and
+hands a cluster whose segments a relearnable Speaker already owned to that
+Speaker outright, skipping both the resolve and the minting floor. It must go
+through `store::speakers::attributed_speaker`, never `speaker_id` directly, or
+it reads a correction the Operator made as though it had been ignored.
+
+Everything else in the ticket wants either 05 (the state it re-runs into),
+a migration (`store::rerun`'s backlog row), or the protocol (`diarize/status`,
+`diarize/rerunCancel`). Those wait.
+
+## Two traps in the old branch's version, checked against this code
+
+Both would land silently. Written here because they are the kind of thing a
+rewrite loses.
+
+**`begin_if_the_model_changed` enqueues all of History on a first start.** It
+returns `Ok(None)` only when the stored `diarize_rerun` row *matches* the
+current model. When there is no row at all — a History that predates the
+feature, which is every History today — it falls through and enqueues every
+audio-bearing Meeting. Wiring that trigger into the current build, where the
+model has not changed, would start a multi-hour re-run of everything on the
+next Core start. **Absent metadata is not evidence of a model change.** The
+first start after the feature lands has to record the current identity and
+enqueue nothing.
+
+**`relearnable` includes the Operator, and `claims` must not.** It selects
+`forgotten = 0 AND (display_name IS NOT NULL OR is_operator = 1)`, which is
+right for its own purpose — the Operator is a Speaker a re-run gives a
+Voiceprint back to. But this ticket says the Operator is rebuilt **by the
+three channel rules alone (ADR-0029 as amended), never from the previous
+model's attributions**, and those attributions are exactly what `claims`
+reads. So `claims` has to exclude the Operator explicitly and leave the
+channel rules responsible for it. Using `relearnable` unfiltered would seed
+the Operator from the old model's guesses about which voice was theirs, which
+is the one thing ADR-0029 as amended was rewritten to stop.
+
 ## Two defects the branch's tests caught, worth not re-introducing
 
 - Cancelling a re-run stopped at 1 of 3 reported **3 of 3**: done is total minus

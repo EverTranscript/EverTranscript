@@ -11,7 +11,8 @@ ADR-0037.
 **Blocked by:** nothing. Ticket 04 has landed (`ba8a491`), which is what makes
 "the model changed" a question the code can answer.
 
-**Status:** ready, not started. Not activated — see *Activation* below.
+**Status:** partly built, **not done**. The migration and its file-backed
+test exist; the Registry messaging and the activation do not.
 
 ## What to build
 
@@ -65,14 +66,62 @@ against the new length rather than `MIGRATIONS.len() - 1`.
 
 ## Acceptance criteria
 
-- [ ] A History carrying old-model Voiceprints migrates with every Speaker,
+- [x] A History carrying old-model Voiceprints migrates with every Speaker,
       name, flag, attribution and correction hint intact and no exemplar left
-- [ ] `stale_exemplars` returns empty immediately after the migration, so the
-      lazy rebuild path cannot reintroduce the old model's cuts
-- [ ] Tested over a file-backed database, closed and reopened
+- [x] `stale_exemplars` returns empty immediately after the migration, so the
+      lazy rebuild path cannot reintroduce the old model's cuts — asserted for
+      the current identity *and* for a hypothetical next one, since the point
+      is that no model can find anything to re-embed
+- [x] Tested over a file-backed database, closed and reopened
 - [ ] The Registry states the reason a named Speaker holds no Voiceprint
-- [ ] Migrations stay idempotent and the schema version advances by one
-- [ ] Every migration-index assertion still names the migration it means
+- [x] Migrations stay idempotent and the schema version advances by one —
+      unchanged, because the wipe is not in `MIGRATIONS`, which
+      `the_pending_wipe_is_not_registered` asserts
+- [ ] Every migration-index assertion still names the migration it means —
+      nothing to check until the wipe is registered and the length moves
+
+## What was built
+
+`schema::PENDING_MODEL_CHANGE_WIPE`, beside `MIGRATIONS` and deliberately not
+in it. Two `DELETE`/`UPDATE` statements and no schema change: every exemplar
+goes, every Voiceprint column is nulled, everything else is untouched by
+construction rather than by restoration.
+
+What it keeps and why is in the doc comment; the one judgement worth repeating
+is **`confirmed` survives**. Naming is confirmation (ADR-0008 as amended) and
+the name survives, so clearing it would leave a named Speaker unconfirmed for
+a reason nothing in the Operator's experience explains — and would make ticket
+12 hand it back a Voiceprint ranking below an unconfirmed one, having been
+vouched for. `store::speakers::clear_voiceprint` does clear it, but that is a
+recomputation whose evidence yielded nothing, which is a different event.
+
+Three tests in `store::schema`:
+
+- `opening_a_current_history_leaves_its_voiceprints_alone` — the control. A
+  file-backed History written by the current build, closed, reopened and
+  migrated: both Voiceprints still there, `stale_exemplars` empty. Without it
+  the wipe test could be measuring an ordinary open.
+- `the_pending_wipe_takes_every_vector_and_keeps_the_record` — the same
+  fixture, wiped, closed, reopened. Name, `confirmed`, Operator flag,
+  `forgotten`, the machine's attribution and the correction hint all survive;
+  exemplars and Voiceprint columns are gone; `stale_exemplars` is empty for
+  the current identity and for a hypothetical next model; and `relearnable`
+  still names the right Speakers, which is only true because the wipe kept the
+  names and the mark.
+- `the_pending_wipe_is_not_registered` — the activation gate as a test rather
+  than a comment, since appending to `MIGRATIONS` is the whole of activating
+  it and a stray paste would clear Voiceprints on the next Core start.
+
+## What is left
+
+- **The Registry messaging.** The protocol already carries what it needs —
+  `has_voiceprint`, `forgotten` and `voiceprint_model` on the Registry's
+  Speaker — so the shape is there and the *wording* is not. A named Speaker
+  with no Voiceprint has to read as "waiting to be relearned after a model
+  change", distinguishable from "forgotten on purpose", which `forgotten`
+  already separates. Worth writing when there is a model change to write it
+  about; writing it now would describe a state the product cannot reach.
+- **Activation**, below.
 
 ## Activation
 

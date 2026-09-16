@@ -46,7 +46,7 @@ WeSpeaker Voiceprints to a ReDimNet2 resolve without a word (DECISIONS Q154).
 | Ticket | Why |
 |---|---|
 | 03 | Turns come from segmentation. Main landed its own turn-placement implementation while this branch built a different one; reconciling them is its own work, not a merge. |
-| 05 | A model change clears Voiceprints. Ticket rewritten against current code; the policy is unchanged and unshipped — see below. |
+| 05 | A model change clears Voiceprints. Migration written and tested, **not registered**; Registry messaging and activation remain — see below. |
 | 06 | ReDimNet2-B3 replaces WeSpeaker. Measured on both halves; the decision is the user's and is unanswered. See below. |
 | 07 | Recognition thresholds are re-derived. Dev curve and held-out validation done; no point selected, for the same reason as 06. |
 | 12 | A model change re-runs History. Ticket rewritten against current code; still blocked by 05, which is now the only thing in front of it — see below. |
@@ -88,6 +88,26 @@ longer be justified by "there is no vector left to seed with" — after 05's wip
 there is none, but 05 now has to say so rather than assume it. Both are
 rewritten on those terms. 12 remains blocked by 05 and by nothing else: 04 has
 landed, and 08's queue landed with it.
+
+**05's migration is now written and tested, and is not registered.**
+`schema::PENDING_MODEL_CHANGE_WIPE` sits beside `MIGRATIONS` and outside it,
+with three tests: a file-backed control that an ordinary open leaves a current
+History alone, a file-backed close/reopen that the wipe takes every vector and
+keeps every Speaker, name, flag, mark, attribution and hint, and one asserting
+it is still unregistered — since appending it to `MIGRATIONS` is the whole of
+activating it. `stale_exemplars` is empty afterwards for the current identity
+and for a hypothetical next model, which is what stops the lazy rebuild path
+reintroducing the old model's cuts behind the wipe. **05 is not done**: the
+Registry messaging and the activation remain.
+
+**The next independent piece of 12 is `cluster::claims`** — no table, no
+migration, no protocol method, nothing that runs on its own. Two traps from
+the old branch's version are written into the ticket so a rewrite cannot lose
+them: `begin_if_the_model_changed` treats an *absent* metadata row as a model
+change and would enqueue all of History on a first start, and `relearnable`
+includes the Operator while 12 forbids relearning the Operator from old
+attributions, so `claims` must exclude it and leave the channel rules
+responsible.
 
 Checked while auditing and found already correct: `feed_correction` copies the
 mistaken exemplar's own model and version rather than stamping the current
@@ -187,18 +207,19 @@ nearest-voice-right rises monotonically from 33.3% at 0.30 to 72.4% at 0.90
 while DER over the same range goes from 37% to 86% (Q140), so they improve
 exactly where the partition is getting worse. Fragmentation is the available
 explanation for that co-movement and is not established as the mechanism by it;
-what is certain is that the arms' trial counts differ by orders of magnitude
-(2.28M against 50k), so the two models are not being asked the same question.
-Every figure this branch reported from them is withdrawn. The enrollment replay
+what is certain is that the trial count is a function of the partition rather
+than of the corpus, so two arms that fragment differently are not being asked
+the same question. Every figure this branch reported from them is withdrawn. The enrollment replay
 is what replaced them; its denominator is reference speaker-time and does not
 move with the partition.
 
-**What the oracle floor is and is not.** It is conditional on this
-segmentation and this reconstruction — `oracle_relabel` relabels the
-*hypothesis* spans, so missed speech and false alarm survive it untouched and
-only labelling error is removed. It is therefore not an embedding ceiling, and
-a DER bar below it does not show that segmentation alone is the cause; it shows
-only that something upstream of the embedding has to move. It also flatters
+**What the oracle floor is and is not.** It is conditional on the hypothesis
+spans actually scored — `oracle_relabel` relabels those spans, so missed speech
+and false alarm survive it untouched and only labelling error is removed. It is
+therefore not an embedding ceiling, and it licenses exactly one sentence about
+a bar below it: **these fixed spans cannot reach that bar by oracle relabelling
+alone.** Which stage would have to change to move them is a separate question
+this number does not answer. It also flatters
 recognition badly if read that way: its centroids are one per person **per
 whole meeting**, minutes of speech each, where real enrollment mints a Speaker
 from as little as `MIN_SPEAKER_MS` — ten seconds. A separability measured at
