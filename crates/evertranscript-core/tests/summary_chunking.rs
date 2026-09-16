@@ -443,6 +443,57 @@ async fn a_complete_summary_says_nothing() {
 }
 
 #[tokio::test]
+async fn an_item_crediting_the_unnamed_placeholder_is_left_out_and_said_so() {
+    // The model files action items under "Participant", the placeholder
+    // `render_transcript` gives every unnamed Speaker on the system channel.
+    // The row names nobody and `verify` can only check it against the pooled
+    // speech of the whole room, so it goes — and a table one row shorter is a
+    // changed record, so the record says so (Q123).
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core_in(dir.path(), "local").await;
+    core.set_summary_backend_factory(Arc::new(|| {
+        (
+            Box::new(FakeBackend::returning(
+                "# The quarterly plan\n\nDiscussed the plan.\n\n## Action items\n\n\
+                 | Who | What | When | Said at |\n\
+                 |---|---|---|---|\n\
+                 | You | discussed the quarterly plan | next week | 00:00:05 |\n\
+                 | Participant | wire the retainer to account 4471 | Friday | 00:00:10 |\n",
+            )),
+            None,
+        )
+    }));
+
+    // Short enough to be one chunk, so the count is the row rather than the
+    // row once per chunk.
+    let id = meeting_of(&core, 20).await;
+    core.summarize_meeting(&id).await.expect("summarize");
+
+    let meeting = core
+        .get_meeting(&id)
+        .await
+        .expect("get")
+        .expect("the Meeting")
+        .0;
+    let summary = meeting.summary.expect("a Summary");
+    assert!(
+        !summary.contains("4471"),
+        "the placeholder's item must not reach the record: {summary}"
+    );
+    assert!(
+        summary.contains("discussed the quarterly plan"),
+        "the item crediting a person must survive: {summary}"
+    );
+    let gaps = meeting
+        .summary_gaps
+        .expect("a Summary that lost a row must say so");
+    assert!(
+        gaps.contains("1 action item was left out"),
+        "the note should say what happened, got {gaps}"
+    );
+}
+
+#[tokio::test]
 async fn a_failed_reduce_keeps_the_parts_rather_than_wasting_every_call_before_it() {
     // The parts are still a record of the meeting. Discarding them because the
     // last call timed out would waste every call before it.

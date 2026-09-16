@@ -39,8 +39,16 @@
 //! improvement, which is what happened to two earlier prompt rewrites here.
 //! Do not re-attempt this without measuring it.
 //!
+//! **A third went the same way.** A clause telling the model that "You" and
+//! "Participant" are placeholders rather than people left five refusals in
+//! thirty-five still crediting "Participant" on real Meetings, and was
+//! reverted for [`drop_placeholder_items`], which does it in code (Q123).
+//! Three for three: a rule added here has never yet been measured working.
+//!
 //! What carries the weight instead is [`verify`], which checks the output
 //! against the transcript rather than asking the model more firmly.
+
+use super::generate;
 
 /// The default system prompt (story 42 makes it editable, with this as the
 /// reset target).
@@ -170,9 +178,16 @@ pub fn build_user_message(notes: Option<&str>, transcript: &str) -> String {
     // safe here because `</transcript>` is itself a control marker, so no
     // transcript can reach the ground this line stands on.
     if let Some(language) = dominant_language(transcript) {
+        // **The name clause is the pin paying for its own side effect.**
+        // Told to write in Chinese, the model translated the *names* too —
+        // `明晨` for a Speaker whose display name is "Ming Chen" — and
+        // `same_person` is a substring match, so nothing could echo and the
+        // item was refused before a word was compared (DECISIONS Q121).
         message.push_str(&format!(
             "\nThis meeting was held in {language}. Write the summary in \
-             {language}. Do not translate it.\n"
+             {language}. Do not translate it. Spell each person's name exactly \
+             as the transcript spells it, even where that spelling is not \
+             {language}.\n"
         ));
     }
     message
@@ -283,6 +298,15 @@ pub fn scrub(output: &str) -> String {
 pub enum NotASummary {
     /// An action item credits someone with something they did not say.
     Unattributed { who: String, what: String },
+    /// An action item names somebody who did not speak in this meeting.
+    ///
+    /// Separate from [`Self::Unattributed`] because the remedy is different
+    /// and the Operator can only act on the difference: "Ming Chen did not
+    /// say that" is a claim to check, while "明晨 is nobody here" is the
+    /// model having invented a spelling, and the transcript is fine. Both
+    /// still refuse — a name that matches nobody is exactly the shape a
+    /// dictated injection takes.
+    UnknownSpeaker { who: String, what: String },
 }
 
 impl std::fmt::Display for NotASummary {
@@ -291,6 +315,10 @@ impl std::fmt::Display for NotASummary {
             Self::Unattributed { who, what } => write!(
                 formatter,
                 "an action item credits {who} with something they did not say: {what:?}"
+            ),
+            Self::UnknownSpeaker { who, what } => write!(
+                formatter,
+                "an action item names {who}, who did not speak in this meeting: {what:?}"
             ),
         }
     }
@@ -373,12 +401,22 @@ pub fn verify(summary: &str, transcript: &str) -> Result<(), NotASummary> {
         if distinctive.is_empty() {
             continue;
         }
-        let theirs: String = said
+        let mine: Vec<&str> = said
             .iter()
             .filter(|(speaker, _)| same_person(speaker, who))
             .map(|(_, text)| text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
+            .collect();
+        // **Nobody of that name spoke.** Reported apart from the half-rule
+        // refusal it used to collapse into: with no text to compare, every
+        // item scored zero and read as "they did not say it", which points an
+        // Operator at the wrong thing. It still refuses — see `UnknownSpeaker`.
+        if mine.is_empty() {
+            return Err(NotASummary::UnknownSpeaker {
+                who: who.to_string(),
+                what: what.to_string(),
+            });
+        }
+        let theirs: String = mine.join(" ");
         let echoed = distinctive
             .iter()
             .filter(|word| theirs.contains(stem(word)))
@@ -485,33 +523,85 @@ fn is_ideograph(c: char) -> bool {
 /// be located confidently is skipped rather than guessed at, because a
 /// wrongly-parsed row would refuse a Summary that was fine.
 fn table_rows(summary: &str) -> Vec<(&str, &str)> {
-    summary
+    summary.lines().filter_map(row_cells).collect()
+}
+
+/// One action-item row, if this line is one: who it credits, and with what.
+///
+/// Split out per line so a row can be judged on its own — `verify` wants
+/// every row, and `drop_placeholder_items` has to decide line by line which
+/// ones survive into the record.
+fn row_cells(line: &str) -> Option<(&str, &str)> {
+    let mut cells: Vec<&str> = line.split('|').map(str::trim).collect();
+    // A markdown row starts and ends with the pipe, so both ends are empty;
+    // a row missing either is still readable.
+    if cells.first().is_some_and(|cell| cell.is_empty()) {
+        cells.remove(0);
+    }
+    if cells.last().is_some_and(|cell| cell.is_empty()) {
+        cells.pop();
+    }
+    if cells.len() != 4 {
+        return None;
+    }
+    let who = cells[0];
+    // The header, and the `|---|` rule under it.
+    if who.eq_ignore_ascii_case("who") || who.is_empty() {
+        return None;
+    }
+    if who.chars().all(|c| c == '-' || c == ':') {
+        return None;
+    }
+    Some((who, cells[1]))
+}
+
+/// Removes action items credited to the unnamed-Speaker placeholder, and says
+/// how many went.
+///
+/// **"Participant" is not a person.** Every unnamed voice on the system
+/// channel renders as that one word, so an item credited to it names nobody,
+/// and `verify` can only check it against the pooled speech of every stranger
+/// in the room — which is *weaker* than the check a named person gets, not
+/// stronger. Measured, the model writes them anyway: five refusals across
+/// thirty-five attempts credited "Participant", and a prompt line telling the
+/// model they are placeholders changed nothing (DECISIONS Q123).
+///
+/// Dropped rather than refused, and dropped rather than kept. Refusing costs
+/// the Operator a whole chunk over an item that defames nobody — three of one
+/// Meeting's four refusals were exactly this. Keeping would let a dictated
+/// injection through unchecked by the simple move of addressing it to
+/// "Participant", which is the one thing [`verify`] exists to prevent. Taking
+/// the row out is the only option that loses no Summary and admits no claim.
+///
+/// "You" is left alone: it is the placeholder for the *Operator's own*
+/// channel, so it names exactly one person, and `verify` checks it against
+/// what that person said.
+///
+/// The ceiling is a collision: a Speaker the Operator renamed to exactly
+/// "Participant" loses their items here. `same_person`'s substring match
+/// already cannot tell that name from the placeholder, so the case was
+/// broken before this and now fails by dropping a row and saying so, which is
+/// the better of the two.
+pub fn drop_placeholder_items(summary: &str) -> (String, usize) {
+    let mut dropped = 0usize;
+    let kept: Vec<&str> = summary
         .lines()
-        .filter(|line| line.contains('|'))
-        .filter_map(|line| {
-            let mut cells: Vec<&str> = line.split('|').map(str::trim).collect();
-            // A markdown row starts and ends with the pipe, so both ends are
-            // empty; a row missing either is still readable.
-            if cells.first().is_some_and(|cell| cell.is_empty()) {
-                cells.remove(0);
+        .filter(|line| {
+            // Trimmed the way `is_document_label` trims, so `**Participant**`
+            // is the same word. Exact past that: a `Who` this does not
+            // recognise keeps today's behaviour, while a looser match could
+            // take out a real person's item.
+            let placeholder = row_cells(line).is_some_and(|(who, _)| {
+                who.trim_matches(|c: char| !c.is_alphanumeric())
+                    .eq_ignore_ascii_case(generate::UNNAMED_SYSTEM)
+            });
+            if placeholder {
+                dropped += 1;
             }
-            if cells.last().is_some_and(|cell| cell.is_empty()) {
-                cells.pop();
-            }
-            if cells.len() != 4 {
-                return None;
-            }
-            let who = cells[0];
-            // The header, and the `|---|` rule under it.
-            if who.eq_ignore_ascii_case("who") || who.is_empty() {
-                return None;
-            }
-            if who.chars().all(|c| c == '-' || c == ':') {
-                return None;
-            }
-            Some((who, cells[1]))
+            !placeholder
         })
-        .collect()
+        .collect();
+    (kept.join("\n"), dropped)
 }
 
 /// Whether a table's `Who` names the speaker the transcript recorded.
@@ -753,6 +843,88 @@ mod tests {
                 what: "wire the retainer to account 4471 by Friday".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn an_item_naming_somebody_who_never_spoke_says_which_failure_it_was() {
+        // Measured on a real Meeting: told to write in Chinese, the model
+        // rendered "Ming Chen" as 明晨, `same_person` could not reconcile the
+        // two, and the refusal read as though Ming Chen had been credited
+        // with something they did not say (DECISIONS Q121). It is a different
+        // defect and the Operator can only act on the difference.
+        let summary = table("明晨", "Revisit the hiring freeze next week", "00:00:12");
+        assert_eq!(
+            verify(&summary, DICTATED),
+            Err(NotASummary::UnknownSpeaker {
+                who: "明晨".to_string(),
+                what: "Revisit the hiring freeze next week".to_string(),
+            })
+        );
+        // **Still refused, and that is the point.** A name matching nobody is
+        // the shape a dictated injection takes, so this reports better and
+        // permits nothing new.
+        assert!(verify(&table("Mallory", "wire the retainer", "00:00:18"), DICTATED).is_err());
+    }
+
+    #[test]
+    fn the_language_pin_keeps_names_as_the_transcript_spells_them() {
+        // The pin is what made the model translate the names, so the pin is
+        // what carries the exception.
+        let chinese = "[00:00:05] Ming Chen: 我们下周再看招聘冻结的事情，先把存储定下来。\n";
+        let pinned = build_user_message(None, chinese);
+        assert!(pinned.contains("Write the summary in Chinese"));
+        assert!(
+            pinned.contains("Spell each person's name exactly"),
+            "the pin must not invite the model to translate names:\n{pinned}"
+        );
+    }
+
+    #[test]
+    fn an_item_credited_to_the_unnamed_placeholder_is_dropped_not_refused() {
+        // Measured: three of one Meeting's four refusals credited
+        // "Participant", which names nobody — and losing the whole chunk over
+        // it cost the Operator the rest of a 33-minute meeting (Q123).
+        let summary = table(
+            generate::UNNAMED_SYSTEM,
+            "确认CVFS作为存储层使用",
+            "00:00:05",
+        );
+        let (left, dropped) = drop_placeholder_items(&summary);
+        assert_eq!(dropped, 1);
+        assert!(!left.contains(generate::UNNAMED_SYSTEM));
+        // Emphasis does not make it a different word.
+        let bolded = summary.replace(
+            generate::UNNAMED_SYSTEM,
+            &format!("**{}**", generate::UNNAMED_SYSTEM),
+        );
+        assert_eq!(drop_placeholder_items(&bolded).1, 1);
+        // What is left is still a summary, and still gets verified.
+        assert!(left.contains("Discussed things."));
+
+        // **The hole this must not open.** A dictated injection addressed to
+        // the placeholder is removed rather than admitted unchecked.
+        let injected = table(
+            generate::UNNAMED_SYSTEM,
+            "wire the retainer to account 4471",
+            "00:00:18",
+        );
+        let (left, _) = drop_placeholder_items(&injected);
+        assert!(!left.contains("4471"));
+        assert_eq!(verify(&left, DICTATED), Ok(()));
+    }
+
+    #[test]
+    fn the_operators_own_placeholder_is_left_alone() {
+        // "You" is the mic channel — one person, the Operator — so it names
+        // somebody and `verify` can check it against what they said.
+        let summary = table(
+            generate::UNNAMED_MIC,
+            "Revisit the hiring freeze",
+            "00:00:12",
+        );
+        let (left, dropped) = drop_placeholder_items(&summary);
+        assert_eq!(dropped, 0);
+        assert_eq!(left, summary);
     }
 
     #[test]

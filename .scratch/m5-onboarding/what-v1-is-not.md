@@ -116,23 +116,44 @@ from somewhere else, and each is already labelled that way in its ticket.
   single run, including every one this file carried before today. A Summary
   that arrives six times out of ten is a different product from one that
   arrives, and the Operator is told neither number nor offered a retry.
-- **Two Meetings are stuck rather than unlucky, and the reason is no longer one
-  thing.** The 33-minute Chinese Meeting refused 0 for 6 and the 85-minute one
-  1 for 6; the 15-minute English one, 1 for 6, shows it is not a language
-  split. Four failure modes appear in their refusals, only the first of which
-  is the word matching Q120 addressed. The model writes a Speaker's name in the
-  other script — `明晨` where the `display_name` is "Ming Chen" — and
-  `same_person` is a substring match, so nothing can echo and the item is
-  refused by construction. It credits **"Participant"**, the placeholder
-  `render_transcript` gives an unnamed Speaker, as though it were a person.
-  It narrates rather than quotes — "Discussing the evaluation of Metaplum
-  versus Nango" is a true item whose leading gerund can never echo. And it
-  corrects the transcript: in that Meeting the ASR heard the product as
-  "Nengo" and "Lango", the model wrote "Nango", which is the name, and
-  `verify` compares against the transcript rather than the world, so being
-  right cost it the word it needed. That item scored 2 of 5 where 3 were
-  wanted. `When` still merely repeats `Said at` — rule 5 names the column and
-  never says what belongs in it.
+- **Four failure modes were named; two were the pipeline refusing its own
+  vocabulary, and those two are fixed.** The model wrote a Speaker's name in
+  the other script — `明晨` where the `display_name` is "Ming Chen" — so
+  `same_person`'s substring match could never reconcile them and the item was
+  refused before a word was compared. The cause was the language pin itself:
+  told to write in Chinese, the model translated the names too. The pin now
+  carries its own exception, and no refusal in 70 attempts since names a
+  Speaker in a script the transcript does not use. The model also credited
+  **"Participant"**, the placeholder `render_transcript` gives every unnamed
+  Speaker on the system channel, as though it were a person — and that row
+  names nobody, so `verify` could only check it against the pooled speech of
+  every stranger in the room, which is *weaker* than the check a named person
+  gets. Those rows are now removed from the table before it is checked, and
+  the Operator is told how many went. **Telling the model about the
+  placeholders was tried first and measured useless** — five refusals in
+  thirty-five still credited "Participant" — and reverted, which is the third
+  prompt rewrite this module has reverted for being unmeasurable (Q123).
+- **The two modes that are left are not vocabulary, and they are still here.**
+  The model narrates rather than quotes — "Discussing the evaluation of
+  Metaplum versus other tools" is a true item whose leading gerund can never
+  echo — and it *corrects* the transcript: where the ASR heard "Nengo" and
+  "Lango" the model wrote "Nango", which is the product's name, and `verify`
+  compares against the transcript rather than the world, so being right cost
+  it the word it needed (2 of 5 where 3 were wanted). Every one of the 18
+  refusals across the 70 attempts is one of these two. `When` still merely
+  repeats `Said at` — rule 5 names the column and never says what belongs in
+  it.
+- **The rate moved, and the spread is the more useful number.** Over two
+  independent sweeps of the same binary — the same seven Meetings, five
+  attempts each, 70 in total — **52 produced a Summary, against 19 of 35
+  before**. Per Meeting out of ten: 10, 10, 10, 9, 6, 6, 1. Five of the seven
+  improved and none regressed; the 33-minute Chinese Meeting that was stuck at
+  0 now lands 6 times in 10, and the 85-minute one is still effectively stuck
+  at 1. **The two sweeps of that one binary returned 83% and 66%.** A
+  seventeen-point spread between two runs of identical code is the sharpest
+  statement of the finding above: a 35-attempt sweep is not a precise number,
+  and the fix is not what moved most of this — the placeholder drop fired 8
+  times in 70, so most of the change is the reverted clause and the draw.
 - **A Summary could name the Meeting after itself, and now cannot in two
   languages.** `prompt::title_from` takes the Summary's first `#` heading and
   the store applies it where a Meeting has no name (ADR-0030 as amended by

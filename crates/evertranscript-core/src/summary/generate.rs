@@ -49,6 +49,18 @@ pub struct Material<'a> {
     pub notes: Option<&'a str>,
 }
 
+/// What an unnamed Speaker is called on each channel.
+///
+/// **Placeholders, not names.** Every unnamed voice on the system channel
+/// renders as the same word, so an action item credited to one names nobody
+/// and cannot be checked against a person — measured, the model files items
+/// under "Participant" as though it were somebody (DECISIONS Q121). They are
+/// public because `prompt::build_user_message` has to recognise them in a
+/// rendered transcript in order to tell the model what they are.
+pub const UNNAMED_MIC: &str = "You";
+/// See [`UNNAMED_MIC`].
+pub const UNNAMED_SYSTEM: &str = "Participant";
+
 /// Renders the Transcript as lines a model can cite.
 ///
 /// `[12:34] Alice: the words` — the timestamp is what makes rule 5's "Said
@@ -62,8 +74,8 @@ pub fn render_transcript(material: &Material<'_>) -> String {
             .as_deref()
             .and_then(material.speaker_names)
             .unwrap_or_else(|| match segment.channel {
-                evertranscript_protocol::AudioChannel::Mic => "You".to_string(),
-                evertranscript_protocol::AudioChannel::System => "Participant".to_string(),
+                evertranscript_protocol::AudioChannel::Mic => UNNAMED_MIC.to_string(),
+                evertranscript_protocol::AudioChannel::System => UNNAMED_SYSTEM.to_string(),
             });
         out.push_str(&format!(
             "[{}] {who}: {}\n",

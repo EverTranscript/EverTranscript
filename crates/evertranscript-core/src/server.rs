@@ -211,6 +211,9 @@ struct SummaryRun {
     failed_chunks: usize,
     /// Why the first refused chunk was refused, for the Operator.
     refusal: Option<String>,
+    /// Action items taken out because they credited the unnamed-Speaker
+    /// placeholder rather than a person.
+    dropped_items: usize,
 }
 
 type ChosenBackends = (
@@ -941,10 +944,14 @@ impl Core {
             // log the Operator can read, so a `warn!` here is a reason nobody
             // will ever see; a Summary that lost half a meeting was telling
             // them the fraction and not the cause.
-            fn kept(text: &str, piece: &str) -> Result<String, String> {
+            fn kept(text: &str, piece: &str) -> Result<(String, usize), String> {
                 let part = summary::prompt::scrub(text);
+                // Before verifying, not after: an item credited to the
+                // unnamed-Speaker placeholder names nobody, and refusing the
+                // chunk over it costs the Operator the rest of the Summary.
+                let (part, dropped) = summary::prompt::drop_placeholder_items(&part);
                 match summary::prompt::verify(&part, piece) {
-                    Ok(()) => Ok(part),
+                    Ok(()) => Ok((part, dropped)),
                     Err(why) => {
                         tracing::warn!(
                             %why,
@@ -957,6 +964,10 @@ impl Core {
 
             let mut parts = Vec::with_capacity(chunks.len());
             let mut failed = 0usize;
+            // Items taken out because they credited the unnamed-Speaker
+            // placeholder. Counted so the record can say so: a table quietly
+            // one row shorter is the kind of edit this product does not make.
+            let mut dropped_items = 0usize;
             // The first one only. A list of every refusal would be a wall
             // of text in what is one line of a record, and the first is the
             // one an Operator can still find the transcript for.
@@ -966,7 +977,10 @@ impl Core {
                 refusal.get_or_insert(why);
             };
             match kept(&first.text, &chunks[0]) {
-                Ok(part) => parts.push(part),
+                Ok((part, dropped)) => {
+                    dropped_items += dropped;
+                    parts.push(part);
+                }
                 Err(why) => note(why),
             }
             for piece in &chunks[1..] {
@@ -975,7 +989,10 @@ impl Core {
                 }
                 match winner.generate(&request_for(piece), &cancel) {
                     Ok(text) => match kept(&text, piece) {
-                        Ok(part) => parts.push(part),
+                        Ok((part, dropped)) => {
+                            dropped_items += dropped;
+                            parts.push(part);
+                        }
                         Err(why) => note(why),
                     },
                     Err(summary::BackendError::Cancelled) => {
@@ -1027,8 +1044,19 @@ impl Core {
                     // its action items are claims about.
                     Ok(text) => {
                         let reduced = summary::prompt::scrub(&text);
+                        // The same order as the map stage, because the reduce
+                        // writes its own table: an item crediting the
+                        // placeholder is taken out before the check rather
+                        // than refused by it, or a fresh one here would throw
+                        // away the whole reduce.
+                        let (reduced, dropped) = summary::prompt::drop_placeholder_items(&reduced);
                         match summary::prompt::verify(&reduced, &transcript) {
-                            Ok(()) => reduced,
+                            Ok(()) => {
+                                // Only on the branch whose text survives —
+                                // the fallback discards these rows anyway.
+                                dropped_items += dropped;
+                                reduced
+                            }
                             // The parts are already verified, so falling back
                             // to them loses polish rather than truth.
                             Err(why) => {
@@ -1051,6 +1079,7 @@ impl Core {
                 chunks: chunks.len(),
                 failed_chunks: failed,
                 refusal,
+                dropped_items,
             })
         })
         .await??;
@@ -1061,7 +1090,7 @@ impl Core {
         // **What the Summary lost, in the record rather than only the log.**
         // A Summary assembled from five chunks of six is a different thing
         // from a complete one, and the Operator cannot read the Core's log.
-        let gaps = (outcome.failed_chunks > 0).then(|| {
+        let mut gaps = (outcome.failed_chunks > 0).then(|| {
             tracing::warn!(
                 failed = outcome.failed_chunks,
                 of = outcome.chunks,
@@ -1077,6 +1106,29 @@ impl Core {
             }
             note
         });
+        // **A table one row shorter is a changed record, so it is said out
+        // loud.** These were items the model credited to an unnamed Speaker,
+        // which names nobody and cannot be checked against a person.
+        if outcome.dropped_items > 0 {
+            tracing::warn!(
+                dropped = outcome.dropped_items,
+                "action items credited to no named Speaker were left out"
+            );
+            let plural = if outcome.dropped_items == 1 {
+                "item was"
+            } else {
+                "items were"
+            };
+            let note = format!(
+                "{} action {plural} left out for crediting an unnamed speaker \
+                 rather than a person.",
+                outcome.dropped_items
+            );
+            gaps = Some(match gaps {
+                Some(existing) => format!("{existing} {note}"),
+                None => note,
+            });
+        }
         if let Some(from) = &outcome.fell_back_from {
             // Never silent: an Operator who chose Cloud and received local
             // quality is owed the reason.
