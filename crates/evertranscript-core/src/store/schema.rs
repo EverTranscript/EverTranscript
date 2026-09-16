@@ -353,6 +353,27 @@ const MIGRATIONS: &[&str] = &[
 
     CREATE INDEX diarize_queue_order ON diarize_queue (priority, enqueued_at);
     "#,
+    // 12 — a deleted Voiceprint stays deleted.
+    //
+    // Deleting a Voiceprint is this product's one biometric control, and
+    // ADR-0009 makes it a legible Operator act. After migration 11 a Speaker
+    // the Operator deliberately forgot looks identical to one the model
+    // change cleared: a name, and no vector. A re-run that relearns named
+    // Speakers from their attributed segments would bring the forgotten
+    // voice back, and the Operator would have no way to know it happened.
+    //
+    // So the act leaves a mark of its own, and only that act sets it. It is
+    // not derivable from the columns that were already there — "named, no
+    // vector" is now the ordinary state of most of the Registry.
+    //
+    // Nothing here is retroactive. A Voiceprint deleted before this shipped
+    // left no record that it was deleted rather than never taken, and
+    // marking those rows forgotten would be inventing an Operator act that
+    // may never have happened.
+    r#"
+    ALTER TABLE speakers ADD COLUMN forgotten INTEGER NOT NULL DEFAULT 0
+        CHECK (forgotten IN (0, 1));
+    "#,
 ];
 
 /// Applies every migration the database has not seen yet.

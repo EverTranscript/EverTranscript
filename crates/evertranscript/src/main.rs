@@ -1482,7 +1482,8 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
             if !force {
                 println!(
                     "Deleting this Voiceprint stops the app recognizing that voice in future \
-                     Meetings.\nNothing in the record changes: the Speaker, its name, and every \
+                     Meetings, and marks this Speaker forgotten so no later re-run gives it one \
+                     back.\nNothing in the record changes: the Speaker, its name, and every \
                      word attributed to it stay exactly as they are.\n"
                 );
                 eprint!("delete this Voiceprint? [y/N] ");
@@ -1579,6 +1580,11 @@ fn display_name_of(speaker: &evertranscript_protocol::Speaker) -> String {
 
 fn voiceprint_state(speaker: &evertranscript_protocol::Speaker) -> &'static str {
     match (speaker.has_voiceprint, speaker.confirmed) {
+        // Three ways to hold no Voiceprint, and they are not the same fact.
+        // "forgotten" is the Operator's own act and no re-run undoes it;
+        // "cleared" is a model change, which the next Meeting repairs.
+        (false, _) if speaker.forgotten => "forgotten",
+        (false, _) if speaker.voiceprint_model.is_some() => "cleared",
         (false, _) => "none",
         (true, true) => "confirmed",
         (true, false) => "unconfirmed",

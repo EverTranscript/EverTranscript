@@ -26,6 +26,12 @@ hasVoiceprint: boolean,
  */
 confirmed: boolean, 
 /**
+ * The Operator deleted this Speaker's Voiceprint. Present so a Registry
+ * can say "forgotten on purpose" rather than "no Voiceprint", which
+ * after a model change is the ordinary state of most rows.
+ */
+forgotten: boolean, 
+/**
  * Which model produced the stored Voiceprint. Present so a Registry can
  * explain why an upgrade re-embedded, rather than recognition silently
  * changing quality.

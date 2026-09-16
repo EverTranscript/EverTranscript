@@ -222,6 +222,10 @@ const en = {
   "registry.lastHeard": "Last heard",
   "registry.model": "Model",
   "registry.voiceprint.none": "No Voiceprint",
+  "registry.voiceprint.forgotten":
+    "Voiceprint deleted by you — this voice is not recognized, and no re-run will bring it back.",
+  "registry.voiceprint.cleared":
+    "No Voiceprint — cleared when the voice model changed. This voice is recognized again the next time it is heard.",
   "registry.voiceprint.confirmed": "Voiceprint · confirmed by you",
   "registry.voiceprint.unconfirmed": "Voiceprint · unconfirmed",
   "registry.rename": "Name this voice",
@@ -463,6 +467,10 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "registry.lastHeard": "最近出现",
     "registry.model": "模型",
     "registry.voiceprint.none": "无声纹",
+    "registry.voiceprint.forgotten":
+      "声纹已由你删除——不再识别这个声音，重新运行也不会让它回来。",
+    "registry.voiceprint.cleared":
+      "无声纹——语音模型更换时已清除。下次听到这个声音时会重新识别。",
     "registry.voiceprint.confirmed": "声纹 · 已由你确认",
     "registry.voiceprint.unconfirmed": "声纹 · 未确认",
     "registry.rename": "为这个声音命名",
