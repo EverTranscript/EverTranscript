@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "evertranscript"
-version = "1.0.1"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "evertranscript-core"
-version = "1.0.1"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -700,14 +700,14 @@ dependencies = [
 
 [[package]]
 name = "evertranscript-fixtures"
-version = "1.0.1"
+version = "1.1.1"
 dependencies = [
  "hound",
 ]
 
 [[package]]
 name = "evertranscript-protocol"
-version = "1.0.1"
+version = "1.1.1"
 dependencies = [
  "schemars",
  "serde",
@@ -720,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "evertranscript-summarizer"
-version = "1.0.1"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "evertranscript-core",
