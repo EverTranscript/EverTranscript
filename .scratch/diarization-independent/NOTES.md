@@ -51,7 +51,7 @@ the fact — there is nothing left to compare against.
 
 ### The rig
 
-`Embedder` now carries a `Frontend` (Q129):
+`Embedder` now carries a `Frontend` (Q130):
 
 - `Fbank` — Kaldi fbank computed in-crate, fed as `input_features [B,T,80]`;
   WeSpeaker's contract.
@@ -60,7 +60,7 @@ the fact — there is nothing left to compare against.
 
 `observe` picks the frames **once** — alone-frames where numerous enough, all
 frames otherwise — and converts them to sample offsets for the waveform path,
-so both models see the same audio (Q130). The front end is stated, not sniffed
+so both models see the same audio (Q131). The front end is stated, not sniffed
 from the graph's input names: a stale file on this machine was a ReDimNet2
 export under WeSpeaker's filename, and a sniffing loader would have compared
 ReDimNet2 with itself and reported it as a win.

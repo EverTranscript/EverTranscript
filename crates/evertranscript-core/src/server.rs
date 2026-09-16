@@ -1690,6 +1690,10 @@ impl Core {
                 // nothing, and go. Only here, after the segments moved —
                 // before that they still owned this Meeting's words.
                 let swept = crate::store::speakers::sweep_unreferenced(&transaction)?;
+                // In the same transaction as the attribution it describes, so
+                // a Meeting can never be marked diarized without the words
+                // that marking is about.
+                crate::store::meetings::set_diarized(&transaction, &meeting_id)?;
                 transaction.commit()?;
                 tracing::info!(
                     boundary_flips = reconciliation.boundary_flips,
@@ -1863,6 +1867,69 @@ impl Core {
             .await?;
         self.diarize_wake.notify_one();
         Ok(added)
+    }
+
+    /// Puts the Meetings a previous Core never diarized back in line.
+    ///
+    /// **A detached run did not survive a restart, and nothing in the record
+    /// said so.** M3 diarized in a detached task, so a Core stopping in those
+    /// minutes took the run with it — leaving a `warn!` in a log the Operator
+    /// cannot read and a Meeting whose words belong to nobody. Measured on
+    /// the real History: two consecutive Meetings ended undiarized because an
+    /// install swap restarted the Core twenty-three seconds after the second
+    /// one stopped, and the first anyone knew was that every action item in
+    /// their Summaries credited the unnamed-Speaker placeholder and was
+    /// dropped (DECISIONS Q125).
+    ///
+    /// The queue already carries anything that reached it, and survives a
+    /// restart because it lives in the record. This is for what never reached
+    /// it: Meetings from before the queue existed, and ones whose run was
+    /// claimed and lost. So it enqueues rather than diarizing here — one
+    /// worker is the policy, and calling `diarize_meeting` directly would
+    /// race it for `runner::Slot` and log `Busy` for everything it could not
+    /// claim.
+    ///
+    /// `Back`, because a Meeting that just ended has somebody waiting for it
+    /// and these have been waiting since a previous Core. Spawned rather than
+    /// awaited, for the same reason the original was: booting must not wait.
+    pub fn finish_interrupted_diarization(self: std::sync::Arc<Self>) {
+        tokio::spawn(async move {
+            let pending = match self
+                .store
+                .read(crate::store::meetings::never_diarized)
+                .await
+            {
+                Ok(pending) => pending,
+                Err(error) => {
+                    warn!(%error, "could not look for Meetings that were never diarized");
+                    return;
+                }
+            };
+            if pending.is_empty() {
+                return;
+            }
+            let mut queued = 0usize;
+            for meeting_id in pending {
+                match self
+                    .enqueue_diarization(&meeting_id, crate::store::diarize_queue::Priority::Back)
+                    .await
+                {
+                    Ok(true) => queued += 1,
+                    // Already in line is the ordinary answer, not a problem.
+                    Ok(false) => {}
+                    Err(error) => warn!(
+                        meeting = %meeting_id, %error,
+                        "could not queue a Meeting a previous Core left"
+                    ),
+                }
+            }
+            if queued > 0 {
+                info!(
+                    meetings = queued,
+                    "queued Diarization a previous Core did not finish"
+                );
+            }
+        });
     }
 
     /// Whether a Meeting is running or waiting right now.

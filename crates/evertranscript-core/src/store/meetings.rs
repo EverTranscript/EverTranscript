@@ -322,6 +322,40 @@ pub fn set_audio_path(connection: &Connection, id: &str, audio_path: &str) -> Re
     Ok(())
 }
 
+/// Marks that Diarization ran over this Meeting, whoever it found.
+///
+/// Set when the pipeline completes, including when it attributed nobody —
+/// "listened to and recognised no one" is an answer, and a Meeting carrying
+/// it is not retried. The cases where Diarization could not run at all (no
+/// audio, no models) leave this NULL on purpose, so a later Core that does
+/// have them tries again.
+pub fn set_diarized(connection: &Connection, id: &str) -> Result<()> {
+    let now = now_rfc3339();
+    connection.execute(
+        "UPDATE meetings SET diarized_at = ?2, updated_at = ?2 WHERE id = ?1",
+        params![id, now],
+    )?;
+    Ok(())
+}
+
+/// Finished Meetings that still have audio and were never diarized.
+///
+/// Oldest first, because that is the order they happened in and the Operator
+/// reading down History meets them that way.
+pub fn never_diarized(connection: &Connection) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT id FROM meetings
+          WHERE ended_at IS NOT NULL
+            AND audio_path IS NOT NULL
+            AND diarized_at IS NULL
+          ORDER BY started_at",
+    )?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(ids)
+}
+
 /// Records whether the far end could have reached the microphone.
 ///
 /// A fact about the recording, written when the recording ends, because the
@@ -869,31 +903,38 @@ mod tests {
     }
 
     #[test]
-    fn notes_survive_everything_the_record_does_around_them() {
-        // Retitling, transcript growth, diarization — none of it is allowed
-        // to disturb the Operator's writing.
+    fn a_meeting_waiting_for_diarization_is_one_that_ended_with_audio_and_no_mark() {
+        // The retry's whole predicate. A Meeting still running must not be
+        // diarized, one with no audio cannot be, and one already marked is
+        // not asked twice.
         let connection = connection();
-        let meeting = start(&connection, Some("Standup"), None).expect("meeting");
-        set_notes(&connection, &meeting.id, "the thing I must not forget").expect("notes");
 
-        retitle(&connection, &meeting.id, "Renamed").expect("retitle");
-        append_segment(
-            &connection,
-            &meeting.id,
-            AudioChannel::System,
-            0,
-            1_000,
-            "words",
-        )
-        .expect("segment");
+        let running = start(&connection, None, None).expect("start");
+        set_audio_path(&connection, &running.id, "a.mp3").expect("audio");
+        assert!(
+            never_diarized(&connection).expect("query").is_empty(),
+            "a Meeting still in progress is not waiting for anything"
+        );
 
+        stop(&connection, &running.id).expect("stop");
         assert_eq!(
-            get(&connection, &meeting.id)
-                .expect("get")
-                .expect("exists")
-                .notes
-                .as_deref(),
-            Some("the thing I must not forget")
+            never_diarized(&connection).expect("query"),
+            vec![running.id.clone()]
+        );
+
+        // No audio, so there is nothing to listen to and never will be.
+        let silent = start(&connection, None, None).expect("start");
+        stop(&connection, &silent.id).expect("stop");
+        assert_eq!(
+            never_diarized(&connection).expect("query"),
+            vec![running.id.clone()],
+            "a Meeting with no audio is not waiting for Diarization"
+        );
+
+        set_diarized(&connection, &running.id).expect("mark");
+        assert!(
+            never_diarized(&connection).expect("query").is_empty(),
+            "a Meeting that was diarized is not asked again"
         );
     }
 
@@ -929,6 +970,35 @@ mod tests {
             mic_isolated(&connection, "no such meeting").expect("read"),
             None,
             "a Meeting that is not there is not an error to ask about"
+        );
+    }
+
+    #[test]
+    fn notes_survive_everything_the_record_does_around_them() {
+        // Retitling, transcript growth, diarization — none of it is allowed
+        // to disturb the Operator's writing.
+        let connection = connection();
+        let meeting = start(&connection, Some("Standup"), None).expect("meeting");
+        set_notes(&connection, &meeting.id, "the thing I must not forget").expect("notes");
+
+        retitle(&connection, &meeting.id, "Renamed").expect("retitle");
+        append_segment(
+            &connection,
+            &meeting.id,
+            AudioChannel::System,
+            0,
+            1_000,
+            "words",
+        )
+        .expect("segment");
+
+        assert_eq!(
+            get(&connection, &meeting.id)
+                .expect("get")
+                .expect("exists")
+                .notes
+                .as_deref(),
+            Some("the thing I must not forget")
         );
     }
 }

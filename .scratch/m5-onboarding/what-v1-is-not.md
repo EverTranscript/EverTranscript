@@ -165,6 +165,21 @@ from somewhere else, and each is already labelled that way in its ticket.
   of the ceiling: **a Meeting with no Speakers gets a Summary with prose and
   no action items**, and diarizing it is what would give those items a person
   to belong to.
+- **A Diarization the Core was stopped inside used to be lost silently, and
+  now finishes at the next start.** Those two Meetings had no Speakers because
+  `diarize_in_background` is a detached task and an install swap restarted the
+  Core twenty-three seconds after the second one ended. By design that loss is
+  "never fatal, and never the Meeting's problem" — a `warn!` to a log the
+  Operator cannot read — so the first anyone knew of it was a Summary saying
+  eight action items had been left out. The gap was found by its consequence
+  rather than by its own report. `meetings.diarized_at` now records that
+  Diarization ran, whoever it found, and a Core sweeps the Meetings that ended
+  with audio and no mark (Q125). Run by hand on the two: 249 of 323 segments
+  attributed and 136 of 223, recognising Jack Ahn, Hong Li and Frank Dai from
+  existing Voiceprints, no ghost Speakers. One Summary went from 946
+  characters with six items dropped to 1,344 with two; **the other still
+  refuses**, and its refusal changed from the placeholder to the narration
+  mode, which attribution cannot touch.
 - **A Summary could name the Meeting after itself, and now cannot in two
   languages.** `prompt::title_from` takes the Summary's first `#` heading and
   the store applies it where a Meeting has no name (ADR-0030 as amended by

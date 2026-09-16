@@ -82,6 +82,12 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
     // open and blocking the next one.
     core.reconcile_after_restart().await;
 
+    // The other thing a previous run can leave half done, and the one that
+    // used to leave no trace at all: a detached Diarization the Core was
+    // stopped inside. Spawned, not awaited — booting must not wait for two
+    // neural models.
+    Arc::clone(&core).finish_interrupted_diarization();
+
     let (events_tx, events_rx) = mpsc::channel(transport::CHANNEL_CAPACITY);
 
     // The Mirror projection runs alongside the server, not inside it: a slow

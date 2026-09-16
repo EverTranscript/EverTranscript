@@ -1605,7 +1605,16 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied — `summary/prompt.rs` (`DOCUMENT_LABELS`, `drop_placeholder_items`, `NONE_NOTED`), `.scratch/m5-onboarding/what-v1-is-not.md`
 **Ref:** .scratch/m4-summary/09-m4-closeout.md
 
-## Q125 — diarization-pyannote-redimnet2/11 — tradeoff
+## Q125 — m3-diarization/09-m3-closeout — decision
+
+**Question:** Two consecutive real Meetings ended with zero attributed segments, and the first anyone knew of it was that every action item in their Summaries credited the unnamed-Speaker placeholder and was dropped by Q123. `diarize_in_background` is a detached `tokio::spawn`; an install swap restarted the Core twenty-three seconds after the second Meeting stopped, and by design the loss is "never fatal, and never the Meeting's problem" — a `warn!` to a log the Operator cannot read. What makes a Meeting that was never diarized visible, or better, unnecessary?
+**Options considered:** make `stop` wait for Diarization (ADR-0009's join exists because the Transcript is already published, and two neural models in the Operator's one manual act is what the detached design was avoiding) / disclose it on the Meeting the way `summary_gaps` discloses a lost chunk (disclosure without repair asks the Operator to run a command for a failure that was not theirs) / retry it at the next Core start (chosen) / retry, but keyed on "has no attribution" alone (indistinguishable from a Meeting where Diarization ran and recognised nobody, so it would either miss the first or repeat the second forever)
+**Chosen:** migration 11 adds `meetings.diarized_at`, set inside the same transaction as the attribution it describes, and backfilled from the evidence — a Meeting with an attributed segment was plainly diarized; one with none is left NULL. `Core::finish_interrupted_diarization` is spawned from `run_daemon` beside `reconcile_after_restart` and works through `meetings::never_diarized` — ended, has audio, unmarked — one at a time.
+**Decided-by:** Frank (do 1 then 2); agent (the shape)
+**Justification:** **The gap was found by its consequence, not by its own report**, which is the argument for repair over disclosure: Q123 made a Summary say "8 action items were left out for crediting an unnamed speaker", and only chasing that sentence reached "this Meeting has no Speakers". The retry is the same work the Core would have done anyway, at the next moment it can. Sequential rather than one task per Meeting because `diarize::runner::Slot` refuses a second claim — a fan-out would diarize one and log `Busy` for the rest. The three cases where Diarization *cannot* run — no audio path, audio deleted, models not downloaded — deliberately leave `diarized_at` NULL and return in microseconds, so a Core that later has the models tries again and one that never will pays an `exists()` check per start. Measured on the two real Meetings: 249 of 323 segments attributed in 79 seconds and 136 of 223 in 83, recognising **Jack Ahn**, **Hong Li** and **Frank Dai** from existing Voiceprints; the Speaker table went 21 → 23 with named and confirmed unchanged at 8, so no ghosts. Regenerating their Summaries afterwards moved one from 946 characters with six items dropped to 1,344 with two. The other still refuses, and the refusal changed kind — from the placeholder to "an action item credits Hong Li with something they did not say", which is the narration mode `what-v1-is-not` already carries. That is the honest result: attribution fixed what it could reach and the remaining mode is unchanged by it. Tests assert the predicate (a Meeting still running is not swept, one with no audio is not, one already marked is not asked twice) and the backfill, the latter in `schema.rs` over a partially-applied chain, which is how this repo already tests migration 10. fmt, clippy `-D warnings`, the workspace suite and rustdoc are green.
+**Outcome:** applied — `store/schema.rs` (migration 11, its test), `store/meetings.rs` (`set_diarized`, `never_diarized`), `server.rs` (`finish_interrupted_diarization`, the mark inside the diarize transaction), `lib.rs`, `.scratch/m5-onboarding/what-v1-is-not.md`
+**Ref:** .scratch/m3-diarization/issues/09-m3-closeout.md
+## Q126 — diarization-pyannote-redimnet2/11 — tradeoff
 
 **Question:** Rule 1 says an isolated microphone makes every mic-channel voice the Operator. In a shared room where the Operator happens to be wearing headphones, that names a colleague "You" — which rule 2 exists to refuse. Follow the rule as written, or narrow it to fire only when the isolated mic carries a single voice?
 **Options considered:** as written, naming every mic-channel cluster / narrowed to the single-voice case / drop rule 1 and rely on dominance plus the Voiceprint
@@ -1615,7 +1624,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** assumed
 **Ref:** (pending)
 
-## Q126 — diarization-pyannote-redimnet2/11 — tradeoff
+## Q127 — diarization-pyannote-redimnet2/11 — tradeoff
 
 **Question:** macOS reports a transport type, not "headphones". Bluetooth is AirPods almost always and a Bluetooth speaker occasionally, and CoreAudio does not distinguish them. Count Bluetooth as headphones?
 **Options considered:** yes, Bluetooth is headphones / no, only the built-in jack's `hdpn` data source counts / defer the whole question to the echo canceller's idle signal
@@ -1625,7 +1634,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** assumed
 **Ref:** (pending)
 
-## Q127 — diarization-pyannote-redimnet2/11 — gate-resolution
+## Q128 — diarization-pyannote-redimnet2/11 — gate-resolution
 
 **Question:** `mic_isolated` is a per-Meeting fact. Two states or three?
 **Options considered:** `NOT NULL DEFAULT 0` / nullable, with NULL meaning nobody asked
@@ -1635,7 +1644,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Ref:** (pending)
 
-## Q128 — diarization-pyannote-redimnet2/11 — deviation
+## Q129 — diarization-pyannote-redimnet2/11 — deviation
 
 **Question:** Raising `DOMINANCE` from 0.75 to 0.80 makes `DOMINANCE_MARGIN` unreachable: at a share of 0.80 the runner-up holds at most 0.20, so the margin is at least 0.60 and can never fall to the `<= 0.5` that would refuse. Remove the margin check?
 **Options considered:** remove it as dead / keep it
@@ -1645,7 +1654,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Ref:** (pending)
 
-## Q129 — diarization-independent/ab — tradeoff
+## Q130 — diarization-independent/ab — tradeoff
 
 **Question:** The two embeddings need different front ends — WeSpeaker takes `input_features [B,T,80]` with the fbank computed in-crate, ReDimNet2-B3 takes `waveform` and owns its mel. Should `Embedder` pick the front end by inspecting the loaded graph's input names, or should the caller state it?
 **Options considered:** sniff the ONNX input names at load / explicit `Frontend` passed to `load_with`
@@ -1655,7 +1664,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Ref:** (pending)
 
-## Q130 — diarization-independent/ab — gate-resolution
+## Q131 — diarization-independent/ab — gate-resolution
 
 **Question:** Each model has its own natural windowing. When `observe` feeds a window to the embedder, should each front end select the frames the model was trained to prefer, or should both see the identical frame selection?
 **Options considered:** per-model frame selection / identical selection, converted to sample offsets for the waveform path
@@ -1665,12 +1674,32 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Ref:** (pending)
 
-## Q131 — diarization-independent/ab — deviation
+## Q132 — diarization-independent/ab — deviation
 
 **Question:** The waveform front end branched on `alone.len() > 1` — the number of alone-*runs* — and summed *segmentation* frames against `MIN_EMBED_FRAMES`, while `chosen_rows` counted *feature rows*. Two different predicates. Fix, or accept as a corner case?
 **Options considered:** accept / one predicate both front ends ask
 **Chosen:** Extracted `alone_is_enough`, asked by both. `chosen_rows` spends the answer as feature rows, the waveform path as sample offsets.
 **Decided-by:** agent
-**Justification:** Not a corner case, and it invalidated the measurement it was part of. Segmentation frames are ~17 ms and feature rows 10 ms, so counting the wrong one moves the bar by 1.7x; and branching on run *count* rather than frame count meant a speaker with two short clean stretches took the alone branch under waveform and the all-frames branch under fbank. That regime is overlapped speech — the hard cases that drive confusion error — so the two embeddings would have been fed different audio exactly where it matters most, reintroducing the second variable Q130 exists to remove. Found by reading the path after it had already been committed and smoke-tested; the smoke numbers were plausible, which is the point. Q130 stands as the intent; this is the implementation finally matching it. `both_front_ends_choose_the_same_frames` pins it, and the first draft of that test asserted the wrong thing for the same unit confusion.
+**Justification:** Not a corner case, and it invalidated the measurement it was part of. Segmentation frames are ~17 ms and feature rows 10 ms, so counting the wrong one moves the bar by 1.7x; and branching on run *count* rather than frame count meant a speaker with two short clean stretches took the alone branch under waveform and the all-frames branch under fbank. That regime is overlapped speech — the hard cases that drive confusion error — so the two embeddings would have been fed different audio exactly where it matters most, reintroducing the second variable Q131 exists to remove. Found by reading the path after it had already been committed and smoke-tested; the smoke numbers were plausible, which is the point. Q131 stands as the intent; this is the implementation finally matching it. `both_front_ends_choose_the_same_frames` pins it, and the first draft of that test asserted the wrong thing for the same unit confusion.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q133 — diarization-independent/merge — deviation
+
+**Question:** `origin/main` added `finish_interrupted_diarization`, which on Core start finds never-diarized Meetings and calls `diarize_meeting` on each. This branch had replaced that detached path with a persistent queue. Both answer "a Core that stops mid-run loses the work." Keep which?
+**Options considered:** theirs as written / the queue alone / theirs, rewritten to enqueue
+**Chosen:** Both, joined. The startup pass stays, but enqueues at `Priority::Back` instead of diarizing directly.
+**Decided-by:** agent
+**Justification:** Neither subsumes the other. The queue lives in the record, so it already resumes anything that reached it — but it is a new table, and the two real Meetings Q125 was written for predate it and are not in it. Theirs as written would fight the queue rather than complement it: one worker is the policy, `runner::Slot` refuses a second claim, and theirs' own comment says a fan-out "would diarize one and log `Busy` for the rest" — which is exactly what a direct call alongside a running worker produces. `Back` rather than `Front` because a Meeting that just ended has somebody waiting for it, and these have been waiting since a previous Core. `set_diarized` is called inside the existing attribution transaction, so a Meeting cannot be marked diarized without the words the mark is about; without it the startup pass would offer the same Meetings forever.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q134 — diarization-independent/merge — irreversible-action
+
+**Question:** Both branches appended migrations after the common base. Whose takes position 11?
+**Options considered:** ours first / theirs first
+**Chosen:** `origin/main`'s `diarized_at` keeps 11; this branch's three become 12, 13, 14.
+**Decided-by:** agent
+**Justification:** `origin/main` is pushed, so a database out there may already sit at `user_version` 11 meaning `diarized_at` was applied. Migrations run by number and only forward: putting this branch's `diarize_queue` at 11 would make every already-migrated database skip it permanently, and the failure would surface much later as a queue table that does not exist. This branch was never pushed, so renumbering it costs nothing. The first attempt at this resolution left migration 11's raw string unterminated — its `"#,` had been in the shared tail that the reorder moved past — so the Rust comments below it were parsed as SQL and every migration failed at startup; caught by the guarantees tests, which could not start a Core.
 **Outcome:** applied
 **Ref:** (pending)
