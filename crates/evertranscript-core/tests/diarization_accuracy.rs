@@ -123,10 +123,24 @@ fn corpus() -> Option<Vec<Meeting>> {
 ///   EVERTRANSCRIPT_EMBEDDING=wespeaker   (default) diarize-embedding.onnx
 ///   EVERTRANSCRIPT_EMBEDDING=redimnet2             diarize-embedding-redimnet2.onnx
 fn embedding_under_test() -> (VoiceprintId, PathBuf, diarize::live::Frontend) {
-    match std::env::var("EVERTRANSCRIPT_EMBEDDING")
-        .unwrap_or_else(|_| "wespeaker".into())
-        .as_str()
-    {
+    embedding_named(&embedding_name())
+}
+
+/// Which embedding the ordinary single-model runs use.
+fn embedding_name() -> String {
+    std::env::var("EVERTRANSCRIPT_EMBEDDING").unwrap_or_else(|_| "wespeaker".into())
+}
+
+/// One named embedding: what its vectors are stamped as, which file runs it,
+/// and which front end it wants.
+///
+/// Split out of [`embedding_under_test`] because the split-model grid needs
+/// two of them alive in one process, and both must come from this one table.
+/// A second table would be free to disagree about which front end a model
+/// takes, and a front end mismatch does not fail — it returns a plausible
+/// vector of the wrong thing.
+fn embedding_named(name: &str) -> (VoiceprintId, PathBuf, diarize::live::Frontend) {
+    match name {
         "redimnet2" => (
             VoiceprintId {
                 model: "redimnet2-b3",
@@ -189,18 +203,46 @@ fn thresholds_under_test() -> Vec<f32> {
     }
 }
 
-fn models() -> (PathBuf, PathBuf) {
-    let dir = std::env::var_os("EVERTRANSCRIPT_MODELS_DIR")
+/// Where the ONNX files live. Harness-side: production has its own.
+fn model_directory() -> PathBuf {
+    std::env::var_os("EVERTRANSCRIPT_MODELS_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(evertranscript_core::paths::models_dir);
+        .unwrap_or_else(evertranscript_core::paths::models_dir)
+}
+
+/// One embedding pass's inputs, resolved against the model directory.
+///
+/// Carried as one value so a pass cannot be assembled from one model's file
+/// and another's stamp — which is the failure the split grid is most exposed
+/// to, and the only one of its failures that would not show up as an error.
+struct Which {
+    id: VoiceprintId,
+    path: PathBuf,
+    frontend: diarize::live::Frontend,
+}
+
+fn which(name: &str) -> Which {
+    let (id, file, frontend) = embedding_named(name);
+    let path = model_directory().join(&file);
+    assert!(
+        path.exists(),
+        "{name} needs {}, which is not there. Fetch the models with \
+         `evertranscript models fetch` first — measuring without them would \
+         report a perfect score on an empty hypothesis.",
+        path.display()
+    );
+    Which { id, path, frontend }
+}
+
+fn models() -> (PathBuf, Which) {
+    let dir = model_directory();
     let segmentation = dir.join("diarize-segmentation.onnx");
-    let (identity, file, _) = embedding_under_test();
-    let embedding = dir.join(&file);
+    let embedding = which(&embedding_name());
     println!(
         "embedding under test: {} v{} ({})",
-        identity.model,
-        identity.version,
-        file.display()
+        embedding.id.model,
+        embedding.id.version,
+        embedding.path.display()
     );
     println!("segmentation step: {} ms", step_under_test());
     println!(
@@ -212,8 +254,8 @@ fn models() -> (PathBuf, PathBuf) {
         }
     );
     assert!(
-        segmentation.exists() && embedding.exists(),
-        "the diarization models are not in {}. Fetch them with \
+        segmentation.exists(),
+        "the segmentation model is not in {}. Fetch them with \
          `evertranscript models fetch` first — measuring without them would \
          report a perfect score on an empty hypothesis.",
         dir.display()
@@ -394,7 +436,7 @@ struct Inferred {
 }
 
 /// Run the models over one meeting.
-fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Inferred {
+fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Which) -> Inferred {
     let samples = read_wav(&meeting.audio);
     let audio_seconds = samples.len() as f64 / diarize::fbank::SAMPLE_RATE as f64;
     let reference =
@@ -402,9 +444,9 @@ fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Inf
 
     let mut diarizer = diarize::live::LiveDiarizer::load_with(
         segmentation,
-        embedding,
-        embedding_under_test().2,
-        embedding_under_test().0,
+        &embedding.path,
+        embedding.frontend,
+        embedding.id,
     )
     .expect("load models")
     .with_step(step_under_test());
@@ -483,6 +525,166 @@ fn clustered(
     } else {
         diarize::live::cluster_observed(observed, threshold)
     }
+}
+
+/// One cell of the split-model grid: whose partition, and whose vectors.
+///
+/// Clustering and identity are two jobs one embedding does today, and they
+/// are not the same job — clustering asks whether two windows of *this*
+/// meeting are one voice, identity asks whether a voice is the one enrolled
+/// months ago. A model can be better at one and worse at the other, and
+/// while one model does both there is no way to see it.
+///
+/// The diagonal — one model doing both — is this with `clustering` and
+/// `identity` the same pass. It must reduce to [`clustered`] exactly, not
+/// approximately: the splice is then the identity substitution, and
+/// [`split_clustered`] makes the calls `cluster_observed` makes, in the
+/// order it makes them.
+struct Cell<'a> {
+    clustering: &'a BTreeMap<String, Inferred>,
+    identity: &'a BTreeMap<String, Inferred>,
+    /// What the identity vectors are stamped with, and so which gallery the
+    /// replay reads. Carried rather than read off a meeting because the
+    /// seeds query runs before the first meeting of a replay, when there is
+    /// no meeting to read it from.
+    stamp: VoiceprintId,
+}
+
+impl<'a> Cell<'a> {
+    /// One model doing both jobs: the control every split cell is read against.
+    fn whole(pass: &'a BTreeMap<String, Inferred>, stamp: VoiceprintId) -> Self {
+        Self {
+            clustering: pass,
+            identity: pass,
+            stamp,
+        }
+    }
+}
+
+/// The clustering pass's observations wearing the identity pass's vectors.
+///
+/// Both passes ran the *same* segmentation over the same audio, so their
+/// windows and local tracks are the same objects and aligning them is a
+/// check rather than a search. The check is not a formality: an embedding
+/// refuses a span another accepts — `observe` drops an observation whose
+/// front end produced no features — so the two passes can differ in which
+/// observations exist while agreeing about everything else. Matching
+/// positionally would then shift every later observation onto a neighbour's
+/// vector and score a different voice under this one's name, silently.
+///
+/// Times are checked as well as the track, because the track alone is only
+/// as trustworthy as the assumption that both passes windowed the audio the
+/// same way, and that assumption is exactly what a rig fault breaks.
+fn wearing(
+    clustering: &diarize::live::Observed,
+    identity: &diarize::live::Observed,
+    meeting: &str,
+) -> diarize::live::Observed {
+    assert_eq!(
+        clustering.windows, identity.windows,
+        "{meeting}: the two embedding passes windowed the audio differently. \
+         Segmentation is the same model in both, so this is a rig fault and \
+         not a model difference."
+    );
+
+    let mut by_track: BTreeMap<(usize, u8), &diarize::live::Observation> = BTreeMap::new();
+    for observation in &identity.observations {
+        assert!(
+            by_track
+                .insert((observation.window, observation.local), observation)
+                .is_none(),
+            "{meeting}: window {} local track {} appears twice in the {} pass",
+            observation.window,
+            observation.local,
+            identity.embedding.model,
+        );
+    }
+
+    let observations: Vec<diarize::live::Observation> = clustering
+        .observations
+        .iter()
+        .map(|observation| {
+            let Some(mate) = by_track.remove(&(observation.window, observation.local)) else {
+                panic!(
+                    "{meeting}: {} produced no observation for window {} local \
+                     track {}, which {} produced over {:?}. Substituting a \
+                     neighbour's vector would put a different voice under this \
+                     one's name, so the cell cannot be scored.",
+                    identity.embedding.model,
+                    observation.window,
+                    observation.local,
+                    clustering.embedding.model,
+                    observation.runs.first(),
+                )
+            };
+            assert_eq!(
+                (mate.channel, &mate.runs, &mate.clean_runs),
+                (
+                    observation.channel,
+                    &observation.runs,
+                    &observation.clean_runs
+                ),
+                "{meeting}: window {} local track {} covers different audio in \
+                 the two passes",
+                observation.window,
+                observation.local,
+            );
+            diarize::live::Observation {
+                channel: observation.channel,
+                cluster: observation.cluster,
+                window: observation.window,
+                local: observation.local,
+                vector: mate.vector.clone(),
+                runs: observation.runs.clone(),
+                clean_runs: observation.clean_runs.clone(),
+            }
+        })
+        .collect();
+
+    assert!(
+        by_track.is_empty(),
+        "{meeting}: {} produced {} observation(s) {} did not, starting at \
+         window {:?}. The partition is the clustering pass's, so these have \
+         nowhere to go — report it rather than dropping them quietly.",
+        identity.embedding.model,
+        by_track.len(),
+        clustering.embedding.model,
+        by_track.keys().next(),
+    );
+
+    diarize::live::Observed {
+        observations,
+        embedding: identity.embedding,
+        windows: clustering.windows.clone(),
+    }
+}
+
+/// One cell's diarization: the clustering pass's partition over the identity
+/// pass's vectors.
+///
+/// The partition is computed from the clustering pass's *own* vectors, so
+/// the turns this returns are the ones its control returns — identical, not
+/// merely close. That is the point: holding turn placement fixed is what
+/// makes a difference in the ledger attributable to identity alone, and it
+/// is why a split cell's DER must equal its clustering control's exactly.
+fn split_clustered(
+    clustering: &diarize::live::Observed,
+    identity: &diarize::live::Observed,
+    meeting: &str,
+    threshold: f32,
+    constrained: bool,
+) -> diarize::Diarization {
+    let provisional = diarize::live::provisional_of(clustering);
+    let canonical = if constrained {
+        diarize::cluster::agglomerate_constrained(
+            &provisional,
+            threshold,
+            &diarize::live::cannot_link_of(clustering),
+        )
+    } else {
+        diarize::cluster::agglomerate_with(&provisional, threshold)
+    };
+    diarize::live::assemble(&wearing(clustering, identity, meeting), &canonical)
 }
 
 /// Floors and margins the matcher grid crosses, plus the shipped point.
@@ -1142,7 +1344,7 @@ struct Event {
 /// generous transcript than a real one, and every number inherits that.
 fn replay(
     chapters: &[Chapter],
-    inferred: &BTreeMap<String, Inferred>,
+    cell: &Cell,
     threshold: f32,
     constrained: bool,
     floor: f32,
@@ -1170,11 +1372,22 @@ fn replay(
     let mut seen_before: BTreeSet<String> = BTreeSet::new();
 
     for chapter in chapters {
-        let inferred = inferred
+        let clustering = cell
+            .clustering
             .get(&chapter.meeting)
             .expect("every chapter was inferred before the grid started");
-        let diarization = clustered(&inferred.observed, threshold, constrained);
-        let channel = inferred
+        let identity = cell
+            .identity
+            .get(&chapter.meeting)
+            .expect("every chapter was inferred before the grid started");
+        let diarization = split_clustered(
+            &clustering.observed,
+            &identity.observed,
+            &chapter.meeting,
+            threshold,
+            constrained,
+        );
+        let channel = clustering
             .observed
             .windows
             .first()
@@ -1184,17 +1397,14 @@ fn replay(
         // The gallery as it stands *before* this meeting, since persist is
         // about to change it. A mixed anchor is nobody's enrollment, so it
         // cannot make a person enrolled-before.
-        let enrolled_before: BTreeSet<String> = diarize::cluster::seeds(
-            &connection,
-            embedding_under_test().0.model,
-            embedding_under_test().0.version,
-        )
-        .expect("seeds")
-        .iter()
-        .filter_map(|seed| anchors.get(&seed.speaker_id))
-        .filter(|anchor| !anchor.mixed())
-        .map(|anchor| anchor.who.clone())
-        .collect();
+        let enrolled_before: BTreeSet<String> =
+            diarize::cluster::seeds(&connection, cell.stamp.model, cell.stamp.version)
+                .expect("seeds")
+                .iter()
+                .filter_map(|seed| anchors.get(&seed.speaker_id))
+                .filter(|anchor| !anchor.mixed())
+                .map(|anchor| anchor.who.clone())
+                .collect();
         let known_speakers: BTreeSet<String> = speakers::list(&connection)
             .expect("speakers")
             .into_iter()
@@ -1207,7 +1417,7 @@ fn replay(
         // Evaluator-only: which reference person each segment is, and how
         // long. Never read by production; this is the denominator.
         let mut owner: BTreeMap<String, (String, u64)> = BTreeMap::new();
-        for span in &inferred.reference {
+        for span in &clustering.reference {
             let segment = meetings::append_segment(
                 &connection,
                 &meeting_id,
@@ -1264,7 +1474,7 @@ fn replay(
                 .filter(|span| span.speaker == format!("cluster-{}", cluster.index()))
                 .map(|span| (span.start_ms, span.end_ms))
                 .collect();
-            let (who, purity) = ownership(&owned, &inferred.reference);
+            let (who, purity) = ownership(&owned, &clustering.reference);
             anchors.insert(
                 speaker_id.clone(),
                 Anchor {
@@ -1816,6 +2026,131 @@ fn the_constrained_path_is_the_one_the_replay_gets() {
     );
 }
 
+/// Two passes over one meeting, differing only in their vectors.
+///
+/// Offline: it is the splice that is under test here, not either model.
+#[cfg(test)]
+fn two_passes() -> (diarize::live::Observed, diarize::live::Observed) {
+    use evertranscript_protocol::AudioChannel;
+
+    let voice = |cluster: u32, window: usize, local: u8, at: u64, vector: Vec<f32>| {
+        diarize::live::Observation {
+            channel: AudioChannel::Mic,
+            cluster: diarize::Cluster(cluster),
+            window,
+            local,
+            vector,
+            runs: vec![(at, at + 4_000)],
+            clean_runs: vec![(at, at + 4_000)],
+        }
+    };
+    let windows = vec![
+        (AudioChannel::Mic, 0, 10_000),
+        (AudioChannel::Mic, 10_000, 20_000),
+    ];
+    let clustering = diarize::live::Observed {
+        embedding: diarize::live::EMBEDDING_IDENTITY,
+        observations: vec![
+            voice(0, 0, 0, 1_000, vec![1.0, 0.0, 0.0]),
+            voice(1, 0, 1, 2_000, vec![0.0, 1.0, 0.0]),
+            voice(2, 1, 0, 11_000, vec![1.0, 0.05, 0.0]),
+        ],
+        windows: windows.clone(),
+    };
+    // Same audio, same tracks, different vectors — and its clusters
+    // deliberately numbered the other way round, because the splice must key
+    // on the track and never on the provisional cluster id.
+    let identity = diarize::live::Observed {
+        embedding: VoiceprintId {
+            model: "redimnet2-b3",
+            version: "1",
+        },
+        observations: vec![
+            voice(2, 1, 0, 11_000, vec![0.0, 0.0, 1.0]),
+            voice(1, 0, 1, 2_000, vec![0.0, -1.0, 0.0]),
+            voice(0, 0, 0, 1_000, vec![-1.0, 0.0, 0.0]),
+        ],
+        windows,
+    };
+    (clustering, identity)
+}
+
+/// The diagonal cell is not merely close to the control — it is the control.
+///
+/// A split grid whose same-model cells did not reproduce the numbers already
+/// on record would measure the rewrite as well as the split, and there would
+/// be no way afterwards to say which of the two moved a ledger.
+#[test]
+fn a_cell_that_splits_nothing_is_the_run_that_already_ran() {
+    let (observed, _) = two_passes();
+    for constrained in [false, true] {
+        let control = clustered(&observed, 0.5, constrained);
+        let cell = split_clustered(&observed, &observed, "m", 0.5, constrained);
+        assert_eq!(
+            cell.turns, control.turns,
+            "constrained={constrained}: the diagonal placed different turns"
+        );
+        assert_eq!(
+            cell.embeddings.len(),
+            control.embeddings.len(),
+            "constrained={constrained}: the diagonal found a different partition"
+        );
+        for (cluster, embedding) in &control.embeddings {
+            assert_eq!(
+                cell.embeddings[cluster].vector, embedding.vector,
+                "constrained={constrained}: the diagonal moved a vector"
+            );
+        }
+    }
+}
+
+/// A split cell keeps the partition's turns and changes only whose vectors
+/// stand behind them.
+#[test]
+fn a_split_cell_holds_the_partition_and_swaps_the_vectors() {
+    let (clustering, identity) = two_passes();
+    let control = clustered(&clustering, 0.5, false);
+    let cell = split_clustered(&clustering, &identity, "m", 0.5, false);
+
+    assert_eq!(
+        cell.turns, control.turns,
+        "the identity vectors reached turn placement, which they must not"
+    );
+    for embedding in cell.embeddings.values() {
+        assert_eq!(
+            (embedding.model.as_str(), embedding.model_version.as_str()),
+            ("redimnet2-b3", "1"),
+            "a cell's vectors must be stamped with the model that made them"
+        );
+    }
+    let moved = control
+        .embeddings
+        .iter()
+        .any(|(cluster, embedding)| cell.embeddings[cluster].vector != embedding.vector);
+    assert!(moved, "the splice substituted nothing");
+}
+
+/// An embedding can refuse a span another accepts, and then the two passes
+/// disagree about which observations exist. Matching positionally would slide
+/// every later observation onto a neighbour's vector, which no assertion
+/// downstream could catch.
+#[test]
+#[should_panic(expected = "no observation for window 1 local track 0")]
+fn an_observation_only_one_pass_produced_stops_the_cell() {
+    let (clustering, mut identity) = two_passes();
+    identity.observations.retain(|one| one.window != 1);
+    let _ = split_clustered(&clustering, &identity, "m", 0.5, false);
+}
+
+/// The reverse: a vector with nowhere to go is reported, not dropped.
+#[test]
+#[should_panic(expected = "these have nowhere to go")]
+fn a_vector_the_partition_has_no_place_for_is_reported() {
+    let (mut clustering, identity) = two_passes();
+    clustering.observations.retain(|one| one.window != 1);
+    let _ = split_clustered(&clustering, &identity, "m", 0.5, false);
+}
+
 /// The grid has to contain the point production runs, or none of it can be
 /// read against what ships today.
 #[test]
@@ -2073,7 +2408,7 @@ fn the_gallery_recognizes_who_it_has_met_before() {
         // another floor already contaminated would measure neither.
         let (events, anchors) = replay(
             &chapters,
-            &inferred,
+            &Cell::whole(&inferred, embedding.id),
             thresholds[0],
             constrained,
             *floor,
@@ -2100,6 +2435,266 @@ fn the_gallery_recognizes_who_it_has_met_before() {
             write_events(Path::new(&path), &last.expect("one configuration ran").0);
         } else {
             write_grid_events(Path::new(&path), &rows);
+        }
+    }
+}
+
+/// The two models the split grid crosses, by the harness's own names.
+const SPLIT_MODELS: [&str; 2] = ["wespeaker", "redimnet2"];
+
+/// One clustering arm: whether segmentation's same-window cannot-link pairs
+/// are enforced, and the merge threshold each model clusters at.
+///
+/// The threshold belongs to the model doing the clustering — it is where
+/// *that* model's similarity distribution becomes a partition, and the two
+/// distributions are not in the same place. Both were fixed by their own
+/// sweeps already, so this grid does not sweep them again. The only thing it
+/// varies is which model supplies the identity vectors.
+struct SplitArm {
+    label: &'static str,
+    constrained: bool,
+    /// Indexed by [`SPLIT_MODELS`], so a threshold cannot drift away from
+    /// the model it was measured for.
+    thresholds: [f32; SPLIT_MODELS.len()],
+}
+
+impl SplitArm {
+    fn threshold(&self, model: &str) -> f32 {
+        let at = SPLIT_MODELS
+            .iter()
+            .position(|&one| one == model)
+            .expect("a model of the grid");
+        self.thresholds[at]
+    }
+}
+
+const SPLIT_ARMS: [SplitArm; 2] = [
+    SplitArm {
+        label: "unconstrained",
+        constrained: false,
+        thresholds: [0.65, 0.60],
+    },
+    SplitArm {
+        label: "same-window cannot-link enforced",
+        constrained: true,
+        thresholds: [0.10, 0.10],
+    },
+];
+
+/// Does clustering want the same embedding that identity wants?
+///
+/// Four cells per arm: each model's partition crossed with each model's
+/// vectors. The diagonal is one model doing both jobs, which is what ships
+/// and what every off-diagonal cell is read against.
+///
+/// ```text
+/// EVERTRANSCRIPT_MEASURE_DER=1 EVERTRANSCRIPT_SPLIT_MODEL=1 \
+/// EVERTRANSCRIPT_AMI_DIR=~/ami-dev \
+/// EVERTRANSCRIPT_REPLAY_MANIFEST=<abs>/tests/ami-replay-dev.manifest \
+/// EVERTRANSCRIPT_MATCHER_GRID=1 \
+/// EVERTRANSCRIPT_REPLAY_EVENTS=/tmp/dev-split.events \
+///   cargo test --release -p evertranscript-core --test diarization_accuracy \
+///   -- --nocapture the_split
+/// ```
+#[test]
+fn the_split_grid_changes_only_who_supplies_the_identity() {
+    if std::env::var("EVERTRANSCRIPT_SPLIT_MODEL").as_deref() != Ok("1") {
+        return;
+    }
+
+    let manifest = std::env::var(REPLAY_ENV).unwrap_or_else(|_| {
+        panic!("EVERTRANSCRIPT_SPLIT_MODEL=1 needs {REPLAY_ENV}: the grid is a replay")
+    });
+    let corpus = corpus()
+        .unwrap_or_else(|| panic!("EVERTRANSCRIPT_SPLIT_MODEL=1 needs {MEASURE_ENV} set too"));
+    let chapters = load_manifest(Path::new(&manifest), &corpus);
+    assert!(
+        std::env::var_os("EVERTRANSCRIPT_MERGE_SWEEP").is_none(),
+        "the split grid fixes each clustering model's own merge threshold; \
+         sweeping them again would tune the partition on the split under test"
+    );
+    assert!(
+        std::env::var_os("EVERTRANSCRIPT_CANNOT_LINK").is_none(),
+        "the split grid runs both cannot-link arms itself"
+    );
+
+    let segmentation = model_directory().join("diarize-segmentation.onnx");
+    assert!(
+        segmentation.exists(),
+        "the segmentation model is not at {}",
+        segmentation.display()
+    );
+    let passes: BTreeMap<&str, Which> = SPLIT_MODELS
+        .iter()
+        .map(|&name| (name, which(name)))
+        .collect();
+
+    println!(
+        "split-model grid over {} meetings: the clustering model's partition, \
+         the identity model's vectors",
+        chapters.len()
+    );
+    for name in SPLIT_MODELS {
+        let pass = &passes[name];
+        println!(
+            "  {name}: {} v{} ({})",
+            pass.id.model,
+            pass.id.version,
+            pass.path.display()
+        );
+    }
+    println!("segmentation step: {} ms", step_under_test());
+    println!("reference-transcript speaker-time: reference-derived segment boundaries, no ASR");
+    println!("order within a-d is known; order across series and within IB is declared, not known");
+    println!(
+        "\nchoice rule, declared before any of these numbers were read: one cell is \
+         preferred to another only when it is at least as good on all four ledger \
+         quantities — returning correct up, returning wrong down, new correct up, \
+         newcomer false attachment down — and strictly better on at least one. Equal \
+         on all four is no preference. Anything else is a trade, reported as a trade, \
+         with no rate of exchange between the four assumed here. A split therefore pays \
+         only where an off-diagonal cell dominates BOTH diagonal controls of its own \
+         arm; where it dominates neither, or the arm's set is nondominated, the answer \
+         is that the split does not pay and nothing is proposed. Held-out points are \
+         declared from these curves before any held-out cell is run."
+    );
+
+    // Inference once per meeting per embedding, reused by every cell and
+    // every matcher point: the vectors do not depend on the threshold, the
+    // constraint, or which job the model is being asked to do here.
+    let inferred: BTreeMap<&str, BTreeMap<String, Inferred>> = SPLIT_MODELS
+        .iter()
+        .map(|&name| {
+            let started = Instant::now();
+            let one: BTreeMap<String, Inferred> = chapters
+                .iter()
+                .map(|chapter| {
+                    let meeting = corpus
+                        .iter()
+                        .find(|one| one.name == chapter.meeting)
+                        .expect("manifest checked against the corpus already");
+                    (
+                        chapter.meeting.clone(),
+                        observe_once(meeting, &segmentation, &passes[name]),
+                    )
+                })
+                .collect();
+            println!(
+                "\ninferred {name} over {} meetings in {:.0}s",
+                one.len(),
+                started.elapsed().as_secs_f64()
+            );
+            (name, one)
+        })
+        .collect();
+
+    let grid = matcher_grid();
+    for arm in &SPLIT_ARMS {
+        println!("\n=== {} ===", arm.label);
+
+        // Turn placement first, because it is the premise of the whole grid:
+        // a split cell may not move DER at all. Identity vectors are not
+        // supposed to reach turn placement, so a difference here would be
+        // the splice leaking into the partition rather than anything about
+        // the models.
+        for &clustering in &SPLIT_MODELS {
+            let threshold = arm.threshold(clustering);
+            let mut control = score::Der::default();
+            for &identity in &SPLIT_MODELS {
+                let mut tally = score::Der::default();
+                for chapter in &chapters {
+                    let partition = &inferred[clustering][&chapter.meeting];
+                    let vectors = &inferred[identity][&chapter.meeting];
+                    let diarization = split_clustered(
+                        &partition.observed,
+                        &vectors.observed,
+                        &chapter.meeting,
+                        threshold,
+                        arm.constrained,
+                    );
+                    tally.accumulate(&score::der(
+                        &partition.reference,
+                        &hypothesis(&diarization.turns),
+                    ));
+                }
+                if identity == clustering {
+                    control = tally;
+                    continue;
+                }
+                let four = |der: &score::Der| {
+                    (
+                        der.total_ms,
+                        der.missed_ms,
+                        der.false_alarm_ms,
+                        der.confusion_ms,
+                    )
+                };
+                assert_eq!(
+                    four(&tally),
+                    four(&control),
+                    "{clustering} clustering / {identity} identity moved DER away \
+                     from its control. The partition and the turns are the \
+                     clustering pass's in both, so the identity vectors have \
+                     reached turn placement — a rig fault, not a model difference."
+                );
+            }
+            println!(
+                "  {clustering} clustering at merge {threshold:.2}: DER {:.2}% \
+                 (missed {:.2} false alarm {:.2} confusion {:.2}) — every cell \
+                 with this partition scores it",
+                control.rate() * 100.0,
+                control.missed_rate() * 100.0,
+                control.false_alarm_rate() * 100.0,
+                control.confusion_rate() * 100.0,
+            );
+        }
+
+        for &clustering in &SPLIT_MODELS {
+            for &identity in &SPLIT_MODELS {
+                let cell = Cell {
+                    clustering: &inferred[clustering],
+                    identity: &inferred[identity],
+                    stamp: passes[identity].id,
+                };
+                println!(
+                    "\n  {clustering} clustering / {identity} identity{}",
+                    if clustering == identity {
+                        "   (control: what ships)"
+                    } else {
+                        ""
+                    }
+                );
+                let mut rows: Vec<(f32, f32, Event)> = Vec::new();
+                for &(floor, margin) in &grid {
+                    let (events, _) = replay(
+                        &chapters,
+                        &cell,
+                        arm.threshold(clustering),
+                        arm.constrained,
+                        floor,
+                        margin,
+                    );
+                    // The ledgers refuse a file that cannot be one, so a
+                    // malformed cell fails here rather than at the pairing.
+                    let _ = ledgers(
+                        &events,
+                        &format!("{clustering}/{identity} floor {floor:.2} margin {margin:.2}"),
+                    );
+                    ledger_line(floor, margin, &events);
+                    rows.extend(events.into_iter().map(|one| (floor, margin, one)));
+                }
+                if let Ok(path) = std::env::var("EVERTRANSCRIPT_REPLAY_EVENTS") {
+                    let arm_slug = if arm.constrained {
+                        "constrained"
+                    } else {
+                        "unconstrained"
+                    };
+                    write_grid_events(
+                        Path::new(&format!("{path}.{arm_slug}.{clustering}-{identity}")),
+                        &rows,
+                    );
+                }
+            }
         }
     }
 }
