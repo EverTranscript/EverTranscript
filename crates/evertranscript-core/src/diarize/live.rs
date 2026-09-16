@@ -850,33 +850,68 @@ pub fn provisional_of(observed: &Observed) -> BTreeMap<Cluster, Embedding> {
 /// own windows, and one person can be on both, so simultaneity across them
 /// says nothing.
 ///
+/// Two local tracks are a *hypothesis* that two people are talking, not a
+/// proof of it. Segmentation can split one person in two, and this then
+/// refuses to put them back together; that cost belongs in whatever the
+/// constraint is measured to be worth.
+///
 /// Harness-only, like [`provisional_of`]. Returns both directions of every
 /// pair, because [`super::cluster::agglomerate_constrained`] checks one.
 pub fn cannot_link_of(observed: &Observed) -> BTreeMap<Cluster, BTreeSet<Cluster>> {
-    // The recovery below gives each observation exactly one window, which is
-    // true only while windows tile rather than overlap. Under a sliding step
-    // an observation sits in up to ten of them and "same window" stops being
-    // a partition — so this fails loudly rather than quietly building
-    // constraints from the first window that happened to match.
-    assert_eq!(
-        SEGMENT_STEP, SEGMENT_WINDOW,
-        "cannot-link pairs assume non-overlapping windows; a sliding step needs \
-         the constraint rebuilt against every window covering an observation"
-    );
+    // Validate the windows that were actually produced, not the constants
+    // they were produced from. [`LiveDiarizer::with_step`] and
+    // `EVERTRANSCRIPT_SEGMENT_STEP_MS` both set the step at run time, so
+    // `SEGMENT_STEP == SEGMENT_WINDOW` can hold while these windows overlap
+    // — and under overlap "the window an observation came from" is not a
+    // question with one answer, so every constraint built from it would be
+    // picked arbitrarily from the windows that happened to match.
+    for channel in CHANNELS {
+        let mut spans: Vec<(u64, u64)> = observed
+            .windows
+            .iter()
+            .filter(|(at, _, _)| *at == channel)
+            .map(|&(_, from, to)| (from, to))
+            .collect();
+        spans.sort_unstable();
+        for pair in spans.windows(2) {
+            assert!(
+                pair[0].1 <= pair[1].0,
+                "cannot-link needs windows that tile, and {channel:?} has \
+                 {:?} overlapping {:?}. A sliding step needs the constraint \
+                 rebuilt against every window covering an observation, which \
+                 this does not do.",
+                pair[0],
+                pair[1]
+            );
+        }
+    }
 
     let mut together: BTreeMap<(usize, u64), Vec<Cluster>> = BTreeMap::new();
     for observation in &observed.observations {
-        let Some(&(_, start, _)) = observed.windows.iter().find(|(channel, start, end)| {
-            *channel == observation.channel
-                && observation
-                    .runs
-                    .first()
-                    .is_some_and(|(at, _)| at >= start && at < end)
-        }) else {
+        // Nothing to place and nothing to constrain: it pairs with no one
+        // either way, so this is an absence of provenance rather than
+        // provenance being dropped.
+        let Some(&(start, _)) = observation.runs.first() else {
             continue;
         };
+        let mut covering = observed
+            .windows
+            .iter()
+            .filter(|&&(at, from, to)| at == observation.channel && start >= from && start < to);
+        let Some(&(_, from, _)) = covering.next() else {
+            panic!(
+                "observation at {start} ms on {:?} came from no window; its \
+                 provenance cannot be trusted to say who it may not be",
+                observation.channel
+            );
+        };
+        assert!(
+            covering.next().is_none(),
+            "observation at {start} ms on {:?} sits in more than one window",
+            observation.channel
+        );
         together
-            .entry((slot(observation.channel), start))
+            .entry((slot(observation.channel), from))
             .or_default()
             .push(observation.cluster);
     }
@@ -936,6 +971,76 @@ mod tests {
             runs: runs.to_vec(),
             clean_runs: clean.to_vec(),
         }
+    }
+
+    /// The guard has to read the windows, not the constants behind them.
+    ///
+    /// `with_step` and `EVERTRANSCRIPT_SEGMENT_STEP_MS` set the step at run
+    /// time, so windows can overlap while `SEGMENT_STEP` still equals
+    /// `SEGMENT_WINDOW` — which is exactly what the first version of this
+    /// guard asserted and exactly what it would have waved through. The
+    /// first assertion here is the point: the defaults still agree, and the
+    /// windows still overlap.
+    #[test]
+    #[should_panic(expected = "windows that tile")]
+    fn overlapping_windows_are_refused_even_while_the_constants_agree() {
+        assert_eq!(
+            SEGMENT_STEP, SEGMENT_WINDOW,
+            "the defaults are unchanged; only these windows overlap"
+        );
+        let overlapped = Observed {
+            observations: vec![observation(AudioChannel::Mic, 0, &[(1_000, 2_000)], &[])],
+            windows: vec![
+                (AudioChannel::Mic, 0, 10_000),
+                (AudioChannel::Mic, 5_000, 15_000),
+            ],
+        };
+        let _ = cannot_link_of(&overlapped);
+    }
+
+    /// Silently skipping it would quietly build fewer constraints than the
+    /// run believes it has, which is the failure this whole guard exists to
+    /// make impossible.
+    #[test]
+    #[should_panic(expected = "came from no window")]
+    fn an_observation_outside_every_window_is_refused_rather_than_skipped() {
+        let stray = Observed {
+            observations: vec![observation(AudioChannel::Mic, 0, &[(50_000, 51_000)], &[])],
+            windows: vec![(AudioChannel::Mic, 0, 10_000)],
+        };
+        let _ = cannot_link_of(&stray);
+    }
+
+    #[test]
+    fn two_local_speakers_of_one_window_may_never_be_one_voice() {
+        let tiled = Observed {
+            observations: vec![
+                observation(AudioChannel::Mic, 0, &[(1_000, 2_000)], &[]),
+                observation(AudioChannel::Mic, 1, &[(1_500, 2_500)], &[]),
+                observation(AudioChannel::Mic, 2, &[(11_000, 12_000)], &[]),
+                // Same instant, other channel: separate recordings with
+                // their own windows, and one person can be on both, so
+                // simultaneity across them says nothing.
+                observation(AudioChannel::System, 3, &[(1_200, 2_200)], &[]),
+            ],
+            windows: vec![
+                (AudioChannel::Mic, 0, 10_000),
+                (AudioChannel::Mic, 10_000, 20_000),
+                (AudioChannel::System, 0, 10_000),
+            ],
+        };
+
+        let forbidden = cannot_link_of(&tiled);
+        assert_eq!(forbidden[&Cluster(0)], BTreeSet::from([Cluster(1)]));
+        assert_eq!(forbidden[&Cluster(1)], BTreeSet::from([Cluster(0)]));
+        assert!(
+            !forbidden.contains_key(&Cluster(2)),
+            "alone in its window, so it is forbidden nothing"
+        );
+        assert!(
+            !forbidden.contains_key(&Cluster(3)),
+            "the other channel is not evidence about this one"
+        );
     }
 
     /// A run whose windows did not overlap: one window per channel,
