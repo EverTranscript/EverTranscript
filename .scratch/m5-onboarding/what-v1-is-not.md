@@ -89,31 +89,61 @@ from somewhere else, and each is already labelled that way in its ticket.
   manufacturing evidence for ones it did not find. The registered 0.5B is
   "the model that was verified, not the model that should ship", and
   choosing the real default is the most overdue thing on this list.
-- **Measured on real meetings, and one of three still gets no Summary.**
-  Three were run through the local Backend on 2026-09-15 — 85, 45 and 33
-  minutes (Q117-Q120). Map-reduce works. The 45-minute English one
-  summarizes in 41 seconds across two chunks with nothing refused: 822
-  characters and five action items, where before the `verify` fixes the same
-  meeting gave 556 characters and one. The 33-minute Chinese one now gets a
-  Chinese Summary — 527 characters, four action items, no gaps — but needed
-  two runs to get it, so it sits near the line rather than safely past it.
-  The 85-minute one produces nothing, twice, and the reason is no longer
-  word matching: **413 of its 693 segments belong to a Speaker with no
-  name**, which the rendered transcript calls "Participant", so the model
-  credits the named people it can see and `verify` refuses — correctly,
-  because they did not say it. Every line containing 第一阶段 or 本地部署 is
-  "Participant" and the item was filed under Ming Chen. That is a
-  diarization gap surfacing as a Summary failure; what changed is that the
-  Operator is now told which item and whose name rather than only that
-  nothing came back. `When` still merely repeats `Said at` — rule 5 names
-  the column and never says what belongs in it. Two defects were fixed
-  getting this far: a 64-byte token buffer that lost a whole Summary after
-  38 seconds, and a write that stored under the typed id instead of the
-  resolved one. And one asymmetry inside `verify` is untouched — a
-  sixteen-character Chinese item yields fifteen bigrams, about half of them
-  straddling word boundaries, so Chinese is asked for verbatim word order
-  where English drops its function words with a four-character floor. One
-  refusal scored 7 of 15 where 8 were needed.
+- **Measured on real meetings, and whether a meeting gets a Summary is not a
+  property of the meeting.** Eight real Meetings, five identical attempts each,
+  one binary over one copy of the History: **24 of 40 attempts produced a
+  Summary**, and three of the eight both succeeded and failed across their own
+  five. Per Meeting, out of five: 5, 5, 5, 4, 4, 1, 0, 0. Two more varied
+  between complete and partial. Length is a draw too — the same 41-minute
+  Meeting produced between 509 and 1,557 characters. The cause is registered,
+  not accidental: Qwen3-4B's entry asks for `Nucleus { temperature: 0.7,
+  top_p: 0.8, top_k: 20 }` because its model card says "DO NOT use greedy
+  decoding", and `LlamaSampler::dist` is seeded from the clock so that
+  regenerating gives something new. Each attempt is therefore an independent
+  draw, and `verify` is a threshold applied to one.
+- **Q119 and Q120 measured each Meeting once and wrote the draw down as a fact
+  about the Meeting. Three of those facts do not replicate.** The
+  33-minute Chinese one, recorded here as "527 characters, four action items,
+  no gaps", has produced nothing in the six attempts since. The 85-minute one,
+  recorded as producing nothing "twice", produced 557 characters on the next
+  attempt and nothing in the five after that. The 45-minute English one,
+  recorded at "822 characters and five action items with nothing refused", does
+  produce a Summary every time — of between 526 and 1,069 characters, with a
+  part refused on one attempt in five. What survives is the direction rather
+  than the numbers: `stem` and the language pin moved the distribution, and the
+  pin visibly works, because the 85-minute Meeting's one success is a Summary
+  in Chinese. What does not survive is any per-Meeting verdict taken from a
+  single run, including every one this file carried before today. A Summary
+  that arrives six times out of ten is a different product from one that
+  arrives, and the Operator is told neither number nor offered a retry.
+- **Two Meetings are stuck rather than unlucky, and the reason is no longer one
+  thing.** The 33-minute Chinese Meeting refused 0 for 6 and the 85-minute one
+  1 for 6; the 15-minute English one, 1 for 6, shows it is not a language
+  split. Four failure modes appear in their refusals, only the first of which
+  is the word matching Q120 addressed. The model writes a Speaker's name in the
+  other script — `明晨` where the `display_name` is "Ming Chen" — and
+  `same_person` is a substring match, so nothing can echo and the item is
+  refused by construction. It credits **"Participant"**, the placeholder
+  `render_transcript` gives an unnamed Speaker, as though it were a person.
+  It narrates rather than quotes — "Discussing the evaluation of Metaplum
+  versus Nango" is a true item whose leading gerund can never echo. And it
+  corrects the transcript: in that Meeting the ASR heard the product as
+  "Nengo" and "Lango", the model wrote "Nango", which is the name, and
+  `verify` compares against the transcript rather than the world, so being
+  right cost it the word it needed. That item scored 2 of 5 where 3 were
+  wanted. `When` still merely repeats `Said at` — rule 5 names the column and
+  never says what belongs in it.
+- **A Summary can name the Meeting after itself.** `prompt::title_from` takes
+  the Summary's first `#` heading and the store applies it where a Meeting has
+  no name (ADR-0030 as amended by ADR-0036). The model does not reliably put a
+  name there: of the five Summaries standing at the end of the sweep, three are
+  headed with the bare words `# Meeting Summary` against one `# Data Storage
+  and Retrieval Meeting`. Both Meetings that had no name of their own were
+  renamed to the label, the 30-minute one included, and it is not junk data
+  that is at risk — it is precisely the Meetings nobody has named yet. The
+  Title Chain is working as designed — a person's word and the calendar's both
+  outrank it — but nothing rejects a heading that is the label rather than a
+  title, and ADR-0009 makes what lands there immutable.
 - **Diarization is measured on real meetings now, and the number is 26.3%.**
   This entry used to say DER 3.9% on a construction — one speaker and their
   own resampling. AMI, scored the way pyannote publishes it, said 51.4%
