@@ -63,8 +63,21 @@ version built some of them itself:
   carrying the model it was started for is what makes resume-not-restart
   structural rather than a flag somebody clears.
 
-**Two of those seams have since been written, unwired** (re-checked
-2026-09-16). `store::rerun` exists — `Rerun`, `state`, `begin`,
+**Three of those seams have since been written** (re-checked 2026-09-16), one
+of them wired and working.
+
+**The queue worker stands bulk work down for a recording, and keeps it owed.**
+`Back` work does not start while a Meeting records and stops if one starts
+mid-pass, through the same cancellation `diarize/cancel` uses, so nothing is
+written by an interrupted run; the queue row survives the pause and a restart,
+and the worker picks it up when recording ends. `Front` work does not yield.
+This is live in `run_diarization_queue` rather than groundwork, because it is
+the one part of the re-run that the existing catch-up path already needed:
+`finish_interrupted_diarization` queues at `Back` on every start, so a Core
+launched during a call was competing with it for the machine before ticket 12
+existed. See `DiarizeOutcome` and `yields_to_recording` in `server.rs`.
+
+The two that are written and **unwired**: `store::rerun` exists — `Rerun`, `state`, `begin`,
 `begin_if_the_model_changed`, `cancel`, the last enqueuing at
 `Priority::Back` oldest-first — with its tables out of `MIGRATIONS`, so every
 function fails on a current History by design. `cluster::Claims` and
@@ -74,14 +87,34 @@ not all belong to one eligible Speaker. Nothing calls either.
 
 **Still to build, and absent from `main`:**
 
-1. `cluster::relearn` — the only missing store/cluster piece: turn a `Claims`
-   into new exemplars and a Voiceprint for each named, unforgotten Speaker
-   from *their own* segments' windows, with negatives rebuilt from corrections
-   that took a segment away. `Claims::denials` is the field nothing writes yet.
-2. The wiring. `reconcile::apply` takes no `Claims`, so nothing threads one
-   from the read to the write, and no caller reaches `rerun::begin_if_the_model_changed`
-   at startup. Until that exists the re-run cannot start, pause, resume or
-   report, whatever the store can already express.
+1. **The seeding writer, which is not a restored `relearn`.** One was built
+   and then **withdrawn** (Q165, `8dd6781`), and the reason bounds what
+   replaces it. Its positive half would have enrolled a cluster's centroid,
+   which `cluster::centroid` builds over every grouped `Observation` while
+   reconciliation runs afterwards — so a claimed cluster's vector can carry
+   speech no transcript segment covers, and the parts of each observation
+   window lying outside the segments over it. A unanimous claim is therefore
+   **not permission to enrol the raw centroid**, and that limit is written on
+   `claims` itself. Its negative half was worse in a second, independent way:
+   an existence check on the vector dedupes an identical retry but does not
+   replace changed evidence, so correcting away from a Speaker, relearning,
+   correcting back and relearning leaves the stale negative standing, and a
+   repartition files a second vector beside the obsolete one.
+
+   What is actually owed is **range-bounded re-embedding, positive and
+   negative, with replacement scoped to the source that produced each piece of
+   evidence** — a vector cut from exactly the claimed ranges, carrying a stable
+   identity for the correction or cluster it came from, so writing it again
+   supersedes rather than accumulates. Neither the embedding API nor the
+   exemplar table carries that today. Writing `Claims::denials` into centroids
+   would rebuild the withdrawn writer; so would handing `Claims` to
+   `reconcile::apply` and enrolling what it assigns.
+2. The wiring. Nothing threads the read to the write, and no caller reaches
+   `rerun::begin_if_the_model_changed` at startup — which must, on its first
+   start, record the current identity and enqueue nothing, since a History
+   with no `diarize_rerun` row is every History today and absent metadata is
+   not evidence of a model change. Until that exists the re-run cannot start,
+   resume or report, whatever the store can already express.
 3. The protocol, additively (ADR-0028): an optional `rerun` block on
    `DiarizeStatusResponse` — which today carries `state`, `meetingId`,
    `doneMs`, `totalMs`, `queued` and nothing about a bulk run — and a
@@ -105,8 +138,11 @@ A stray gitignored `client-request.schema.json.actual` from 2026-09-15 mentions
       keeps its attributions
 - [ ] Corrections outrank the machine's attribution when seeding, and negatives
       are rebuilt
-- [ ] Recording pauses the re-run and it resumes afterwards; a just-ended
-      Meeting is diarized ahead of the backlog
+- [x] Recording pauses the re-run and it resumes afterwards; a just-ended
+      Meeting is diarized ahead of the backlog — in the queue worker, covered
+      by `tests/diarize_queue.rs`. The interrupt landing mid-inference is not
+      covered offline, since that needs the ONNX models; the decision behind it
+      is asserted in `server::tests::only_bulk_work_stands_down_for_a_recording`
 - [ ] Quitting mid-run and restarting resumes rather than restarts, and reaches
       the same end state as an uninterrupted run
 - [ ] Cancelling stops it, reports honestly how far it got, and leaves every

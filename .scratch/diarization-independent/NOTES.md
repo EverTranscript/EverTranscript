@@ -303,6 +303,13 @@ fail to transfer, nor justify excluding a competitive control.
 
 ### Held-out AMI test: the 24 predeclared configurations (Q183)
 
+**All 24 rows are in [`heldout-24.tsv`](heldout-24.tsv)** — arm, clustering model,
+identity model, merge threshold, matcher point, DER, and the four ledger
+quantities — aggregated from the saved event files so the numbers outlive
+`/tmp`. What follows picks out the comparisons that say something; the table is
+the record. Every claim below is a subtraction of two of its rows.
+
+
 **Validity.** Denominators 25538.370s returning and 5175.554s new, fixed across
 all eight cells and three points. No duplicate keys. `unattributed:unexpected`
 zero, and `unattributed:no-embedding` **zero** — with 4 of WeSpeaker's 5666

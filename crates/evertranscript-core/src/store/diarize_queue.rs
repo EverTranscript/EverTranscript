@@ -24,6 +24,23 @@ pub enum Priority {
     Back = 1,
 }
 
+impl Priority {
+    /// Reads the stored column back.
+    ///
+    /// Total rather than fallible because the column is already constrained
+    /// to `(0, 1)` by the schema, so there is no third value to report. The
+    /// fallback is `Back` and not `Front` for the direction it errs in: bulk
+    /// work stands aside for a recording, and letting an unrecognised row
+    /// jump the line is the mistake that costs somebody a wait.
+    fn from_column(stored: i64) -> Self {
+        if stored == Self::Front as i64 {
+            Self::Front
+        } else {
+            Self::Back
+        }
+    }
+}
+
 /// Puts a Meeting in line. Answers whether it was added.
 ///
 /// `false` means it was already queued — the caller's cue to say so rather
@@ -65,12 +82,16 @@ pub fn enqueue(connection: &Connection, meeting_id: &str, priority: Priority) ->
 /// Left in place on purpose: a Core that crashes mid-run comes back owing
 /// the same Meeting. Removed by `finish` once the run is over, whatever its
 /// outcome.
-pub fn peek(connection: &Connection) -> Result<Option<String>> {
+/// Answers the priority alongside the id, because the worker's decision
+/// about standing down for a recording is a decision about which kind of work
+/// this is.
+pub fn peek(connection: &Connection) -> Result<Option<(String, Priority)>> {
     Ok(connection
         .query_row(
-            "SELECT meeting_id FROM diarize_queue ORDER BY priority, enqueued_at LIMIT 1",
+            "SELECT meeting_id, priority FROM diarize_queue \
+             ORDER BY priority, enqueued_at LIMIT 1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, Priority::from_column(row.get(1)?))),
         )
         .optional()?)
 }
@@ -162,14 +183,36 @@ mod tests {
     fn a_run_that_crashes_is_still_owed_and_a_finished_one_is_not() {
         let connection = db();
         enqueue(&connection, "a", Priority::Front).expect("queue");
-        assert_eq!(peek(&connection).expect("peek").as_deref(), Some("a"));
         assert_eq!(
-            peek(&connection).expect("peek again").as_deref(),
-            Some("a"),
+            peek(&connection).expect("peek"),
+            Some(("a".to_string(), Priority::Front))
+        );
+        assert_eq!(
+            peek(&connection).expect("peek again"),
+            Some(("a".to_string(), Priority::Front)),
             "peeking does not consume: a Core that dies mid-run comes back owing it"
         );
         finish(&connection, "a").expect("finish");
-        assert_eq!(peek(&connection).expect("peek").as_deref(), None);
+        assert_eq!(peek(&connection).expect("peek"), None);
+    }
+
+    #[test]
+    fn peek_says_which_kind_of_work_is_next() {
+        // The worker stands bulk work down for a recording and lets a
+        // just-ended Meeting through, so reading the id without the priority
+        // would leave it unable to tell them apart.
+        let connection = db();
+        enqueue(&connection, "a", Priority::Back).expect("bulk");
+        assert_eq!(
+            peek(&connection).expect("peek"),
+            Some(("a".to_string(), Priority::Back))
+        );
+        enqueue(&connection, "b", Priority::Front).expect("just ended");
+        assert_eq!(
+            peek(&connection).expect("peek"),
+            Some(("b".to_string(), Priority::Front)),
+            "and it is the one at the head of the line, not the first queued"
+        );
     }
 
     #[test]

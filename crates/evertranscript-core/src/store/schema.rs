@@ -1068,35 +1068,48 @@ mod tests {
             "and must not look to the next model like something to re-embed"
         );
 
-        // Three Speakers now have no Voiceprint for three different reasons,
-        // and the Registry's one sentence for each is chosen from these three
-        // fields (`voiceprintLabel`, App.tsx). Nulling the stamp here is what
-        // collapsed "cleared when the voice model changed" into the sentence
-        // for a voice that was never known, on every row the wipe touched.
-        let label = |id: &str| {
+        // Four Speakers, three reasons to hold no Voiceprint, and the fields
+        // the Registry reads to tell them apart. Asserted as stored state, not
+        // by restating the renderer's choice here: what this migration owes is
+        // that the evidence stays distinguishable, and `voiceprintLabel`
+        // (App.tsx) owns which sentence goes with which combination. Nulling
+        // the stamp made Alice's row identical to Fresh's, which is how a
+        // cleared Voiceprint came to read as a voice never known.
+        let stored = |id: &str| {
             let speaker = speakers::get(&connection, id).expect("get").expect("some");
-            match (
+            (
                 speaker.has_voiceprint,
                 speaker.forgotten,
-                speaker.voiceprint_model.is_some(),
-            ) {
-                (true, _, _) => "confirmed-or-not",
-                (false, true, _) => "forgotten",
-                (false, false, true) => "cleared",
-                (false, false, false) => "none",
-            }
+                speaker.voiceprint_model,
+                speaker.voiceprint_model_version,
+            )
         };
-        assert_eq!(label(&alice), "cleared", "Alice lost a vector to this wipe");
-        assert_eq!(label(&me), "cleared", "and so did the Operator");
-        assert_eq!(
-            label(&gone),
-            "forgotten",
-            "an Operator's deletion is not a model change"
+
+        for (who, id) in [("Alice", &alice), ("the Operator", &me)] {
+            let (has_voiceprint, forgotten, model, version) = stored(id);
+            assert!(!has_voiceprint, "{who} lost the vector");
+            assert!(!forgotten, "{who} was not deleted by anybody");
+            assert_eq!(
+                (model.as_deref(), version.as_deref()),
+                (Some(EMBEDDING_MODEL), Some(EMBEDDING_MODEL_VERSION)),
+                "{who} keeps the stamp of the model whose vector this wipe took"
+            );
+        }
+
+        let (has_voiceprint, forgotten, ..) = stored(&gone);
+        assert!(!has_voiceprint);
+        assert!(
+            forgotten,
+            "an Operator's deletion is still an Operator's deletion"
         );
+
+        let (has_voiceprint, forgotten, model, version) = stored(&fresh);
+        assert!(!has_voiceprint);
+        assert!(!forgotten);
         assert_eq!(
-            label(&fresh),
-            "none",
-            "and a voice never enrolled lost nothing"
+            (model, version),
+            (None, None),
+            "a voice never enrolled has no model to name, and this wipe gave it none"
         );
 
         // The one that stops the lazy rebuild path reintroducing the old

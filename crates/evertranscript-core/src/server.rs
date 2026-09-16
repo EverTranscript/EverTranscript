@@ -116,6 +116,18 @@ pub struct Core {
     /// The recording in progress, if any. The Meeting owns it; capture
     /// streams inside it come and go (ADR-0029 as amended).
     recorder: Mutex<Option<audio::recorder::Recorder>>,
+    /// Whether a Meeting is being recorded, as something a blocking thread
+    /// can read.
+    ///
+    /// The same fact as `recorder.is_some()` and deliberately not a second
+    /// opinion about it: [`Core::is_recording`] answers from here, and the
+    /// two lines that install and take the recorder are the only writers.
+    /// The reason it exists at all is that Diarization's models run on a
+    /// `spawn_blocking` thread which cannot await an async `Mutex`, and the
+    /// re-run has to stand down for a recording that starts *during* an
+    /// inference pass, not only for one already under way when it began
+    /// (ticket 12).
+    recording: Arc<std::sync::atomic::AtomicBool>,
     /// How to open capture. Swapped in tests for the fixture source — the
     /// AudioSource seam the PRD names.
     source_factory: Mutex<SourceFactory>,
@@ -168,6 +180,39 @@ pub struct DiarizeJob {
     pub cancel: crate::diarize::Cancel,
     pub done_ms: u64,
     pub total_ms: u64,
+}
+
+/// What a Diarization run did, as the queue worker has to read it.
+///
+/// `Ok(0)` used to carry three unrelated answers — nothing to attribute, a
+/// model missing, the Operator cancelling — and the worker took the Meeting
+/// out of the line for every one of them. Standing down for a recording is
+/// the case that made that lossy: work still owed has to keep its turn, and
+/// a count of zero cannot say whether it is owed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiarizeOutcome {
+    /// The run is over, and the count is what it attributed. Zero for a
+    /// Meeting with no audio or no models, which still takes it out of the
+    /// line: nothing about it would be different next time.
+    Wrote(usize),
+    /// Stood down for a recording without writing anything. Still owed.
+    Paused,
+    /// Stopped by the Operator or a disconnecting Client without writing
+    /// anything. `diarize/cancel` takes the queue row out itself, so this
+    /// answer leaves the row alone rather than deleting what is already gone.
+    Cancelled,
+}
+
+/// Whether background Diarization has to stand down right now.
+///
+/// Only `Back` work yields. A Meeting that just ended, or one the Operator
+/// asked for by hand, keeps its priority even while the next Meeting records:
+/// somebody is waiting for that one, and Auto-Record starting a second call
+/// is not a reason to make them wait longer. `Back` work is the overnight
+/// re-run and the catch-up of what a previous Core left, and neither has
+/// anybody waiting.
+fn yields_to_recording(priority: crate::store::diarize_queue::Priority, recording: bool) -> bool {
+    recording && matches!(priority, crate::store::diarize_queue::Priority::Back)
 }
 
 /// A stored Speaker as the protocol shows it, with its appearance counts.
@@ -442,6 +487,7 @@ impl Core {
             mirror_wake: Arc::new(Notify::new()),
             diarize_wake: Arc::new(Notify::new()),
             recorder: Mutex::new(None),
+            recording: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             source_factory: Mutex::new(live_source_factory()),
             notifications: broadcast::channel(NOTIFICATION_CAPACITY).0,
             transcriber_factory: Mutex::new(None),
@@ -1479,8 +1525,21 @@ impl Core {
     /// onto a Transcript that already exists. Nothing on this path can cost
     /// the recording — a missing model, a corrupt file, or a panicking
     /// runtime all leave the Meeting exactly as it was, unattributed.
-    pub async fn diarize_meeting(&self, meeting_id: &str) -> Result<usize> {
+    pub async fn diarize_meeting(
+        &self,
+        meeting_id: &str,
+        priority: crate::store::diarize_queue::Priority,
+    ) -> Result<DiarizeOutcome> {
         use crate::diarize;
+
+        // Before anything is read or claimed. The same question is asked
+        // again on every progress span below, because a recording that starts
+        // during an inference pass has to stop it too — a check only at the
+        // door leaves the backlog holding the machine for the length of a
+        // Meeting.
+        if yields_to_recording(priority, self.is_recording().await) {
+            return Ok(DiarizeOutcome::Paused);
+        }
 
         let Some(meeting) = self.get_meeting(meeting_id).await?.map(|(m, _)| m) else {
             anyhow::bail!("no Meeting with id {meeting_id}");
@@ -1488,14 +1547,14 @@ impl Core {
         let Some(audio_path) = meeting.audio_path.clone() else {
             // A Meeting whose audio was never written, or was deleted. Not
             // an error: there is simply nothing to listen to.
-            return Ok(0);
+            return Ok(DiarizeOutcome::Wrote(0));
         };
         // Stored relative to the History folder so the record stays portable
         // (ADR-0035) — resolving it is the caller's job, not the row's.
         let audio_path = self.history_dir.join(audio_path);
         if !audio_path.exists() {
             tracing::info!(path = %audio_path.display(), "the Meeting's audio is gone; nothing to diarize");
-            return Ok(0);
+            return Ok(DiarizeOutcome::Wrote(0));
         }
 
         let segmentation = self.models_dir.join("diarize-segmentation.onnx");
@@ -1504,7 +1563,7 @@ impl Core {
             tracing::info!(
                 "diarization models are not downloaded; leaving the Meeting unattributed"
             );
-            return Ok(0);
+            return Ok(DiarizeOutcome::Wrote(0));
         }
 
         // Claimed before the job entry is written, not inside the spawned
@@ -1542,6 +1601,13 @@ impl Core {
         });
         let notifications = self.notifications.clone();
         let id_for_progress = meeting_id.to_string();
+        // Read on the blocking thread, which is why it is an atomic and not
+        // the `recorder` mutex: a recording that starts mid-pass stops this
+        // run cooperatively, through the same token `diarize/cancel` uses, so
+        // there is one way to stop and one place that decides nothing is
+        // written afterwards.
+        let stands_down = yields_to_recording(priority, true).then(|| Arc::clone(&self.recording));
+        let pause = cancel.clone();
 
         // The models are CPU-bound C++; keeping them off the async runtime is
         // what stops a long Meeting from stalling every Client request.
@@ -1573,6 +1639,11 @@ impl Core {
                 &mut diarizer,
                 decoded.audio(),
                 &mut |progress| {
+                    if let Some(recording) = &stands_down
+                        && recording.load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        pause.cancel();
+                    }
                     // Throttled to whole percent: a notification per span
                     // would flood every attached Client with numbers nobody
                     // reads.
@@ -1599,14 +1670,29 @@ impl Core {
 
         let (diarization, rebuilt) = match outcome {
             Ok((Ok(diarization), rebuilt)) => (diarization, rebuilt),
-            Ok((Err(diarize::DiarizeError::Cancelled), _)) => return Ok(0),
+            // Nothing is written on this path — the transaction below is
+            // never reached — so the only question left is whether the
+            // Meeting is still owed. If a recording is what stopped it, it
+            // is. An Operator cancelling a `Back` run mid-recording is
+            // reported as a pause, which costs nothing: `diarize/cancel` has
+            // already taken the row out, so both answers leave the same
+            // queue.
+            Ok((Err(diarize::DiarizeError::Cancelled), _)) => {
+                return Ok(
+                    if yields_to_recording(priority, self.is_recording().await) {
+                        DiarizeOutcome::Paused
+                    } else {
+                        DiarizeOutcome::Cancelled
+                    },
+                );
+            }
             Ok((Err(error), _)) => {
                 tracing::warn!(%error, "diarization did not run; the Meeting is unattributed");
-                return Ok(0);
+                return Ok(DiarizeOutcome::Wrote(0));
             }
             Err(error) => {
                 tracing::warn!(%error, "diarization failed; the Meeting is unattributed");
-                return Ok(0);
+                return Ok(DiarizeOutcome::Wrote(0));
             }
         };
 
@@ -1710,7 +1796,7 @@ impl Core {
             .await?;
 
         self.mirror_wake.notify_one();
-        Ok(written)
+        Ok(DiarizeOutcome::Wrote(written))
     }
 
     /// Points "You" at the Speakers this run identified as the Operator.
@@ -1783,6 +1869,17 @@ impl Core {
     /// whose audio reliably panics the runtime would be retried on every
     /// start; it is bounded by `run_guarded` catching the panic and the run
     /// then finishing, unattributed, which takes it out of the line.
+    ///
+    /// **A recording stands the backlog down, and the backlog keeps its
+    /// turn.** Two neural models and a capture pass want the same machine, so
+    /// `Back` work — the model-change re-run, and the catch-up of Meetings a
+    /// previous Core left — does not start while a Meeting records, and stops
+    /// if one starts mid-pass. `Front` work does not yield: somebody is
+    /// waiting for a Meeting that just ended, and Auto-Record opening the next
+    /// call is not a reason to make them wait longer. A stood-down Meeting
+    /// stays in the line, in the record, so it survives both the recording and
+    /// a restart; it resumes when the recording ends, because stopping a
+    /// Meeting queues it and that wakes this loop.
     pub async fn run_diarization_queue(
         self: std::sync::Arc<Self>,
         shutdown: tokio_util::sync::CancellationToken,
@@ -1797,7 +1894,7 @@ impl Core {
                     None
                 });
 
-            let Some(meeting_id) = next else {
+            let Some((meeting_id, priority)) = next else {
                 tokio::select! {
                     _ = shutdown.cancelled() => break,
                     _ = self.diarize_wake.notified() => continue,
@@ -1813,29 +1910,60 @@ impl Core {
                 break;
             }
 
-            match self.diarize_meeting(&meeting_id).await {
-                Ok(0) => {}
-                Ok(attributed) => {
-                    tracing::info!(meeting = %meeting_id, attributed, "Diarization attributed a Meeting")
-                }
+            let outcome = match self.diarize_meeting(&meeting_id, priority).await {
+                Ok(outcome) => outcome,
                 // Never fatal, and never the Meeting's problem: the record
                 // stands whether or not anyone could be identified in it.
+                // Out of the line, because a run that failed on its own audio
+                // would fail the same way on the next pass.
                 Err(error) => {
-                    tracing::warn!(meeting = %meeting_id, %error, "Diarization did not complete")
+                    tracing::warn!(meeting = %meeting_id, %error, "Diarization did not complete");
+                    DiarizeOutcome::Wrote(0)
+                }
+            };
+
+            match outcome {
+                DiarizeOutcome::Wrote(0) | DiarizeOutcome::Cancelled => {}
+                DiarizeOutcome::Wrote(attributed) => {
+                    tracing::info!(meeting = %meeting_id, attributed, "Diarization attributed a Meeting")
+                }
+                DiarizeOutcome::Paused => {
+                    tracing::debug!(meeting = %meeting_id, "a recording has the machine; the backlog waits")
                 }
             }
 
-            let done = meeting_id.clone();
-            if let Err(error) = self
-                .store
-                .write(move |connection| crate::store::diarize_queue::finish(connection, &done))
-                .await
-            {
-                // Left in the queue, so it is retried. Better than dropping
-                // it, and the alternative — spinning on a Meeting whose row
-                // cannot be deleted — needs the write path to be broken,
-                // which is a bigger problem than this loop.
-                tracing::warn!(meeting = %meeting_id, %error, "could not clear the Diarization queue");
+            // The row goes only when the run is over for good. A pause left
+            // it owed on purpose, and a cancellation already deleted it in
+            // `diarize_cancel` — finishing either here would turn "stand
+            // aside" into "drop", which is the bug this outcome exists to
+            // stop.
+            if let DiarizeOutcome::Wrote(_) = outcome {
+                let done = meeting_id.clone();
+                if let Err(error) = self
+                    .store
+                    .write(move |connection| crate::store::diarize_queue::finish(connection, &done))
+                    .await
+                {
+                    // Left in the queue, so it is retried. Better than
+                    // dropping it, and the alternative — spinning on a
+                    // Meeting whose row cannot be deleted — needs the write
+                    // path to be broken, which is a bigger problem than this
+                    // loop.
+                    tracing::warn!(meeting = %meeting_id, %error, "could not clear the Diarization queue");
+                }
+            }
+
+            if matches!(outcome, DiarizeOutcome::Paused) {
+                // Otherwise this loop spins on a Meeting it has just decided
+                // not to run. `stop_meeting` queues the ended Meeting, which
+                // notifies the wake, so the ordinary end of a recording
+                // resumes the backlog at once; the timer is the same
+                // belt-and-braces as above.
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = self.diarize_wake.notified() => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+                }
             }
         }
         tracing::debug!("diarization worker finished");
@@ -2011,7 +2139,7 @@ impl Core {
 
     /// Whether a Meeting is being recorded right now.
     pub async fn is_recording(&self) -> bool {
-        self.recorder.lock().await.is_some()
+        self.recording.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// True once the Operator has acknowledged the Briefing here.
@@ -2276,6 +2404,8 @@ impl Core {
         ) {
             Ok(recorder) => {
                 *self.recorder.lock().await = Some(recorder);
+                self.recording
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
                 // Segments are persisted by their own task, so a slow disk
                 // slows the transcript rather than the recording.
                 tokio::spawn(write_segments(
@@ -2313,6 +2443,8 @@ impl Core {
         // Finalize capture before answering: "stopped" must mean the audio
         // is merged and on disk, not merged eventually.
         if let Some(recorder) = self.recorder.lock().await.take() {
+            self.recording
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             let outcome = recorder.finish().await;
             if let Some(path) = &outcome.audio_path {
                 let relative = self.relative_to_history(path);
@@ -3680,6 +3812,27 @@ mod tests {
             chrono::DateTime::parse_from_rfc3339(&ended).expect("end"),
             chrono::DateTime::parse_from_rfc3339(touched).expect("touched")
         );
+    }
+
+    /// The one rule the queue worker's pause is: only bulk work yields.
+    ///
+    /// Stated here rather than only in the worker because the live version
+    /// needs the ONNX models to reach, and this is the decision itself —
+    /// every other part of the pause is what the worker does with the answer.
+    #[test]
+    fn only_bulk_work_stands_down_for_a_recording() {
+        use crate::store::diarize_queue::Priority;
+
+        assert!(
+            yields_to_recording(Priority::Back, true),
+            "an overnight re-run does not take the machine off a call"
+        );
+        assert!(
+            !yields_to_recording(Priority::Front, true),
+            "and a Meeting somebody is waiting for keeps its turn regardless"
+        );
+        assert!(!yields_to_recording(Priority::Back, false));
+        assert!(!yields_to_recording(Priority::Front, false));
     }
 
     #[test]

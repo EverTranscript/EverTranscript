@@ -1,0 +1,31 @@
+# AMI test, 16 meetings. The 24 configurations predeclared in DECISIONS Q182 and
+# run in Q183, aggregated from /tmp/test-split.events.<arm>.<clustering>-<identity>.
+# Seconds of reference speech. Denominators are fixed across every row: 25538.370s
+# returning, 5175.554s new. DER is a property of the clustering pass alone, so it
+# repeats within a clustering row and is identical for a split and its control.
+# No new measurement: these are the saved events of that run.
+arm	clustering	identity	merge	floor	margin	der_percent	cell	returning_correct_s	returning_wrong_s	new_correct_s	new_false_attach_s
+unconstrained	wespeaker	wespeaker	0.65	0.30	0.00	28.64	control	17898.080	4209.530	4157.084	185.790
+unconstrained	wespeaker	redimnet2	0.65	0.30	0.00	28.64	split	17921.350	4204.280	4157.084	192.950
+unconstrained	redimnet2	wespeaker	0.60	0.30	0.00	24.62	split	20229.050	2866.450	4249.324	430.370
+unconstrained	redimnet2	redimnet2	0.60	0.30	0.00	24.62	control	18872.490	4707.580	4527.834	162.950
+unconstrained	wespeaker	wespeaker	0.65	0.62	0.08	28.64	control	19634.760	2437.530	4306.634	8.120
+unconstrained	wespeaker	redimnet2	0.65	0.62	0.08	28.64	split	19643.710	2452.290	4314.754	0.000
+unconstrained	redimnet2	wespeaker	0.60	0.62	0.08	24.62	split	20605.120	2905.520	4677.384	0.000
+unconstrained	redimnet2	redimnet2	0.60	0.62	0.08	24.62	control	20628.360	2927.080	4677.384	0.000
+unconstrained	wespeaker	wespeaker	0.65	0.80	0.00	28.64	control	19634.760	2436.900	4314.754	0.000
+unconstrained	wespeaker	redimnet2	0.65	0.80	0.00	28.64	split	19634.760	2401.140	4314.754	0.000
+unconstrained	redimnet2	wespeaker	0.60	0.80	0.00	24.62	split	20324.570	2889.380	4677.384	0.000
+unconstrained	redimnet2	redimnet2	0.60	0.80	0.00	24.62	control	20324.570	2889.380	4677.384	0.000
+constrained	wespeaker	wespeaker	0.10	0.30	0.00	23.51	control	15408.760	7954.660	4351.244	609.110
+constrained	wespeaker	redimnet2	0.10	0.30	0.00	23.51	split	15294.970	8075.570	4407.374	552.980
+constrained	redimnet2	wespeaker	0.10	0.30	0.00	23.94	split	16095.140	7470.680	4374.444	585.910
+constrained	redimnet2	redimnet2	0.10	0.30	0.00	23.94	control	17567.520	6154.970	4780.874	179.480
+constrained	wespeaker	wespeaker	0.10	0.62	0.08	23.51	control	17039.900	4328.150	4947.024	13.330
+constrained	wespeaker	redimnet2	0.10	0.62	0.08	23.51	split	18116.280	4108.840	4960.354	0.000
+constrained	redimnet2	wespeaker	0.10	0.62	0.08	23.94	split	17742.890	3881.580	4954.484	5.870
+constrained	redimnet2	redimnet2	0.10	0.62	0.08	23.94	control	19278.570	4001.730	4934.084	26.270
+constrained	wespeaker	wespeaker	0.10	0.80	0.00	23.51	control	18332.420	4391.370	4960.354	0.000
+constrained	wespeaker	redimnet2	0.10	0.80	0.00	23.51	split	18332.420	4532.870	4960.354	0.000
+constrained	redimnet2	wespeaker	0.10	0.80	0.00	23.94	split	19019.940	4107.490	4960.354	0.000
+constrained	redimnet2	redimnet2	0.10	0.80	0.00	23.94	control	19063.720	4194.350	4960.354	0.000
