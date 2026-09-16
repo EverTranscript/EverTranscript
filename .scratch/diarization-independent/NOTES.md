@@ -126,12 +126,28 @@ halves of the fix want an embedding bounded to the claimed ranges plus a
 stable source identity, which is the seeding path's own work.
 
 `store::rerun` is the backlog state over the existing queue: one row for the
-model identity, the original size and what cancelling abandoned, plus a
+model identity, the size it owns and what cancelling abandoned, plus a
 membership table so it counts and cancels **its own** Meetings — `Back` is a
 scheduling class and production already enqueues there for Meetings that were
 never diarized. The first start records the identity and enqueues nothing;
 `begin` is the explicit path a wipe uses and consults no row, so it works with
 no prior metadata. Tables unregistered, gate tested beside 05's.
+
+Two ordinary transitions were wrong in the first version and are fixed
+(`c175ad0`). Cancelling cleared every membership row, including Meetings it
+had just declined to cancel because somebody promoted them to `Front` — they
+are still owed, so dropping them made `done` report a promotion as a walk.
+And beginning again rebuilt membership from `enqueue`'s answer, which is
+`false` for anything already queued, so a second model change mid-backlog
+disowned everything the first still had in line. Ownership is now surrendered
+for exactly what the queue surrendered, and reconciled rather than rebuilt.
+
+**There is no walker to build.** `Core::run_diarization_queue` already walks
+the queue, resumes across restarts and holds the one-at-a-time property; the
+re-run's walk is `begin` filling `Back`. What is genuinely missing is the
+pause while a Meeting records — the worker never consults `is_recording()`,
+so today's catch-up already competes with a live recording — plus the two
+additive protocol pieces, the trigger, and the seeding path.
 
 Two traps from the old branch's version are written into the ticket so a
 rewrite cannot lose them: `begin_if_the_model_changed` treats an *absent*

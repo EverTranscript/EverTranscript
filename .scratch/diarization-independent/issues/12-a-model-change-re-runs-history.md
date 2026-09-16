@@ -193,13 +193,46 @@ Both tables live in `schema::PENDING_MODEL_CHANGE_RERUN`, **unregistered**, so
 every function fails on a current History by design.
 `the_pending_rerun_is_not_registered` is the gate, beside 05's.
 
-### Still to build
+### There is no walker to build
 
-`store::rerun`'s walk and its production trigger, the per-segment seeding path
-(which is also where the negative half returns), the `rerun` block on
-`diarize/status`, and `diarize/rerunCancel`. The two protocol changes are
-additive (ADR-0028); a Core with no re-run must encode byte-identically to
-today's shape.
+`Core::run_diarization_queue` (ticket 08) already is one, and the re-run's
+"walk" is `begin` putting Meetings at `Back` and letting it drain them. It
+supplies, unchanged:
+
+- **the walk** — one worker, so at-most-one-run is a property of the shape;
+  `peek` orders by priority then `enqueued_at`, which is the oldest-first
+  order `begin` enqueues in;
+- **resume across restarts** — the queue is in the record and a Meeting
+  leaves the line only once its run is over, so a Core killed mid-run comes
+  back owing it;
+- **wake and idle** — a `Notify` plus a 30-second timer, so a backlog
+  enqueued by anything is picked up without a poll loop.
+
+Building a second runner for the re-run would duplicate all of it and
+reintroduce the one-at-a-time question the single worker answers.
+
+### The remaining seams, smallest first
+
+1. **Pause while a Meeting records — missing, and it is not only the
+   re-run's.** `run_diarization_queue` never consults `is_recording()`; the
+   only callers are `detect::policy` and `detect::driver`. So today's
+   overnight catch-up already competes with a live recording, and the re-run
+   would too. The fix is a guard in the worker's select, which changes
+   behaviour for *all* `Back` work — its own decision, not part of
+   activating the re-run.
+2. **`state` errors on an unregistered schema**, with `no such table:
+   diarize_rerun`. Any production reader needs a policy for that: tolerate
+   the missing table as "no re-run", or read it only after activation.
+   Worth settling before a reader is written, not inside one.
+3. **`diarize/status` gains an optional `rerun` block** — additive
+   (ADR-0028), needing a test that a Core with no re-run encodes
+   byte-identically to today.
+4. **`diarize/rerunCancel`** — an additive method over `rerun::cancel`.
+5. **The trigger** — `begin_if_the_model_changed` at start, and `begin` from
+   the wipe. Activation, so it waits on the model decision and on 05.
+6. **The seeding path** — consume `claims` before `reconcile::apply` and
+   re-embed each claimed Speaker's own ranges. The largest piece, it needs
+   the models, and it is where the negative half returns.
 
 ## Two traps in the old branch's version, checked against this code
 
