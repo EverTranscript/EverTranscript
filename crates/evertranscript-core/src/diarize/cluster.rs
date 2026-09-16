@@ -233,51 +233,172 @@ fn best_cluster_for(
 /// centroid, closest pair first, is what the catalog specifies and it is
 /// what fixed it.
 pub fn agglomerate(embeddings: &BTreeMap<Cluster, Embedding>) -> BTreeMap<Cluster, Cluster> {
-    // Each cluster starts as its own group; groups merge until no pair is
-    // close enough.
-    let mut groups: Vec<(Vec<Cluster>, Vec<f32>)> = embeddings
+    let groups: Vec<Group> = embeddings
         .iter()
-        .map(|(cluster, embedding)| (vec![*cluster], embedding.vector.clone()))
+        .map(|(cluster, embedding)| Group {
+            members: vec![*cluster],
+            centroid: embedding.vector.clone(),
+        })
         .collect();
 
-    loop {
-        let mut best: Option<(usize, usize, f32)> = None;
-        for left in 0..groups.len() {
-            for right in (left + 1)..groups.len() {
-                let score = cosine(&groups[left].1, &groups[right].1);
-                if score >= MERGE_THRESHOLD && best.is_none_or(|(_, _, previous)| score > previous)
-                {
-                    best = Some((left, right, score));
-                }
-            }
-        }
-        let Some((left, right, _)) = best else { break };
+    // One pass while the meeting is small enough, two when it is not. The
+    // second stage runs over block centroids, of which there are a handful
+    // per block, so it is never the expensive one.
+    let merged = if groups.len() <= BLOCK {
+        merge_closest_first(groups)
+    } else {
+        let blocked: Vec<Group> = groups
+            .chunks(BLOCK)
+            .flat_map(|block| merge_closest_first(block.to_vec()))
+            .collect();
+        merge_closest_first(blocked)
+    };
 
-        // Merge into the earlier group and recentre. The centroid is what
-        // makes this stable: comparing against a single member is how a
-        // group drifts apart one window at a time.
-        let (members, vector) = groups.remove(right);
-        let weight = groups[left].0.len() as f32;
-        let total = weight + members.len() as f32;
-        for (slot, value) in groups[left].1.iter_mut().zip(vector.iter()) {
-            *slot = (*slot * weight + value * members.len() as f32) / total;
-        }
-        l2_normalize(&mut groups[left].1);
-        groups[left].0.extend(members);
-    }
-
-    groups
+    merged
         .into_iter()
-        .flat_map(|(members, _)| {
+        .flat_map(|group| {
             // The lowest id names the group, so the result does not depend
             // on the order groups happened to merge in — otherwise
             // "Speaker 1" and "Speaker 2" could swap between two runs over
             // the same audio, and an Operator who named one has named the
             // other.
-            let canonical = members.iter().copied().min().expect("a non-empty group");
-            members.into_iter().map(move |member| (member, canonical))
+            let canonical = group
+                .members
+                .iter()
+                .copied()
+                .min()
+                .expect("a non-empty group");
+            group
+                .members
+                .into_iter()
+                .map(move |member| (member, canonical))
         })
         .collect()
+}
+
+/// How many windows one block of the first stage holds.
+///
+/// Blocks are consecutive in cluster-id order, which is time order, so a
+/// block is a stretch of the meeting. The same voice appears in many of them
+/// and the second stage is what puts those back together.
+const BLOCK: usize = 2_000;
+
+/// One group on its way to becoming a speaker.
+#[derive(Clone)]
+struct Group {
+    members: Vec<Cluster>,
+    centroid: Vec<f32>,
+}
+
+/// Closest pair first, repeatedly, against a running centroid.
+///
+/// The naive form of this — rescan every pair, merge the best, repeat — is
+/// cubic, and it is what the close-out measured at 70 s on a 1,259-window
+/// meeting, projecting about a quarter of an hour for two hours of audio.
+/// Sliding the segmentation window at one second instead of hopping it by
+/// ten multiplies the windows by roughly ten, and ten times the windows
+/// through a cubic clusterer is not a slower product but an unusable one.
+///
+/// So the scores are computed once and kept, and each group remembers its
+/// own best partner. Choosing the global best is then a scan of those
+/// rather than of every pair, and a merge only has to recompute the row
+/// that changed plus the rows that were pointing at the two rows it
+/// replaced.
+///
+/// ponytail: the score matrix is n² floats, which is why `BLOCK` exists at
+/// all — 2,000 groups is 16 MB and bounded, where a two-hour meeting's
+/// 12,000 would be 576 MB. If blocks ever need to be much larger, the
+/// matrix is the thing to replace, with a nearest-neighbour chain.
+fn merge_closest_first(mut groups: Vec<Group>) -> Vec<Group> {
+    let count = groups.len();
+    if count < 2 {
+        return groups;
+    }
+
+    let mut score = vec![f32::NEG_INFINITY; count * count];
+    for left in 0..count {
+        for right in (left + 1)..count {
+            let value = cosine(&groups[left].centroid, &groups[right].centroid);
+            score[left * count + right] = value;
+            score[right * count + left] = value;
+        }
+    }
+
+    let mut alive = vec![true; count];
+    let mut best: Vec<(usize, f32)> = (0..count)
+        .map(|row| best_partner(row, count, &score, &alive))
+        .collect();
+
+    loop {
+        // The best of every group's best is the best pair there is: if some
+        // other pair scored higher, one of its members would be pointing at
+        // the other.
+        let mut pick: Option<(usize, usize, f32)> = None;
+        for row in 0..count {
+            if !alive[row] {
+                continue;
+            }
+            let (partner, value) = best[row];
+            if value >= MERGE_THRESHOLD && pick.is_none_or(|(_, _, previous)| value > previous) {
+                pick = Some((row, partner, value));
+            }
+        }
+        let Some((first, second, _)) = pick else {
+            break;
+        };
+        let (keep, drop) = (first.min(second), first.max(second));
+
+        // Merge into the earlier group and recentre. The centroid is what
+        // makes this stable: comparing against a single member is how a
+        // group drifts apart one window at a time.
+        let taken = std::mem::take(&mut groups[drop].members);
+        let vector = std::mem::take(&mut groups[drop].centroid);
+        let weight = groups[keep].members.len() as f32;
+        let total = weight + taken.len() as f32;
+        for (slot, value) in groups[keep].centroid.iter_mut().zip(vector.iter()) {
+            *slot = (*slot * weight + value * taken.len() as f32) / total;
+        }
+        l2_normalize(&mut groups[keep].centroid);
+        groups[keep].members.extend(taken);
+        alive[drop] = false;
+
+        for other in 0..count {
+            if !alive[other] || other == keep {
+                continue;
+            }
+            let value = cosine(&groups[keep].centroid, &groups[other].centroid);
+            score[keep * count + other] = value;
+            score[other * count + keep] = value;
+        }
+        // Anyone whose best was one of the two rows that just changed has to
+        // look again; everyone else's answer is still true.
+        for other in 0..count {
+            if alive[other] && (other == keep || best[other].0 == keep || best[other].0 == drop) {
+                best[other] = best_partner(other, count, &score, &alive);
+            }
+        }
+    }
+
+    groups
+        .into_iter()
+        .zip(alive)
+        .filter_map(|(group, living)| living.then_some(group))
+        .collect()
+}
+
+/// The living group this one is closest to, and how close.
+fn best_partner(row: usize, count: usize, score: &[f32], alive: &[bool]) -> (usize, f32) {
+    let mut best = (row, f32::NEG_INFINITY);
+    for other in 0..count {
+        if other == row || !alive[other] {
+            continue;
+        }
+        let value = score[row * count + other];
+        if value > best.1 {
+            best = (other, value);
+        }
+    }
+    best
 }
 
 /// The average of a Speaker's exemplars, weighted by how much voiced audio
@@ -1428,5 +1549,89 @@ mod tests {
         // the same audio, and an Operator who named one has named the other.
         let split = clusters(&[(7, &[1.0, 0.0, 0.0]), (2, &[0.97, 0.24, 0.0])]);
         assert_eq!(agglomerate(&split)[&Cluster(7)], Cluster(2));
+    }
+
+    /// Windows from `voices` distinct speakers, interleaved the way a real
+    /// meeting produces them — a few windows each, round robin — with a
+    /// little jitter so no two vectors are identical.
+    fn many_windows(voices: usize, windows: usize) -> BTreeMap<Cluster, Embedding> {
+        (0..windows)
+            .map(|index| {
+                let voice = index % voices;
+                let mut vector = vec![0.0f32; voices];
+                vector[voice] = 1.0;
+                // Enough wobble to be a different vector, far too little to
+                // be a different speaker.
+                vector[(voice + 1) % voices] = 0.02 * ((index % 7) as f32);
+                (Cluster(index as u32), embedding(&vector))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_meetings_worth_of_windows_clusters_in_seconds_rather_than_minutes() {
+        // The whole reason for the two stages. 12,000 windows is roughly what
+        // a two-hour meeting produces once the segmentation window slides at
+        // one second instead of hopping by ten — and what the single cubic
+        // pass could not do at all. The assertion is the *answer*; the
+        // timing is only meaningful because a cubic pass over this input
+        // would not finish inside anyone's patience.
+        let windows = many_windows(4, 12_000);
+        let started = std::time::Instant::now();
+        let merged = agglomerate(&windows);
+        let elapsed = started.elapsed();
+
+        let groups: BTreeSet<Cluster> = merged.values().copied().collect();
+        assert_eq!(
+            groups.len(),
+            4,
+            "four voices went in and {} came out",
+            groups.len()
+        );
+        assert_eq!(merged.len(), 12_000, "every window is placed");
+        assert!(
+            elapsed.as_secs() < 60,
+            "clustering took {elapsed:?}, which is the ceiling this ticket exists to remove"
+        );
+    }
+
+    #[test]
+    fn two_stages_find_the_same_voices_as_one() {
+        // The second stage exists to put back together what blocking split
+        // up: the same speaker appears in every block, as a separate group
+        // in each, and must come out as one. Asserted by construction rather
+        // than by timing — one block's worth against several.
+        let one_block = agglomerate(&many_windows(3, BLOCK - 1));
+        let many_blocks = agglomerate(&many_windows(3, BLOCK * 3));
+
+        let count = |merged: &BTreeMap<Cluster, Cluster>| {
+            merged
+                .values()
+                .copied()
+                .collect::<BTreeSet<Cluster>>()
+                .len()
+        };
+        assert_eq!(count(&one_block), 3);
+        assert_eq!(
+            count(&many_blocks),
+            3,
+            "blocking must not turn one voice into one voice per block"
+        );
+    }
+
+    #[test]
+    fn a_voice_heard_only_in_a_later_block_is_still_its_own_speaker() {
+        // The failure blocking could introduce and a single pass could not:
+        // someone who arrives late lives entirely inside one block, and a
+        // second stage that compared only block-to-block averages would
+        // fold them into whoever dominates that block.
+        let mut windows = many_windows(2, BLOCK * 2);
+        // A third voice, present only in the final stretch.
+        for index in (BLOCK * 2)..(BLOCK * 2 + 40) {
+            windows.insert(Cluster(index as u32), embedding(&[0.0, 0.0, 1.0]));
+        }
+        let merged = agglomerate(&windows);
+        let groups: BTreeSet<Cluster> = merged.values().copied().collect();
+        assert_eq!(groups.len(), 3, "the late arrival is their own voice");
     }
 }
