@@ -201,16 +201,39 @@ a problem to resolve by averaging. They measure different things.
 
 ### What is not measured, and what is not ours to decide
 
-**The split-model option is unmeasured.** Every run above moves the clustering
-embedding and the recognition embedding together, so "WeSpeaker wins DER,
-ReDimNet2 wins recognition" does **not** establish that taking one of each
-combines their benefits. Decoupling them is a run nobody has done — and it is
-conditional on the split question being reopened, not a prerequisite for
-keeping one model, which is what the build does today and goes on doing.
+**The split-model option is measured on dev, and it does not pay** (Q171). The
+user authorised the measurement; nothing is adopted. Eight cells — each model's
+partition crossed with each model's vectors, in both clustering arms — over the
+32-point matcher grid. Turn placement is held fixed by construction, so every
+cell's DER equals its clustering control's, and the controls reproduce the
+record: 29.13% and 26.01% unconstrained, and at constrained 0.80/0.00 the same
+18120s and 17926s of correct returning time Q151 has.
 
-**Two decisions are the user's and are outstanding:** whether ≥ 2.0 points of
-DER is the adoption bar, and whether to pursue the split-model architecture at
-all. **Separately unresolved, and not a substitute for either:** the rate of
+Over 128 off-diagonal comparisons there is **one** dominance, at constrained
+0.30/0.00, where both controls are badly calibrated — WeSpeaker's own best at
+that arm is 18120s against the 16131s its control manages there — so it is a
+dominance over two poor configurations rather than over either model at its
+best. At each arm's best point the identity model is close to inert:
+
+| at constrained 0.80/0.00 | ret. correct | ret. wrong | new correct | false attach |
+|---|---|---|---|---|
+| swap the **identity** model, partition held | 0 to −60s | −28 to +43s | 0 to +10s | −10 to 0s |
+| swap the **clustering** model, identity held | −193 to −253s | −156 to −171s | +19 to +29s | −19 to −29s |
+
+Unconstrained 0.45/0.00 is starker still: under ReDimNet2's partition the
+identity swap moves **nothing at all**, all four quantities identical to the
+second, while the partition swap moves correct returning by ~310s. So "WeSpeaker
+wins DER, ReDimNet2 wins recognition" does not resolve into a hybrid that takes
+both — on this split the recognition ledger is mostly measuring the partition
+underneath it. *Mechanism hypothesis, not measured:* the gallery is seeded from
+cluster centroids, so the matcher is asked about clusters the partition defined.
+
+Cost against that: a second model in the bundle and a second inference pass per
+meeting, 594s and 603s for these 18 meetings, for benefits in tens of seconds
+out of 22182.515s.
+
+**One decision is the user's and is outstanding:** whether ≥ 2.0 points of DER
+is the adoption bar. **Separately unresolved, and not a substitute for either:** the rate of
 exchange between a correct and a wrong attributed second, without which the
 recognition column cannot be collapsed to one ranking. Nothing here assigns any
 of the three. Q152's rule holds throughout: measurements, mechanism hypotheses
