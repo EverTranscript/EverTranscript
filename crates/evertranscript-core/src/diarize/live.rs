@@ -141,6 +141,25 @@ pub struct LiveDiarizer {
     embedding: Session,
     model_name: String,
     model_version: String,
+    keep_windows: bool,
+    windows: Vec<WindowVoice>,
+}
+
+/// One window's one speaker, as it was *before* agglomeration merged
+/// anything.
+///
+/// The merge threshold decides which of these are the same person, so it
+/// cannot be chosen from what came out the other side — the survivors of a
+/// merge at 0.60 are not evidence about a merge at 0.70. This is the state
+/// that is evidence, and [`LiveDiarizer::keep_windows`] is the only way to
+/// see it.
+#[derive(Debug, Clone)]
+pub struct WindowVoice {
+    /// The milliseconds this slot holds, as the segmenter placed them.
+    /// Kept so a measurement can say which reference speaker it was.
+    pub ranges: Vec<(u64, u64)>,
+    pub vector: Vec<f32>,
+    pub voiced_ms: u64,
 }
 
 impl LiveDiarizer {
@@ -164,7 +183,29 @@ impl LiveDiarizer {
             model_version: crate::models::registry::DIARIZE_EMBEDDING
                 .version
                 .to_string(),
+            keep_windows: false,
+            windows: Vec::new(),
         })
+    }
+
+    /// Keeps every pre-merge window vector from the next diarization, for a
+    /// caller that means to choose a merge threshold from them.
+    ///
+    /// Off by default and never on in production: a two-hour meeting is some
+    /// twelve thousand windows, which is the reason agglomeration is blocked
+    /// at all. Ticket 07's threshold sweep is the only caller — it pays the
+    /// memory once so that every candidate threshold can be scored from one
+    /// pass over the audio instead of one pass each.
+    pub fn keep_windows(&mut self, keep: bool) {
+        self.keep_windows = keep;
+        if !keep {
+            self.windows = Vec::new();
+        }
+    }
+
+    /// The pre-merge windows of the last diarization, if they were kept.
+    pub fn windows(&self) -> &[WindowVoice] {
+        &self.windows
     }
 
     /// Slides the segmentation window across one channel.
@@ -480,6 +521,11 @@ impl Diarizer for LiveDiarizer {
             )));
         }
 
+        // Each diarization's windows replace the last one's, so a diarizer
+        // reused across two meetings does not hand the second one the first
+        // meeting's voices.
+        self.windows = Vec::new();
+
         let total_ms = audio.duration_ms();
         let mut provisional: BTreeMap<Cluster, Embedding> = BTreeMap::new();
         // Where each provisional vector came from — which channel's window
@@ -516,6 +562,13 @@ impl Diarizer for LiveDiarizer {
                     };
                     let cluster = Cluster(next);
                     next += 1;
+                    if self.keep_windows {
+                        self.windows.push(WindowVoice {
+                            ranges: ranges.clone(),
+                            vector: vector.clone(),
+                            voiced_ms: voiced,
+                        });
+                    }
                     provisional.insert(
                         cluster,
                         Embedding::new(vector, &self.model_name, &self.model_version, voiced),

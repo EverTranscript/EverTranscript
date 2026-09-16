@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Fetches the AMI test set and BUT's references into a cache directory, for
-# the DER and EER harness (`tests/diarization_accuracy.rs`, ticket 01).
+# Fetches an AMI split and BUT's references into a cache directory, for the
+# DER and EER harness (`tests/diarization_accuracy.rs`, ticket 01).
 #
 # Deliberately a script a person runs, not something a test does. The whole
 # product promises to work offline (ADR-0002), and a test binary that reached
@@ -9,7 +9,8 @@
 # it. Nothing in `cargo test` touches this; the harness reads the directory
 # or skips.
 #
-#   scripts/fetch-ami.sh ~/ami
+#   scripts/fetch-ami.sh ~/ami             # the test split, the default
+#   scripts/fetch-ami.sh ~/ami-dev dev     # the dev split, for choosing thresholds
 #   EVERTRANSCRIPT_MEASURE_DER=1 EVERTRANSCRIPT_AMI_DIR=~/ami \
 #     cargo test -p evertranscript-core --test diarization_accuracy -- --nocapture
 #
@@ -30,8 +31,13 @@
 set -euo pipefail
 
 root="${1:-}"
+split="${2:-test}"
 if [[ -z "$root" ]]; then
-  echo "usage: $0 <cache-dir>" >&2
+  echo "usage: $0 <cache-dir> [test|dev]" >&2
+  exit 2
+fi
+if [[ "$split" != test && "$split" != dev ]]; then
+  echo "$0: split must be test or dev, not '$split'" >&2
   exit 2
 fi
 
@@ -44,18 +50,37 @@ for tool in curl ffmpeg; do
   }
 done
 
-# BUT's split, vendored here as a list rather than fetched, so the set being
-# measured is visible in the diff when it changes. This is the `test` half of
-# AMI-diarization-setup — the same sixteen meetings pyannote publishes its
-# 18.8% against.
-meetings=(
-  EN2002a EN2002b EN2002c EN2002d
-  ES2004a ES2004b ES2004c ES2004d
-  IS1009a IS1009b IS1009c IS1009d
-  TS3003a TS3003b TS3003c TS3003d
-)
+# BUT's splits, vendored here as lists rather than fetched, so the set being
+# measured is visible in the diff when it changes.
+#
+# `test` is the same sixteen meetings pyannote publishes its 18.8% against.
+# `dev` is where a threshold is chosen, so that the number reported on test is
+# a measurement rather than a fit — choosing on test and reporting on test
+# reports how well the constant was tuned, not how well the model works.
+#
+# Each split goes in its own cache directory: pass a different `<cache-dir>`
+# for each, and point EVERTRANSCRIPT_AMI_DIR at whichever is being measured.
+# That keeps one layout rather than teaching the harness about splits.
+case "$split" in
+  test)
+    meetings=(
+      EN2002a EN2002b EN2002c EN2002d
+      ES2004a ES2004b ES2004c ES2004d
+      IS1009a IS1009b IS1009c IS1009d
+      TS3003a TS3003b TS3003c TS3003d
+    )
+    ;;
+  dev)
+    meetings=(
+      ES2011a ES2011b ES2011c ES2011d
+      IB4001 IB4002 IB4003 IB4004 IB4010 IB4011
+      IS1008a IS1008b IS1008c IS1008d
+      TS3004a TS3004b TS3004c TS3004d
+    )
+    ;;
+esac
 
-rttm_base="https://raw.githubusercontent.com/BUTSpeechFIT/AMI-diarization-setup/main/only_words/rttms/test"
+rttm_base="https://raw.githubusercontent.com/BUTSpeechFIT/AMI-diarization-setup/main/only_words/rttms/$split"
 audio_base="https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus"
 
 echo "==> references (BUT only_words, Apache-2.0)"
@@ -88,7 +113,7 @@ done
 
 cat <<EOF
 
-Done. ${#meetings[@]} meetings in $root
+Done. ${#meetings[@]} $split meetings in $root
 
   EVERTRANSCRIPT_MEASURE_DER=1 EVERTRANSCRIPT_AMI_DIR="$root" \\
     cargo test -p evertranscript-core --test diarization_accuracy -- --nocapture

@@ -1755,3 +1755,45 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** `feed_correction` is the only production writer of operator-sourced exemplars, so every one carrying a `meeting_id` is derivable from that Meeting's hints plus the run's embeddings — which is exactly what the re-run recomputes. Replacing the set is therefore lossless and makes a second walk idempotent, which matters because a Core killed mid-backlog re-walks the Meeting it died inside. Duplicates were the alternative and are not benign: copies are votes in `centroid`, so evidence that stacks is evidence that drifts. A third source value was rejected as a column nobody else would ever read.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q140 — diarization-pyannote-redimnet2/07 — deviation
+
+**Question:** "Re-express the recognition tests against the derived values rather than the literals" — re-expressed how? The tests currently encode the thresholds implicitly, in vectors chosen to sit the right side of 0.62 / 0.08 / 0.60.
+**Options considered:** wait for the AMI numbers and update the literal vectors to match / build each test's vectors from the constants so the arrangement moves with them / leave the vectors and add assertions that the constants are what the test assumed
+**Chosen:** Build the vectors from the constants — `at_cosine`, `above_floor`, and for the drift chain a layout in angles — with premise assertions where the relationship spans more than one pair.
+**Decided-by:** agent
+**Justification:** Updating literals would satisfy the words of the criterion and lose its point: a test whose vectors are re-fitted to each new threshold agrees with whatever it is told. The failure being guarded against is quieter than a red test — a raised floor turns the margin test into a floor test, which stays green while no longer covering the rule it was written for. Constructing from the constants makes that impossible to do silently. Verified rather than asserted: the seven recognition tests were run at seven (floor, margin, merge) combinations from 0.45/0.04/0.35 to 0.90/0.05/0.88, all 139 diarize tests passing at each; the first attempt failed the sweep and was wrong — equal chain steps merge the closer pair into a centroid the far end can no longer reach — which is the check earning its keep. Doing this before the numbers land is deliberate: the tests then constrain what the derivation may return instead of being rewritten to accept it.
+**Outcome:** applied
+**Ref:** (pending)
+
+**Deviation within it:** `confirmation_does_not_lower_the_floor` tested an orthogonal voice, which is refused at any threshold and so said nothing about the floor it is named for. It now tests a voice just below the floor.
+
+## Q141 — diarization-pyannote-redimnet2/07 — tradeoff
+
+**Question:** The merge threshold governs agglomerating *sub-window* embeddings, but the corpus cache holds one vector per finished cluster. Where does the evidence to choose it come from?
+**Options considered:** derive it from the per-voice centroids already cached / re-run the corpus once per candidate threshold / expose the pre-merge window vectors behind an opt-in and score every candidate from one pass
+**Chosen:** Expose them — `LiveDiarizer::keep_windows`, off by default — and make `agglomerate_at` take the threshold as an argument.
+**Decided-by:** agent
+**Justification:** Deriving from the finished clusters is circular: the survivors of a merge at 0.60 are not evidence about a merge at 0.70, because the pairs that would distinguish the two have already been merged away. Re-running per candidate is honest but pays for the embedding extraction — the expensive part — once per threshold rather than once, and this corpus is thirty-four meetings at six minutes each. The opt-in pays memory once and buys every candidate; production never sets it and carries one bool. Two costs accepted and bounded rather than hidden: the pairing is capped at 400 windows a meeting, evenly spaced (pairs grow as the square, and the full corpus would be tens of millions of them on the machine whose memory guard forced this measurement to be taken a meeting per process); and `equal_error_rate` was rewritten from a re-count at every distinct score to a sort-and-sweep, because the old shape was quadratic and merely slow on thousands of voice pairs but does not terminate on millions of window pairs. The rewrite is checked against the old counting method as a reference implementation, on data with deliberate ties.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q142 — diarization/07 — gate-resolution
+
+**Question:** Where do `MATCH_FLOOR`, `MATCH_MARGIN` and `MERGE_THRESHOLD` belong, now that both AMI splits have been measured?
+**Options considered:** move each to its own curve's knee / keep each and record the curve / move only the ones both splits agree on
+**Chosen:** All three kept — 0.62, 0.08, 0.60 — with the dev and test curves recorded beside them in the constants' own documentation.
+**Decided-by:** agent
+**Justification:** Two of the three are confirmed rather than merely left alone. Dev's false-accept curve for the floor falls steeply to 0.60 and is flat past it while false-reject keeps climbing, so 0.62 is the cheapest point buying the whole guarantee, and test agrees within a hundredth. The merge threshold has three curves that disagree — window pairs say 0.23-0.27, recognition improves monotonically to the edge of the swept range, purity and splintering show the trade both hide — and settling it needs DER per candidate, which needs window timestamps the cache does not hold; named as owed rather than guessed at. The margin is the one where the obvious reading is wrong and the reason is worth keeping: dev's pipeline-voice curve has a textbook knee at 0.15, but those voices are shards of speakers, so that curve is largely one person's fragments competing with each other. Measured against reference-built voices the knee vanishes — on test every winner is already right at any margin from 0.00 to 0.20, on dev the wrong winners hold gaps above 0.17 — so moving it would have fitted a constant to a clustering defect and looked like progress.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q143 — diarization/07 — escalation
+
+**Question:** Ticket 07's bar is cross-meeting EER at or under 1%. Measured: 35.82% on test, 35.09% on dev. Land the ticket short of its bar, or hold it?
+**Options considered:** restate the bar as unreachable and close / hold ticket 07 open and re-scope the work onto the clustering / lower the bar to what the pipeline measures
+**Chosen:** —
+**Decided-by:** —
+**Justification:** Only a human can decide, and the reason is that the obvious conclusion is the wrong one. Before the oracle measurement the honest report was "off by more than an order of magnitude, and probably unreachable" — an earlier reading in this same session said exactly that. Rebuilding each meeting's voices from the reference, one centroid per person, gives 0.00% EER and 100% nearest-right on test and 5.64% / 90.3% on dev. The bar is therefore reachable and the embedding already reaches it; the entire 35% is paid by in-meeting clustering producing about forty-five voices per meeting for about four people, so most trials compare one person's shards with another's. That relocates the work: no value of the three constants this ticket owns can fix a partition, and ticket 07's instrument is the wrong lever for its own bar. Whether that means closing 07 against criteria 2-4 and opening clustering work, or holding 07 until the fragmentation is fixed, is a scoping call about the ticket tree — and it interacts with the still-open Q135, which asks whether to land the ReDimNet2 swap at 20.00% DER against an 18.8% bar. Both are now the same question about the same subsystem, and answering them apart risks answering them inconsistently.
+**Outcome:** escalated
+**Ref:** (pending)

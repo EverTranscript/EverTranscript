@@ -27,9 +27,23 @@ use super::Embedding;
 
 /// How similar two voices must be before they can be the same person.
 ///
-/// From the catalog's reference numbers. Deliberately not tuned here: a
-/// threshold moved without the DER measurement in ticket 09 is a threshold
-/// moved on vibes.
+/// **Derived on AMI dev and kept, which is a different thing from never
+/// having been examined.** Dev's false-accept curve falls steeply to 0.60
+/// (0.03% of different-colleague pairs accepted) and is flat past it
+/// (0.02%, 0.02%, 0.01% at 0.65, 0.70, 0.80) while the false-reject cost
+/// keeps climbing, so 0.62 sits just inside the flat region — the cheapest
+/// place that buys the whole guarantee. Test agrees: 0.03% at 0.60, 0.01%
+/// from 0.70 on. On both splits *no different-colleague pair clears 0.62*,
+/// which is the half of ticket 07's bar this constant is responsible for.
+///
+/// What the curve cannot yet settle is where the floor belongs once the
+/// clustering stops splitting each speaker into ten-odd voices. Measured
+/// against reference-built voices — one per person, the shape the product
+/// intends — the zero-false-accept point is 0.661 on test and 0.916 on dev.
+/// A quarter of a cosine apart is not a threshold, it is two splits that
+/// each hold seventy-odd voices disagreeing, so the re-derivation waits on
+/// the fragmentation rather than being fitted to it. `tests/
+/// diarization_accuracy.rs` prints both curves.
 pub const MATCH_FLOOR: f32 = 0.62;
 
 /// How far the best candidate must beat the runner-up.
@@ -37,6 +51,19 @@ pub const MATCH_FLOOR: f32 = 0.62;
 /// The condition that makes two similar voices produce *no* match rather
 /// than a coin-flip between them. Without it, the closer two colleagues
 /// sound, the more confidently the system mislabels them.
+///
+/// **Kept at 0.08 against a dev curve that appears to argue for 0.15, and
+/// the reason is worth the paragraph.** Read off the voices the pipeline
+/// currently produces, dev's wrong-winner rate falls from 14.65% at 0.08 to
+/// 3.82% at 0.15 and flattens there — a textbook knee. But those voices are
+/// fragments, ten or so per person, so that curve is mostly measuring one
+/// speaker's shards competing with each other, and a constant tuned on it
+/// would be tuned to a clustering bug. Against reference-built voices the
+/// knee is not there at all: on test every winner is already right, so the
+/// margin neither costs nor buys anything at any value from 0.00 to 0.20;
+/// on dev the handful of wrong winners hold gaps above 0.17, so no margin
+/// in a sane range refuses them either. The margin is not the mechanism
+/// that fails here, and moving it would only have looked like progress.
 pub const MATCH_MARGIN: f32 = 0.08;
 
 /// Agglomerative merge threshold on L2-normalized embeddings.
@@ -46,6 +73,21 @@ pub const MATCH_MARGIN: f32 = 0.08;
 /// coincidence rather than a carry-over, and worth saying so, because a
 /// threshold that survives a model change unexamined is the usual way one
 /// stops meaning anything.
+///
+/// **Ticket 07 swept it over the whole corpus and could not choose a better
+/// one, which is a finding rather than a failure to look.** Three curves
+/// disagree and each is measuring something real. Window pairs inside a
+/// meeting put the equal-error point at 0.23 (test) and 0.27 (dev), far
+/// below this. Cross-meeting recognition improves monotonically all the way
+/// to 0.90, the edge of the swept range, with no interior optimum — the
+/// signature of a metric tracking a shrinking population rather than a best
+/// value, because an unmerged window is a pure window. And the partition
+/// itself shows why neither can be taken at face value: at 0.30 the groups
+/// are only 58–68% pure, at 0.90 each speaker is shattered into sixty-odd
+/// of them, and 0.60 sits at 92–95% purity for about nineteen groups per
+/// person. Settling it needs DER at each candidate, which needs the
+/// windows' timestamps; the cache holds their vectors and labels only, so
+/// that measurement is owed rather than taken.
 pub const MERGE_THRESHOLD: f32 = 0.6;
 
 /// Least voice a cluster must hold before it is minted as a Speaker.
@@ -229,6 +271,21 @@ fn best_cluster_for(
 /// centroid, closest pair first, is what the catalog specifies and it is
 /// what fixed it.
 pub fn agglomerate(embeddings: &BTreeMap<Cluster, Embedding>) -> BTreeMap<Cluster, Cluster> {
+    agglomerate_at(embeddings, MERGE_THRESHOLD)
+}
+
+/// [`agglomerate`] at a threshold of the caller's choosing.
+///
+/// Exists so the threshold can be *measured* rather than argued about. A
+/// merge threshold's job is to minimize DER, not to classify pairs, so the
+/// only honest way to choose one is to re-cluster a corpus at each candidate
+/// and score what came out — which needs the threshold to be an argument.
+/// Ticket 07's sweep is the caller; production takes [`MERGE_THRESHOLD`]
+/// through [`agglomerate`] and does not pass one.
+pub fn agglomerate_at(
+    embeddings: &BTreeMap<Cluster, Embedding>,
+    threshold: f32,
+) -> BTreeMap<Cluster, Cluster> {
     let groups: Vec<Group> = embeddings
         .iter()
         .map(|(cluster, embedding)| Group {
@@ -241,13 +298,13 @@ pub fn agglomerate(embeddings: &BTreeMap<Cluster, Embedding>) -> BTreeMap<Cluste
     // second stage runs over block centroids, of which there are a handful
     // per block, so it is never the expensive one.
     let merged = if groups.len() <= BLOCK {
-        merge_closest_first(groups)
+        merge_closest_first(groups, threshold)
     } else {
         let blocked: Vec<Group> = groups
             .chunks(BLOCK)
-            .flat_map(|block| merge_closest_first(block.to_vec()))
+            .flat_map(|block| merge_closest_first(block.to_vec(), threshold))
             .collect();
-        merge_closest_first(blocked)
+        merge_closest_first(blocked, threshold)
     };
 
     merged
@@ -305,7 +362,7 @@ struct Group {
 /// all — 2,000 groups is 16 MB and bounded, where a two-hour meeting's
 /// 12,000 would be 576 MB. If blocks ever need to be much larger, the
 /// matrix is the thing to replace, with a nearest-neighbour chain.
-fn merge_closest_first(mut groups: Vec<Group>) -> Vec<Group> {
+fn merge_closest_first(mut groups: Vec<Group>, threshold: f32) -> Vec<Group> {
     let count = groups.len();
     if count < 2 {
         return groups;
@@ -335,7 +392,7 @@ fn merge_closest_first(mut groups: Vec<Group>) -> Vec<Group> {
                 continue;
             }
             let (partner, value) = best[row];
-            if value >= MERGE_THRESHOLD && pick.is_none_or(|(_, _, previous)| value > previous) {
+            if value >= threshold && pick.is_none_or(|(_, _, previous)| value > previous) {
                 pick = Some((row, partner, value));
             }
         }
@@ -829,11 +886,35 @@ mod tests {
         }
     }
 
+    /// The voice every [`at_cosine`] candidate is measured against.
+    const PROBE: [f32; 2] = [1.0, 0.0];
+
+    /// A unit vector whose cosine against [`PROBE`] is exactly `target`.
+    ///
+    /// The tests that follow are *about* the thresholds, so they state their
+    /// premise in the thresholds' own terms rather than in vectors that
+    /// happen to sit the right side of today's numbers. Ticket 07 re-derives
+    /// those numbers from AMI; vectors written against the old ones would
+    /// keep passing while quietly testing a different rule — a margin test
+    /// that a raised floor turned into a floor test is still green, and no
+    /// longer covers the thing it was written for.
+    fn at_cosine(target: f32) -> Vec<f32> {
+        vec![target, (1.0 - target * target).max(0.0).sqrt()]
+    }
+
+    /// A cosine `fraction` of the way from the match floor to a perfect
+    /// match. Interpolating rather than adding keeps the result inside the
+    /// range whatever the floor is derived as.
+    fn above_floor(fraction: f32) -> f32 {
+        MATCH_FLOOR + (1.0 - MATCH_FLOOR) * fraction
+    }
+
     #[test]
     fn a_returning_voice_is_recognized_as_the_same_speaker() {
         // Story 28, and the only reason Voiceprints are stored at all.
-        let this_meeting = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let history = vec![seed("alice", &[0.98, 0.1, 0.0], true)];
+        let alice = at_cosine(above_floor(0.8));
+        let this_meeting = clusters(&[(0, &PROBE)]);
+        let history = vec![seed("alice", &alice, true)];
         let resolved = resolve(&this_meeting, &history);
         assert_eq!(
             resolved[&Cluster(0)],
@@ -857,11 +938,14 @@ mod tests {
         // the more confidently the system mislabels one as the other — and
         // it is precisely colleagues who sound alike that an Operator would
         // struggle to catch.
-        let this_meeting = clusters(&[(0, &[1.0, 0.05, 0.0])]);
-        let history = vec![
-            seed("alice", &[1.0, 0.0, 0.0], false),
-            seed("bob", &[1.0, 0.1, 0.0], false),
-        ];
+        let alice = at_cosine(above_floor(0.5));
+        let bob = at_cosine(above_floor(0.5) - MATCH_MARGIN / 2.0);
+        let this_meeting = clusters(&[(0, &PROBE)]);
+        let history = vec![seed("alice", &alice, false), seed("bob", &bob, false)];
+        assert!(
+            cosine(&PROBE, &bob) >= MATCH_FLOOR,
+            "premise: both voices clear the floor, so only the margin can refuse them"
+        );
         assert_eq!(
             resolve(&this_meeting, &history)[&Cluster(0)],
             Resolved::New,
@@ -875,12 +959,15 @@ mod tests {
         // a room, one of whom the system knows: without this check the known
         // voice is the best match for all three clusters and the whole
         // meeting comes back as that person.
-        let this_meeting = clusters(&[
-            (0, &[1.00, 0.0, 0.0]),
-            (1, &[0.95, 0.3, 0.0]),
-            (2, &[0.90, 0.4, 0.0]),
-        ]);
-        let history = vec![seed("alice", &[1.0, 0.0, 0.0], true)];
+        let near = at_cosine(above_floor(0.9));
+        let middling = at_cosine(above_floor(0.5));
+        let far = at_cosine(above_floor(0.1));
+        let this_meeting = clusters(&[(0, &near), (1, &middling), (2, &far)]);
+        let history = vec![seed("alice", &PROBE, true)];
+        assert!(
+            cosine(&far, &PROBE) >= MATCH_FLOOR,
+            "premise: all three clear the floor, so only mutual-best can refuse two of them"
+        );
         let resolved = resolve(&this_meeting, &history);
         let claimed = resolved
             .values()
@@ -925,8 +1012,13 @@ mod tests {
         // A confirmed Voiceprint matches more readily *between candidates*.
         // It must not make an unrelated voice match at all — that would turn
         // the Operator's helpfulness into a source of false attributions.
-        let this_meeting = clusters(&[(0, &[0.0, 1.0])]);
-        let history = vec![seed("alice", &[1.0, 0.0], true)];
+        //
+        // Just under the floor rather than orthogonal: a voice nothing like
+        // Alice's would pass this at any threshold, and so would say nothing
+        // about the floor the test is named after.
+        let stranger = at_cosine(MATCH_FLOOR - 0.05);
+        let this_meeting = clusters(&[(0, &stranger)]);
+        let history = vec![seed("alice", &PROBE, true)];
         assert_eq!(resolve(&this_meeting, &history)[&Cluster(0)], Resolved::New);
     }
 
@@ -960,14 +1052,16 @@ mod tests {
     fn over_segmented_clusters_merge_back_into_one_voice() {
         // A clusterer splitting one person in two is commonplace, and the
         // Operator reads it as a stranger in their own meeting.
-        let split = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.97, 0.24, 0.0])]);
+        let other_half = at_cosine(MERGE_THRESHOLD + (1.0 - MERGE_THRESHOLD) / 2.0);
+        let split = clusters(&[(0, &PROBE), (1, &other_half)]);
         let canonical = agglomerate(&split);
         assert_eq!(canonical[&Cluster(1)], canonical[&Cluster(0)]);
     }
 
     #[test]
     fn genuinely_different_voices_are_not_merged() {
-        let distinct = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
+        let somebody_else = at_cosine(MERGE_THRESHOLD / 2.0);
+        let distinct = clusters(&[(0, &PROBE), (1, &somebody_else)]);
         let canonical = agglomerate(&distinct);
         assert_ne!(canonical[&Cluster(1)], canonical[&Cluster(0)]);
     }
@@ -1505,13 +1599,26 @@ mod tests {
         // against one earlier member rather than against the group: A and B
         // are within threshold, B and C are, A and C are not, and a single
         // pass leaves two groups that never meet.
-        let chain = clusters(&[
-            (0, &[1.00, 0.00, 0.0]),
-            (1, &[0.80, 0.60, 0.0]),
-            (2, &[0.55, 0.84, 0.0]),
-        ]);
+        //
+        // Laid out in angles, because that is what the chain is a statement
+        // about: `reach` is the widest gap the threshold still joins, and
+        // the three sit at nothing, two thirds of it, and seven sixths of
+        // it. Neighbours are a gap of 2/3 and 1/2 apart, both inside reach;
+        // the end points are 7/6 apart, outside it. The uneven steps matter
+        // — the closer pair merges first, and its centroid lands at 11/12,
+        // still inside reach, which is the whole point being tested. Every
+        // fraction is of `reach` itself, so the arrangement survives ticket
+        // 07 re-deriving the threshold.
+        let reach = MERGE_THRESHOLD.acos();
+        let unit = |angle: f32| vec![angle.cos(), angle.sin()];
+        let (start, middle, far) = (unit(0.0), unit(reach * 2.0 / 3.0), unit(reach * 7.0 / 6.0));
+        let chain = clusters(&[(0, &start), (1, &middle), (2, &far)]);
         assert!(
-            cosine(&[1.00, 0.00, 0.0], &[0.55, 0.84, 0.0]) < MERGE_THRESHOLD,
+            cosine(&start, &middle) >= MERGE_THRESHOLD && cosine(&middle, &far) >= MERGE_THRESHOLD,
+            "premise: each neighbour is within threshold of the next"
+        );
+        assert!(
+            cosine(&start, &far) < MERGE_THRESHOLD,
             "the end points are too far apart to join directly"
         );
         let canonical = agglomerate(&chain);
@@ -1526,7 +1633,8 @@ mod tests {
     fn the_group_name_does_not_depend_on_merge_order() {
         // Otherwise "Speaker 1" and "Speaker 2" swap between two runs over
         // the same audio, and an Operator who named one has named the other.
-        let split = clusters(&[(7, &[1.0, 0.0, 0.0]), (2, &[0.97, 0.24, 0.0])]);
+        let other_half = at_cosine(MERGE_THRESHOLD + (1.0 - MERGE_THRESHOLD) / 2.0);
+        let split = clusters(&[(7, &PROBE), (2, &other_half)]);
         assert_eq!(agglomerate(&split)[&Cluster(7)], Cluster(2));
     }
 

@@ -439,30 +439,40 @@ pub fn equal_error_rate(trials: &[Trial]) -> Option<(f64, f32)> {
         return None;
     }
 
-    let mut thresholds: Vec<f32> = trials.iter().map(|trial| trial.score).collect();
-    thresholds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    thresholds.dedup();
+    // Sorted once and swept, rather than counted afresh at each candidate
+    // threshold. The old shape re-scanned every trial per distinct score,
+    // which is quadratic and was fine while trials were pairs of *voices* —
+    // a few thousand. The merge threshold is chosen on pairs of *windows*,
+    // which is millions, and quadratic does not finish on those at all.
+    let mut sorted: Vec<&Trial> = trials.iter().collect();
+    sorted.sort_by(|left, right| left.score.total_cmp(&right.score));
 
-    let mut best = (f64::MAX, 0.0, 0.0f32);
-    for &threshold in &thresholds {
-        // Accept at or above the threshold, which is how `resolve` reads
-        // `MATCH_FLOOR`.
-        let false_accepts = trials
-            .iter()
-            .filter(|trial| !trial.same_speaker && trial.score >= threshold)
-            .count();
-        let false_rejects = trials
-            .iter()
-            .filter(|trial| trial.same_speaker && trial.score < threshold)
-            .count();
+    // At the lowest score every trial is accepted: no positive is refused,
+    // and every negative is a false accept. Raising the threshold past a
+    // group of equal scores moves exactly that group from accepted to
+    // refused, which is the whole update.
+    let mut false_accepts = negatives;
+    let mut false_rejects = 0usize;
+    let mut best: Option<(f64, f64, f32)> = None;
+    let mut index = 0;
+    while index < sorted.len() {
+        let threshold = sorted[index].score;
         let far = false_accepts as f64 / negatives as f64;
         let frr = false_rejects as f64 / positives as f64;
         let gap = (far - frr).abs();
-        if gap < best.0 {
-            best = (gap, (far + frr) / 2.0, threshold);
+        if best.is_none_or(|(previous, _, _)| gap < previous) {
+            best = Some((gap, (far + frr) / 2.0, threshold));
+        }
+        while index < sorted.len() && sorted[index].score == threshold {
+            if sorted[index].same_speaker {
+                false_rejects += 1;
+            } else {
+                false_accepts -= 1;
+            }
+            index += 1;
         }
     }
-    Some((best.1, best.2))
+    best.map(|(_, rate, threshold)| (rate, threshold))
 }
 
 /// The share of trials that are wrong at a threshold the product ships.
@@ -481,6 +491,181 @@ pub fn false_accept_rate_at(trials: &[Trial], threshold: f32) -> Option<f64> {
         .filter(|trial| !trial.same_speaker && trial.score >= threshold)
         .count();
     Some(accepted as f64 / negatives as f64)
+}
+
+/// The lowest threshold that admits no wrong trial at all, and what refusing
+/// them costs in right ones.
+///
+/// **This, not the equal error rate, is the operating point ticket 07 asks
+/// for.** "No different-colleague pair above the match floor" is a demand
+/// for zero false accepts, and the EER point is the opposite kind of
+/// answer — it is where the two mistakes are equally common, which on a
+/// weak embedding means being wrong about a third of the time in *both*
+/// directions. Choosing the floor off an EER would ship a constant that
+/// misattributes a colleague on every third pair.
+///
+/// Returns the threshold and the share of same-speaker pairs it refuses, so
+/// the cost of the guarantee is reported next to the guarantee. That cost is
+/// the whole story on a corpus like this one: a floor above every impostor
+/// is trivially reachable by setting it near 1.0, and worth nothing.
+///
+/// `None` when there are no wrong trials to exclude.
+pub fn refusal_point(trials: &[Trial]) -> Option<(f32, f64)> {
+    let highest_wrong = trials
+        .iter()
+        .filter(|trial| !trial.same_speaker)
+        .map(|trial| trial.score)
+        .fold(f32::NEG_INFINITY, f32::max);
+    if !highest_wrong.is_finite() {
+        return None;
+    }
+    // Strictly above the worst impostor: the comparison that ships is `>=`,
+    // so sitting *at* that score would admit it.
+    let threshold = highest_wrong.next_up();
+    let positives = trials.iter().filter(|trial| trial.same_speaker).count();
+    let refused = trials
+        .iter()
+        .filter(|trial| trial.same_speaker && trial.score < threshold)
+        .count();
+    Some((threshold, refused as f64 / positives.max(1) as f64))
+}
+
+/// One voice, as a threshold measurement sees it.
+#[derive(Debug, Clone, Copy)]
+pub struct Candidate<'a> {
+    /// Who it actually is. Ground truth, not the pipeline's guess.
+    pub speaker: &'a str,
+    /// Where it was heard. The nearest voice is sought outside this, so a
+    /// meeting cannot recognize itself.
+    pub group: &'a str,
+    pub vector: &'a [f32],
+}
+
+/// How often the closest voice from another meeting is the right person.
+///
+/// **EER does not answer this and the difference matters.** EER is about a
+/// threshold: how separable the two populations are when every pair is
+/// judged on its own. What the product does is pick a winner among the
+/// voices History holds, so the question an Operator feels is not "would
+/// this pair pass a bar" but "did the right person win". A model can have a
+/// respectable EER and still put the wrong colleague first, because the
+/// pairs it gets wrong are exactly the ones that compete.
+///
+/// `None` when no voice has a candidate outside its own meeting.
+pub fn nearest_is_right(voices: &[Candidate]) -> Option<f64> {
+    let mut asked = 0usize;
+    let mut right = 0usize;
+    for probe in voices {
+        let nearest = voices
+            .iter()
+            .filter(|other| other.group != probe.group)
+            .filter(|other| other.vector.len() == probe.vector.len())
+            .max_by(|left, right| {
+                super::cluster::cosine(probe.vector, left.vector)
+                    .partial_cmp(&super::cluster::cosine(probe.vector, right.vector))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        let Some(nearest) = nearest else { continue };
+        asked += 1;
+        if nearest.speaker == probe.speaker {
+            right += 1;
+        }
+    }
+    (asked > 0).then(|| right as f64 / asked as f64)
+}
+
+/// How far each probe's winner beat the runner-up, and whether the winner
+/// was the right person.
+///
+/// This is the evidence a *margin* is chosen from, and it is a different
+/// question from the one the floor answers. The floor asks whether a score
+/// is high enough to be anybody; the margin asks whether the gap to the next
+/// candidate is wide enough to be sure it is *this* one. So the score of
+/// each trial here is the gap, not the similarity, and `same_speaker` says
+/// whether accepting at that gap would have been right.
+///
+/// One candidate per speaker, taking the best each one offers, because that
+/// is what `cluster::resolve` ranks: History holds a Speaker once, as a
+/// centroid, not once per Meeting they appeared in. Ranking the raw list
+/// would let one person be their own runner-up and report a margin nothing
+/// in production ever sees.
+pub fn margin_trials(voices: &[Candidate]) -> Vec<Trial> {
+    let mut trials = Vec::new();
+    for probe in voices {
+        let mut best_by_speaker: BTreeMap<&str, f32> = BTreeMap::new();
+        for other in voices {
+            if other.group == probe.group || other.vector.len() != probe.vector.len() {
+                continue;
+            }
+            let score = super::cluster::cosine(probe.vector, other.vector);
+            let slot = best_by_speaker
+                .entry(other.speaker)
+                .or_insert(f32::NEG_INFINITY);
+            if score > *slot {
+                *slot = score;
+            }
+        }
+        let mut ranked: Vec<(&str, f32)> = best_by_speaker.into_iter().collect();
+        ranked.sort_by(|left, right| right.1.total_cmp(&left.1));
+        let Some((winner, best)) = ranked.first().copied() else {
+            continue;
+        };
+        let runner_up = ranked.get(1).map(|(_, score)| *score).unwrap_or(0.0);
+        trials.push(Trial {
+            score: best - runner_up,
+            same_speaker: winner == probe.speaker,
+        });
+    }
+    trials
+}
+
+/// What a threshold would cost, at one setting of it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Operating {
+    pub threshold: f32,
+    /// A different person accepted as the same one. The mistake that shows
+    /// an Operator somebody else's name on their colleague's words.
+    pub false_accept: f64,
+    /// The same person refused. The mistake that mints a new pseudonym for
+    /// somebody History already knows.
+    pub false_reject: f64,
+}
+
+/// The whole curve, not the point on it.
+///
+/// A threshold reported as a single number says what was chosen and nothing
+/// about how much the choice was worth. The M3 close-out is the reason this
+/// exists: dev could not choose a threshold at all — its curve was flat from
+/// 0.40 to 0.60 while test moved eight points over the same range — and a
+/// single number would have hidden that completely, leaving the next person
+/// to rediscover it.
+pub fn curve(trials: &[Trial], thresholds: &[f32]) -> Vec<Operating> {
+    let positives = trials.iter().filter(|trial| trial.same_speaker).count();
+    let negatives = trials.len() - positives;
+    thresholds
+        .iter()
+        .map(|&threshold| Operating {
+            threshold,
+            false_accept: if negatives == 0 {
+                0.0
+            } else {
+                trials
+                    .iter()
+                    .filter(|trial| !trial.same_speaker && trial.score >= threshold)
+                    .count() as f64
+                    / negatives as f64
+            },
+            false_reject: if positives == 0 {
+                0.0
+            } else {
+                trials
+                    .iter()
+                    .filter(|trial| trial.same_speaker && trial.score < threshold)
+                    .count() as f64
+                    / positives as f64
+            },
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -744,5 +929,255 @@ mod tests {
         });
         assert_eq!(pooled.total_ms, 11_000);
         assert!((pooled.rate() - 0.1).abs() < 1e-9, "{}", pooled.rate());
+    }
+}
+
+/// The two measurements ticket 07 chose thresholds against.
+#[cfg(test)]
+mod choosing_a_threshold {
+    use super::*;
+
+    fn candidates<'a>(entries: &'a [(&'a str, &'a str, [f32; 2])]) -> Vec<Candidate<'a>> {
+        entries
+            .iter()
+            .map(|(speaker, group, vector)| Candidate {
+                speaker,
+                group,
+                vector: vector.as_slice(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_nearest_voice_is_sought_outside_its_own_meeting() {
+        // Otherwise every voice recognizes itself, the rate is 100%, and the
+        // measurement says nothing at all. Alice's own Monday self is the
+        // closest thing to her by construction.
+        let entries = [
+            ("alice", "monday", [1.0, 0.0]),
+            ("alice", "monday", [0.99, 0.01]),
+            ("alice", "friday", [0.98, 0.02]),
+            ("bob", "monday", [0.0, 1.0]),
+            ("bob", "friday", [0.02, 0.98]),
+        ];
+        assert_eq!(nearest_is_right(&candidates(&entries)), Some(1.0));
+    }
+
+    #[test]
+    fn a_wrong_winner_is_counted_even_where_the_pair_would_pass_a_threshold() {
+        // The whole reason this is reported beside EER. Both of Friday's
+        // voices score high against Monday's Alice; only one of them is her,
+        // and the other one wins.
+        let entries = [
+            ("alice", "monday", [1.0, 0.0]),
+            ("carol", "friday", [0.99, 0.14]),
+            ("alice", "friday", [0.95, 0.31]),
+        ];
+        let rate = nearest_is_right(&candidates(&entries)).expect("askable");
+        assert!(
+            rate < 1.0,
+            "the wrong colleague won and it is counted: {rate}"
+        );
+    }
+
+    #[test]
+    fn a_voice_with_nobody_to_compare_against_is_not_counted_as_wrong() {
+        let entries = [("alice", "monday", [1.0, 0.0])];
+        assert_eq!(nearest_is_right(&candidates(&entries)), None);
+    }
+
+    #[test]
+    fn the_swept_equal_error_rate_agrees_with_counting_it_the_slow_way() {
+        // The sweep replaced a re-count at every distinct score because that
+        // was quadratic and window pairs are millions. Speed is not worth a
+        // different answer, so the slow way is kept here as the definition
+        // and the fast one is checked against it — including the ties and
+        // the duplicate scores that the group-advance step exists to handle.
+        let mut trials = Vec::new();
+        let mut state = 12_345u64;
+        for index in 0..400 {
+            // Deterministic and lumpy on purpose: scores land on a coarse
+            // grid, so equal scores are common and both classes share them.
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let bucket = (state >> 33) % 12;
+            trials.push(Trial {
+                score: bucket as f32 / 12.0,
+                same_speaker: index % 3 == 0,
+            });
+        }
+
+        let positives = trials.iter().filter(|trial| trial.same_speaker).count();
+        let negatives = trials.len() - positives;
+        let mut scores: Vec<f32> = trials.iter().map(|trial| trial.score).collect();
+        scores.sort_by(|left, right| left.total_cmp(right));
+        scores.dedup();
+        let mut slow = (f64::MAX, 0.0f64, 0.0f32);
+        for &threshold in &scores {
+            let far = trials
+                .iter()
+                .filter(|trial| !trial.same_speaker && trial.score >= threshold)
+                .count() as f64
+                / negatives as f64;
+            let frr = trials
+                .iter()
+                .filter(|trial| trial.same_speaker && trial.score < threshold)
+                .count() as f64
+                / positives as f64;
+            let gap = (far - frr).abs();
+            if gap < slow.0 {
+                slow = (gap, (far + frr) / 2.0, threshold);
+            }
+        }
+
+        let (rate, threshold) = equal_error_rate(&trials).expect("both classes present");
+        assert!(
+            (rate - slow.1).abs() < 1e-12 && threshold == slow.2,
+            "swept {rate} at {threshold}, counted {} at {}",
+            slow.1,
+            slow.2
+        );
+    }
+
+    #[test]
+    fn the_refusal_point_sits_just_above_the_best_impostor() {
+        let trials = vec![
+            Trial {
+                score: 0.9,
+                same_speaker: true,
+            },
+            Trial {
+                score: 0.5,
+                same_speaker: true,
+            },
+            Trial {
+                score: 0.5,
+                same_speaker: false,
+            },
+            Trial {
+                score: 0.1,
+                same_speaker: false,
+            },
+        ];
+        let (threshold, refused) = refusal_point(&trials).expect("there are impostors to exclude");
+        assert!(
+            threshold > 0.5 && threshold < 0.9,
+            "just above the best impostor, and still below the best genuine pair: {threshold}"
+        );
+        assert_eq!(
+            refused, 0.5,
+            "the genuine pair tied with an impostor, so buying the guarantee costs it"
+        );
+        assert_eq!(
+            false_accept_rate_at(&trials, threshold),
+            Some(0.0),
+            "the point it returns is the point that admits nobody"
+        );
+    }
+
+    #[test]
+    fn a_refusal_point_needs_somebody_to_refuse() {
+        let all_genuine = vec![Trial {
+            score: 0.4,
+            same_speaker: true,
+        }];
+        assert_eq!(
+            refusal_point(&all_genuine),
+            None,
+            "with no impostor there is no evidence about where to keep one out"
+        );
+    }
+
+    #[test]
+    fn a_margin_trial_scores_the_gap_and_says_whether_the_winner_was_right() {
+        // Two probes, one of each kind. Monday's Alice is won by Friday's
+        // Alice at a wide gap over Bob; Monday's Carol has nobody like her,
+        // so whoever wins is wrong and the gap is what a margin would have
+        // to refuse.
+        let entries = [
+            ("alice", "monday", [1.0, 0.0]),
+            ("carol", "monday", [0.71, 0.71]),
+            ("alice", "friday", [0.99, 0.14]),
+            ("bob", "friday", [0.0, 1.0]),
+        ];
+        let trials = margin_trials(&candidates(&entries));
+        let right: Vec<&Trial> = trials.iter().filter(|t| t.same_speaker).collect();
+        let wrong: Vec<&Trial> = trials.iter().filter(|t| !t.same_speaker).collect();
+        assert!(!right.is_empty() && !wrong.is_empty(), "{trials:?}");
+        assert!(
+            right.iter().all(|t| t.score > 0.0),
+            "a correct winner beat the runner-up: {right:?}"
+        );
+        assert!(
+            wrong[0].score < right[0].score,
+            "and it beat it by more than the wrong winner did, which is the \
+             whole reason a margin can tell them apart: {trials:?}"
+        );
+    }
+
+    #[test]
+    fn one_speaker_heard_twice_is_not_their_own_runner_up() {
+        // History holds a Speaker once, as a centroid, so `resolve` never
+        // ranks Alice against Alice. Ranking the raw list would: her Tuesday
+        // vector would be the runner-up to her Friday one, the gap would be
+        // tiny, and the margin would be derived against a comparison
+        // production cannot make.
+        let entries = [
+            ("alice", "monday", [1.0, 0.0]),
+            ("alice", "friday", [0.99, 0.14]),
+            ("alice", "tuesday", [0.98, 0.20]),
+            ("bob", "friday", [0.0, 1.0]),
+        ];
+        let trials = margin_trials(&candidates(&entries));
+        let monday = trials.first().expect("a trial for Monday's Alice");
+        assert!(
+            monday.same_speaker && monday.score > 0.5,
+            "the gap is Alice over Bob, not Alice over Alice: {monday:?}"
+        );
+    }
+
+    #[test]
+    fn the_curve_shows_the_two_mistakes_trading_against_each_other() {
+        // What a single chosen threshold cannot say: which way the cost
+        // moves, and how fast.
+        let trials = vec![
+            Trial {
+                score: 0.9,
+                same_speaker: true,
+            },
+            Trial {
+                score: 0.7,
+                same_speaker: true,
+            },
+            Trial {
+                score: 0.5,
+                same_speaker: false,
+            },
+            Trial {
+                score: 0.3,
+                same_speaker: false,
+            },
+        ];
+        let points = curve(&trials, &[0.2, 0.6, 0.95]);
+        assert_eq!(points[0].false_accept, 1.0, "accept everything at 0.2");
+        assert_eq!(points[0].false_reject, 0.0);
+        assert_eq!(points[1].false_accept, 0.0, "both impostors are below 0.6");
+        assert_eq!(points[1].false_reject, 0.0, "and both true pairs above it");
+        assert_eq!(points[2].false_reject, 1.0, "refuse everyone at 0.95");
+    }
+
+    #[test]
+    fn an_empty_class_leaves_the_curve_finite_rather_than_dividing_by_zero() {
+        // A dev split can legitimately produce no negatives at all, and a
+        // curve full of NaN would be worse than one full of zeros: NaN sorts
+        // and prints as though it were an answer.
+        let trials = vec![Trial {
+            score: 0.9,
+            same_speaker: true,
+        }];
+        let points = curve(&trials, &[0.5]);
+        assert_eq!(points[0].false_accept, 0.0);
+        assert!(points[0].false_reject.is_finite());
     }
 }
