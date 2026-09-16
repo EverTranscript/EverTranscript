@@ -1754,3 +1754,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** escalated
 **Supersedes:** Q137 — same question, same answer, but its shipped cross-meeting figures were computed with the first-turn cluster labels Q138 replaced and should not be cited.
 **Ref:** (pending)
+
+## Q140 — diarization/06 — gate-resolution
+
+**Question:** Is ReDimNet2's DER advantage a property of the embedding, or an artefact of comparing both models at one merge threshold that suits one of them?
+**Options considered:** treat the shipped-threshold gap as the answer / sweep the threshold per model and compare optima / tune on dev and confirm on test before answering
+**Chosen:** Swept, and the gap is the embedding's. It survives per-model tuning almost intact.
+**Decided-by:** agent
+**Justification:** The objection was raised by the Codex peer and is a real one: an embedding decides a similarity distribution, a threshold decides where that distribution becomes a partition, and the same number need not cut two distributions in the same place. Measured rather than argued. AMI dev, 18 meetings, thirteen thresholds from 0.30 to 0.90, with segmentation, observation and reconstruction fixed and inference paid once per meeting so every threshold scored byte-identical model output. WeSpeaker's best DER is 29.13% at 0.65; ReDimNet2's is 26.01% at 0.60. Tuning WeSpeaker to its own optimum recovers 0.47 points, leaving 3.12 between the optima against 3.59 at the shipped threshold, and ReDimNet2 holds the better DER at every threshold from 0.45 up. So the advantage is not where we cut. The sweep also produced an unasked-for result that discredits a number I have reported three times: nearest-voice-right rises monotonically with the threshold, from 33.3% at 0.30 to 72.4% at 0.90 for WeSpeaker, while DER over the same range goes from 37% to 86%. At a high threshold almost nothing merges, so every cluster is a small pure fragment that trivially matches its own speaker — the metric rewards fragmentation. Comparing it across two models that fragment differently is therefore confounded, and cross-meeting EER moves the same way for the same reason. The recognition half of the Q139 trade is not measured by the numbers I used to state it, and the honest position is that ticket 06 has one solid column and one that needs a chronological enrollment replay to have at all.
+**Outcome:** applied
+**Ref:** (pending)

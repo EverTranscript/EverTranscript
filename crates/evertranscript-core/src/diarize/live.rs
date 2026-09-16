@@ -779,6 +779,37 @@ pub fn assemble(observed: &Observed, canonical: &BTreeMap<Cluster, Cluster>) -> 
     Diarization { turns, embeddings }
 }
 
+/// Group observations into voices and lay them out as turns: everything
+/// [`LiveDiarizer::diarize`] does once the models have spoken.
+///
+/// Split out of `diarize` so one meeting's observations can be clustered more
+/// than once at more than one merge threshold, paying for the inference only
+/// once. A harness that re-implemented this half instead would be free to
+/// drift from what production does, which is the one thing a measurement of
+/// production must not do. **Production reaches it only through `diarize`**,
+/// which passes [`super::cluster::MERGE_THRESHOLD`].
+pub fn cluster_observed(observed: &Observed, threshold: f32) -> Diarization {
+    // Every observation starts as its own cluster; grouping them is what
+    // turns local speakers into voices.
+    let provisional: BTreeMap<Cluster, Embedding> = observed
+        .observations
+        .iter()
+        .map(|observation| {
+            (
+                observation.cluster,
+                Embedding::new(
+                    observation.vector.clone(),
+                    EMBEDDING_MODEL,
+                    EMBEDDING_MODEL_VERSION,
+                    observation.voiced_ms(),
+                ),
+            )
+        })
+        .collect();
+    let canonical = super::cluster::agglomerate_with(&provisional, threshold);
+    assemble(observed, &canonical)
+}
+
 impl Diarizer for LiveDiarizer {
     fn diarize(
         &mut self,
@@ -787,26 +818,7 @@ impl Diarizer for LiveDiarizer {
         cancel: &Cancel,
     ) -> Result<Diarization, DiarizeError> {
         let observed = self.observe(audio, progress, cancel)?;
-
-        // Every observation starts as its own cluster; grouping them is
-        // what turns local speakers into voices.
-        let provisional: BTreeMap<Cluster, Embedding> = observed
-            .observations
-            .iter()
-            .map(|observation| {
-                (
-                    observation.cluster,
-                    Embedding::new(
-                        observation.vector.clone(),
-                        EMBEDDING_MODEL,
-                        EMBEDDING_MODEL_VERSION,
-                        observation.voiced_ms(),
-                    ),
-                )
-            })
-            .collect();
-        let canonical = super::cluster::agglomerate(&provisional);
-        let result = assemble(&observed, &canonical);
+        let result = cluster_observed(&observed, super::cluster::MERGE_THRESHOLD);
 
         let total_ms = audio.duration_ms();
         progress(Progress {

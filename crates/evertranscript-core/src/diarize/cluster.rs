@@ -233,6 +233,22 @@ fn best_cluster_for(
 /// centroid, closest pair first, is what the catalog specifies and it is
 /// what fixed it.
 pub fn agglomerate(embeddings: &BTreeMap<Cluster, Embedding>) -> BTreeMap<Cluster, Cluster> {
+    agglomerate_with(embeddings, MERGE_THRESHOLD)
+}
+
+/// [`agglomerate`] with the merge threshold named rather than taken from the
+/// constant.
+///
+/// The threshold is where a similarity distribution becomes a partition, and
+/// different embeddings put their distributions in different places — so the
+/// same number does not mean the same thing to two models, and comparing two
+/// models at one number compares a configuration rather than the models. This
+/// exists for a harness that sweeps it. **Production has no way to reach it:**
+/// `agglomerate` is what the pipeline calls and it passes the constant.
+pub fn agglomerate_with(
+    embeddings: &BTreeMap<Cluster, Embedding>,
+    threshold: f32,
+) -> BTreeMap<Cluster, Cluster> {
     let groups: Vec<Group> = embeddings
         .iter()
         .map(|(cluster, embedding)| Group {
@@ -245,13 +261,13 @@ pub fn agglomerate(embeddings: &BTreeMap<Cluster, Embedding>) -> BTreeMap<Cluste
     // second stage runs over block centroids, of which there are a handful
     // per block, so it is never the expensive one.
     let merged = if groups.len() <= BLOCK {
-        merge_closest_first(groups)
+        merge_closest_first(groups, threshold)
     } else {
         let blocked: Vec<Group> = groups
             .chunks(BLOCK)
-            .flat_map(|block| merge_closest_first(block.to_vec()))
+            .flat_map(|block| merge_closest_first(block.to_vec(), threshold))
             .collect();
-        merge_closest_first(blocked)
+        merge_closest_first(blocked, threshold)
     };
 
     merged
@@ -309,7 +325,7 @@ struct Group {
 /// all — 2,000 groups is 16 MB and bounded, where a two-hour meeting's
 /// 12,000 would be 576 MB. If blocks ever need to be much larger, the
 /// matrix is the thing to replace, with a nearest-neighbour chain.
-fn merge_closest_first(mut groups: Vec<Group>) -> Vec<Group> {
+fn merge_closest_first(mut groups: Vec<Group>, threshold: f32) -> Vec<Group> {
     let count = groups.len();
     if count < 2 {
         return groups;
@@ -339,7 +355,7 @@ fn merge_closest_first(mut groups: Vec<Group>) -> Vec<Group> {
                 continue;
             }
             let (partner, value) = best[row];
-            if value >= MERGE_THRESHOLD && pick.is_none_or(|(_, _, previous)| value > previous) {
+            if value >= threshold && pick.is_none_or(|(_, _, previous)| value > previous) {
                 pick = Some((row, partner, value));
             }
         }

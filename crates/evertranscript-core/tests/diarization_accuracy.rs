@@ -157,6 +157,30 @@ fn step_under_test() -> u64 {
     }
 }
 
+/// The merge thresholds to score, from `EVERTRANSCRIPT_MERGE_SWEEP` as a
+/// comma-separated list.
+///
+/// Unset is one pass at the shipped [`diarize::cluster::MERGE_THRESHOLD`] —
+/// today's behaviour and today's numbers. A threshold is where a similarity
+/// distribution becomes a partition, and two embeddings do not put their
+/// distributions in the same place, so comparing two models at one number
+/// compares a configuration and not the models.
+fn thresholds_under_test() -> Vec<f32> {
+    let shipped = vec![diarize::cluster::MERGE_THRESHOLD];
+    match std::env::var("EVERTRANSCRIPT_MERGE_SWEEP") {
+        Err(_) => shipped,
+        Ok(value) if value.trim().is_empty() => shipped,
+        Ok(value) => value
+            .split(',')
+            .map(|part| {
+                part.trim().parse().unwrap_or_else(|_| {
+                    panic!("EVERTRANSCRIPT_MERGE_SWEEP={value}: expected comma-separated numbers")
+                })
+            })
+            .collect(),
+    }
+}
+
 fn models() -> (PathBuf, PathBuf) {
     let dir = std::env::var_os("EVERTRANSCRIPT_MODELS_DIR")
         .map(PathBuf::from)
@@ -325,7 +349,23 @@ fn cross_meeting_pairs(meetings: &[(String, Labelled)]) -> Vec<Trial> {
     trials
 }
 
-fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured {
+/// One meeting's inference, kept so the clustering that follows can run more
+/// than once over it.
+///
+/// Inference is the whole cost here — 0.02x real time, about a minute a
+/// meeting — and the merge threshold is applied long after the models have
+/// stopped talking. Sweeping thirteen thresholds therefore costs one pass,
+/// not thirteen.
+struct Inferred {
+    name: String,
+    reference: Vec<Span>,
+    observed: diarize::live::Observed,
+    audio_seconds: f64,
+    seconds: f64,
+}
+
+/// Run the models over one meeting.
+fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Inferred {
     let samples = read_wav(&meeting.audio);
     let audio_seconds = samples.len() as f64 / diarize::fbank::SAMPLE_RATE as f64;
     let reference =
@@ -335,26 +375,12 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
         diarize::live::LiveDiarizer::load_with(segmentation, embedding, embedding_under_test().2)
             .expect("load models")
             .with_step(step_under_test());
-    let audio = diarize::MeetingAudio {
-        mic: &samples,
-        system: &[],
-        sample_rate: diarize::fbank::SAMPLE_RATE,
-    };
 
     // Wall clock per meeting, because a ceiling is one of the things being
     // fixed: clustering was cubic, and 70 s at 1,259 windows projected to a
     // quarter of an hour for a two-hour meeting.
     let started = Instant::now();
-    let result =
-        diarize::runner::run_guarded(&mut diarizer, audio, &mut |_| {}, &diarize::Cancel::new())
-            .expect("diarize");
-    let seconds = started.elapsed().as_secs_f64();
-
-    // A second pass for the pre-merge windows. It pays the inference twice,
-    // which at 0.02x real time is a minute a split, and it is the price of
-    // the harness scoring exactly what production clusters rather than a
-    // re-implementation of it that can drift.
-    let windows = diarizer
+    let observed = diarizer
         .observe(
             diarize::MeetingAudio {
                 mic: &samples,
@@ -364,53 +390,69 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
             &mut |_| {},
             &diarize::Cancel::new(),
         )
-        .expect("observe")
-        .observations
-        .into_iter()
-        .filter_map(|observation| {
-            let who = dominant_speaker(&observation.runs, &reference)?;
-            Some((who, observation.vector))
-        })
-        .collect();
+        .expect("observe");
+    let seconds = started.elapsed().as_secs_f64();
 
-    let spans = hypothesis(&result.turns);
-    Measured {
-        windows,
+    Inferred {
         name: meeting.name.clone(),
-        der: score::der(&reference, &spans),
-        oracle: score::der(&reference, &score::oracle_relabel(&spans, &reference)),
-        seconds,
+        reference,
+        observed,
         audio_seconds,
+        seconds,
+    }
+}
+
+/// Cluster one meeting's observations at a named merge threshold and score it.
+///
+/// `with_windows` asks for the pre-merge window vectors, which the oracle
+/// ceiling is built from. They do not depend on the threshold — they are what
+/// the model said before any clustering — so exactly one pass of a sweep
+/// keeps them and the oracle is reported once, rather than holding thirteen
+/// identical copies of every window in the corpus.
+fn score_at(one: &Inferred, threshold: f32, with_windows: bool) -> Measured {
+    let reference = &one.reference;
+    let result = diarize::live::cluster_observed(&one.observed, threshold);
+    let spans = hypothesis(&result.turns);
+
+    Measured {
+        windows: if with_windows {
+            one.observed
+                .observations
+                .iter()
+                .filter_map(|observation| {
+                    let who = dominant_speaker(&observation.runs, reference)?;
+                    Some((who, observation.vector.clone()))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        },
+        name: one.name.clone(),
+        der: score::der(reference, &spans),
+        oracle: score::der(reference, &score::oracle_relabel(&spans, reference)),
+        seconds: one.seconds,
+        audio_seconds: one.audio_seconds,
         // Labelled by the reference speaker the cluster mostly is, so a
         // cross-meeting trial knows whether two vectors are the same person.
         //
-        // **By total overlap, not by the first turn.** `oracle_relabel`
-        // labels each turn on its own, so reading the first one named a
-        // cluster after whoever happened to open it: one second of Alice
-        // ahead of ninety-nine of Bob made it Alice, and a cluster whose
-        // first turn landed in silence kept its `cluster-N` label and was
-        // dropped whole. Both mistakes fed the cross-meeting trials, which
-        // are the numbers this block exists to produce.
+        // **By summed overlap**, which is what `dominant_speaker` already
+        // computes for the oracle windows — so this asks the same question
+        // of a cluster that that asks of a window, with one implementation.
+        // Two earlier readings were wrong: taking the first relabelled turn
+        // named a cluster after whoever opened it, and tallying relabelled
+        // turns by their own length awarded a whole turn to the speaker who
+        // merely held most of it, so six seconds of Alice inside a ten
+        // second turn outvoted seven seconds of Bob spread over two.
         embeddings: result
             .embeddings
             .iter()
             .filter_map(|(cluster, embedding)| {
-                let own: Vec<Span> = spans
+                let own: Vec<(u64, u64)> = spans
                     .iter()
                     .filter(|span| span.speaker == format!("cluster-{}", cluster.index()))
-                    .cloned()
+                    .map(|span| (span.start_ms, span.end_ms))
                     .collect();
-                let mut held: BTreeMap<String, u64> = BTreeMap::new();
-                for span in score::oracle_relabel(&own, &reference) {
-                    if span.speaker.starts_with("cluster-") {
-                        continue;
-                    }
-                    *held.entry(span.speaker).or_default() +=
-                        span.end_ms.saturating_sub(span.start_ms);
-                }
-                let (who, _) = held
-                    .into_iter()
-                    .max_by_key(|(name, ms)| (*ms, std::cmp::Reverse(name.clone())))?;
+                let who = dominant_speaker(&own, reference)?;
                 Some((who, embedding.vector.clone()))
             })
             .collect(),
@@ -455,54 +497,38 @@ fn cross_meeting_trials(measured: &[Measured]) -> Vec<Trial> {
     trials
 }
 
-#[test]
-fn the_pipeline_scores_what_the_record_says_it_scores() {
-    let Some(meetings) = corpus() else {
-        eprintln!(
-            "skipping: {MEASURE_ENV} is not set. This is the DER and EER harness \
-             behind ADR-0037; it needs the AMI corpus, which is fetched by \
-             scripts/fetch-ami.sh and never by this test."
+/// Everything one clustering configuration scores, printed.
+///
+/// `with_oracle` prints the ceiling block, which is built from the pre-merge
+/// windows and so is the same at every merge threshold — printing it thirteen
+/// times would suggest it were being measured thirteen times. Returns the
+/// pooled and oracle rates so the caller can assert on them.
+fn report(measured: &[Measured], with_oracle: bool) -> (Der, Der) {
+    for one in measured {
+        // Per meeting, so one bad meeting is visible rather than averaged
+        // into the corpus figure.
+        println!(
+            "{:<12}  DER {:>6.1}%  (missed {:>5.1}  false alarm {:>5.1}  confusion {:>5.1})  \
+             oracle {:>6.1}%",
+            one.name,
+            one.der.rate() * 100.0,
+            one.der.missed_rate() * 100.0,
+            one.der.false_alarm_rate() * 100.0,
+            one.der.confusion_rate() * 100.0,
+            one.oracle.rate() * 100.0,
         );
-        return;
-    };
-    let (segmentation, embedding) = models();
-
-    let measured: Vec<Measured> = meetings
-        .iter()
-        .map(|meeting| {
-            let one = measure(meeting, &segmentation, &embedding);
-            // Per meeting, so one bad meeting is visible rather than
-            // averaged into the corpus figure.
-            println!(
-                "{:<12}  DER {:>6.1}%  (missed {:>5.1}  false alarm {:>5.1}  confusion {:>5.1})  \
-                 oracle {:>6.1}%  {:>6.1}s for {:>6.1}s of audio  ({:.2}x)",
-                one.name,
-                one.der.rate() * 100.0,
-                one.der.missed_rate() * 100.0,
-                one.der.false_alarm_rate() * 100.0,
-                one.der.confusion_rate() * 100.0,
-                one.oracle.rate() * 100.0,
-                one.seconds,
-                one.audio_seconds,
-                one.seconds / one.audio_seconds.max(1.0),
-            );
-            one
-        })
-        .collect();
+    }
 
     // Pooled, not averaged: a ninety-second meeting must not weigh as much
     // as a fifty-minute one, and pyannote's published figure is pooled.
     let mut pooled = Der::default();
     let mut oracle = Der::default();
-    for one in &measured {
+    for one in measured {
         pooled.accumulate(&one.der);
         oracle.accumulate(&one.oracle);
     }
 
-    let trials = cross_meeting_trials(&measured);
-    let eer = score::equal_error_rate(&trials);
-    let false_accepts = score::false_accept_rate_at(&trials, MATCH_FLOOR);
-
+    let trials = cross_meeting_trials(measured);
     println!("\n{} meetings", measured.len());
     println!(
         "DER            {:>6.2}%   missed {:.2}  false alarm {:.2}  confusion {:.2}",
@@ -515,7 +541,7 @@ fn the_pipeline_scores_what_the_record_says_it_scores() {
         "oracle floor   {:>6.2}%   what perfect clustering would still cost",
         oracle.rate() * 100.0
     );
-    match eer {
+    match score::equal_error_rate(&trials) {
         Some((rate, threshold)) => println!(
             "cross-meeting  EER {:>5.2}% at {threshold:.3}   {} trials",
             rate * 100.0,
@@ -523,7 +549,7 @@ fn the_pipeline_scores_what_the_record_says_it_scores() {
         ),
         None => println!("cross-meeting  EER not computable: one class is empty"),
     }
-    if let Some(rate) = false_accepts {
+    if let Some(rate) = score::false_accept_rate_at(&trials, MATCH_FLOOR) {
         println!(
             "at MATCH_FLOOR {MATCH_FLOOR}: {:>5.1}% of different colleagues would be \
              accepted as the same person",
@@ -555,66 +581,115 @@ fn the_pipeline_scores_what_the_record_says_it_scores() {
         None => println!("nearest voice  not askable: one meeting's voices have nobody to meet"),
     }
 
-    // The ceiling. One centroid per person per meeting, built from the
-    // reference rather than from our clustering, so what it reaches is what
-    // the embedding can do and the gap below it is ours to close.
-    let oracle_voices = oracle_voices(&measured);
-    let oracle_candidates: Vec<score::Candidate> = oracle_voices
-        .iter()
-        .flat_map(|(meeting, voices)| {
-            voices.iter().map(move |(who, vector)| score::Candidate {
-                group: meeting,
-                speaker: who,
-                vector,
+    if with_oracle {
+        // The ceiling. One centroid per person per meeting, built from the
+        // reference rather than from our clustering, so what it reaches is
+        // what the embedding can do and the gap below it is ours to close.
+        let oracle_voices = oracle_voices(measured);
+        let oracle_candidates: Vec<score::Candidate> = oracle_voices
+            .iter()
+            .flat_map(|(meeting, voices)| {
+                voices.iter().map(move |(who, vector)| score::Candidate {
+                    group: meeting,
+                    speaker: who,
+                    vector,
+                })
             })
-        })
-        .collect();
-    let oracle_pairs = cross_meeting_pairs(&oracle_voices);
-    println!(
-        "\noracle voices  {} voices from perfect clustering — the ceiling any threshold aims at",
-        oracle_candidates.len()
-    );
-    match score::equal_error_rate(&oracle_pairs) {
-        Some((rate, threshold)) => println!(
-            "  cross-meeting EER {:.2}% at {threshold:.3}   {} trials",
-            rate * 100.0,
-            oracle_pairs.len()
-        ),
-        None => println!("  cross-meeting EER not computable"),
-    }
-    match score::nearest_is_right(&oracle_candidates) {
-        Some(rate) => println!("  nearest voice     {:.1}% right", rate * 100.0),
-        None => println!("  nearest voice     not askable"),
-    }
-    match score::refusal_point(&oracle_pairs) {
-        Some((threshold, refused)) => println!(
-            "  floor that admits nobody: {threshold:.3}, refusing {:.2}% of genuine pairs",
-            refused * 100.0
-        ),
-        None => println!("  floor that admits nobody: no impostor pairs to refuse"),
+            .collect();
+        let oracle_pairs = cross_meeting_pairs(&oracle_voices);
+        println!(
+            "\noracle voices  {} voices from perfect clustering — the ceiling any \
+             threshold aims at",
+            oracle_candidates.len()
+        );
+        match score::equal_error_rate(&oracle_pairs) {
+            Some((rate, threshold)) => println!(
+                "  cross-meeting EER {:.2}% at {threshold:.3}   {} trials",
+                rate * 100.0,
+                oracle_pairs.len()
+            ),
+            None => println!("  cross-meeting EER not computable"),
+        }
+        match score::nearest_is_right(&oracle_candidates) {
+            Some(rate) => println!("  nearest voice     {:.1}% right", rate * 100.0),
+            None => println!("  nearest voice     not askable"),
+        }
+        match score::refusal_point(&oracle_pairs) {
+            Some((threshold, refused)) => println!(
+                "  floor that admits nobody: {threshold:.3}, refusing {:.2}% of genuine pairs",
+                refused * 100.0
+            ),
+            None => println!("  floor that admits nobody: no impostor pairs to refuse"),
+        }
     }
 
-    let total_seconds: f64 = measured.iter().map(|one| one.seconds).sum();
-    let total_audio: f64 = measured.iter().map(|one| one.audio_seconds).sum();
-    println!(
-        "wall clock     {total_seconds:.1}s for {total_audio:.1}s of audio  \
-         ({:.2}x real time)",
-        total_seconds / total_audio.max(1.0)
-    );
+    (pooled, oracle)
+}
 
-    // Bounds, not targets. The point of this binary is the numbers it
-    // prints; asserting the recorded figure exactly would fail on the first
-    // honest improvement, and asserting nothing would let a pipeline that
-    // silently stopped producing turns pass. So: it ran, it produced
-    // something, and the floor is below the real thing.
-    assert!(pooled.total_ms > 0, "no reference speech was scored at all");
-    assert!(
-        oracle.rate() <= pooled.rate() + 1e-9,
-        "the oracle floor is above the real rate, which cannot happen: \
-         {oracle:?} vs {pooled:?}"
-    );
-    assert!(
-        pooled.rate() < 1.0,
-        "the pipeline attributed nothing usable: {pooled:?}"
+#[test]
+fn the_pipeline_scores_what_the_record_says_it_scores() {
+    let Some(meetings) = corpus() else {
+        eprintln!(
+            "skipping: {MEASURE_ENV} is not set. This is the DER and EER harness \
+             behind ADR-0037; it needs the AMI corpus, which is fetched by \
+             scripts/fetch-ami.sh and never by this test."
+        );
+        return;
+    };
+    let (segmentation, embedding) = models();
+
+    let thresholds = thresholds_under_test();
+    let sweeping = thresholds.len() > 1;
+
+    // Inference once per meeting, clustering once per threshold over the same
+    // observations. A thirteen-point sweep then costs one pass, and every
+    // point in it saw byte-identical model output — so a difference between
+    // two thresholds is the threshold's and nothing else's.
+    let mut by_threshold: Vec<Vec<Measured>> = (0..thresholds.len()).map(|_| Vec::new()).collect();
+    for meeting in &meetings {
+        let inferred = observe_once(meeting, &segmentation, &embedding);
+        println!(
+            "{:<12}  observed {:>6.1}s for {:>6.1}s of audio  ({:.2}x)",
+            inferred.name,
+            inferred.seconds,
+            inferred.audio_seconds,
+            inferred.seconds / inferred.audio_seconds.max(1.0),
+        );
+        for (index, threshold) in thresholds.iter().enumerate() {
+            by_threshold[index].push(score_at(&inferred, *threshold, index == 0));
+        }
+    }
+
+    let total_seconds: f64 = by_threshold[0].iter().map(|one| one.seconds).sum();
+    let total_audio: f64 = by_threshold[0].iter().map(|one| one.audio_seconds).sum();
+
+    for (index, threshold) in thresholds.iter().enumerate() {
+        if sweeping {
+            println!("\n───────── merge threshold {threshold:.2} ─────────");
+        }
+        let (pooled, oracle) = report(&by_threshold[index], index == 0);
+
+        // Bounds, not targets. The point of this binary is the numbers it
+        // prints; asserting the recorded figure exactly would fail on the
+        // first honest improvement, and asserting nothing would let a
+        // pipeline that silently stopped producing turns pass. So: it ran,
+        // it produced something, and the floor is below the real thing.
+        assert!(pooled.total_ms > 0, "no reference speech was scored at all");
+        assert!(
+            oracle.rate() <= pooled.rate() + 1e-9,
+            "the oracle floor is above the real rate at threshold {threshold}, \
+             which cannot happen: {oracle:?} vs {pooled:?}"
+        );
+        assert!(
+            pooled.rate() < 1.0,
+            "the pipeline attributed nothing usable at threshold {threshold}: {pooled:?}"
+        );
+    }
+
+    println!(
+        "\nwall clock     {total_seconds:.1}s of inference for {total_audio:.1}s of audio  \
+         ({:.2}x real time), {} threshold(s) scored from it",
+        total_seconds / total_audio.max(1.0),
+        thresholds.len()
     );
 }
