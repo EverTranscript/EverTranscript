@@ -797,8 +797,19 @@ pub fn persist_with(
     Ok(assigned)
 }
 
-/// What the Operator has already said about the voices in this Meeting,
-/// read before this run overwrites it.
+/// What the Operator has already said about the voices in this Meeting.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Claims {
+    /// Clusters this run may not guess about: every segment in them already
+    /// belonged to the same Speaker, so the Operator has already said whose
+    /// voice it is. Assigned rather than resolved.
+    pub claimed: BTreeMap<Cluster, String>,
+    /// Speakers a correction took a whole cluster's words *away* from.
+    /// Written as negative evidence by [`relearn`].
+    pub denied: BTreeSet<(String, Cluster)>,
+}
+
+/// Reads the Operator's word about this Meeting before this run overwrites it.
 ///
 /// Ticket 12. **Must be called before [`super::reconcile::apply`].** What it
 /// reads is the attribution standing on the segments *now* — the previous
@@ -807,14 +818,27 @@ pub fn persist_with(
 /// anywhere, so this is the only surviving record of who these voices were;
 /// reading it late reads what this run has just guessed.
 ///
-/// A cluster goes to the Speaker that owned most of its segments, among the
-/// Speakers a re-run may relearn. That is the Operator's confirmation of a
-/// whole cluster, which ADR-0009 already puts outside the machine's reach,
-/// applied to the same words in a new vector space — so it **outranks** the
-/// resolve rather than seeding it, and skips the minting floor with it.
-/// Without that, the first Meeting of a re-run hands a named voice to a
-/// fresh pseudonym and the Operator watches the product forget people it has
-/// known for months.
+/// **A cluster is claimed only where every one of its segments belongs to
+/// the same eligible Speaker.** Ticket 12 seeds a named Speaker from *their
+/// own* attributed segments; naming a cluster the old model drew was never
+/// confirmation of every voice in a new, differently drawn one. A re-run
+/// redraws the clusters, so one can arrive holding two people's words, or
+/// one person's mixed with audio nobody has vouched for — and claiming that
+/// whole would enroll the unvouched part under a name the Operator trusts.
+/// Conflicting or unsupported ownership therefore yields no claim at all
+/// rather than a winner.
+///
+/// Abstaining here costs the shortcut, not the person: the seeding path can
+/// still rebuild that Speaker from the ranges that *are* theirs, and the
+/// resolve still has their Voiceprint to match against. What an absent claim
+/// withholds is the right to skip the resolve for a cluster whose ownership
+/// nobody has established.
+///
+/// The test is over the *set* of owners, never a count, so splitting one
+/// utterance into more segments cannot change who claims it. A tally or a
+/// coverage percentage would make transcription granularity an input to
+/// identity, and a tie between two names would be broken by comparing two
+/// UUIDs, which mean nothing about whose voice it is.
 ///
 /// **The Operator is excluded**, though
 /// [`crate::store::speakers::relearnable`] includes them. A re-run does give
@@ -835,55 +859,149 @@ pub fn persist_with(
 /// the mark exists (ADR-0009, ticket 09) — and neither does a pseudonym,
 /// which is re-derived rather than relearned.
 ///
-/// **Only the positive half.** A correction also says whose voice this was
-/// *not*, and that negative evidence is `relearn`'s, written after the
-/// assignment that decided whose the words were. It reads the same
-/// assignments and nothing here has to carry it.
+/// **The other half of a correction is what it denied**, and it is held to
+/// the same standard: a cluster is denied to a Speaker only where *every*
+/// segment in it was corrected away from them. [`relearn`] writes that as a
+/// negative exemplar cut from the cluster's centroid, and a centroid is
+/// evidence of "not them" only if all of it was taken from them. One
+/// corrected segment in thirty denies nothing — the other twenty-nine are
+/// audio the Operator never disputed, and suppressing a voice against them
+/// is the same mistake as enrolling one from them.
 pub fn claims(
     connection: &rusqlite::Connection,
     reconciliation: &super::reconcile::Reconciliation,
-) -> anyhow::Result<BTreeMap<Cluster, String>> {
+) -> anyhow::Result<Claims> {
     use crate::store::speakers;
 
     let operator = speakers::operator(connection)?.map(|speaker| speaker.id);
-    let relearnable: BTreeSet<String> = speakers::relearnable(connection)?
+    let eligible: BTreeSet<String> = speakers::relearnable(connection)?
         .into_iter()
         .map(|speaker| speaker.id)
         .filter(|id| Some(id) != operator.as_ref())
         .collect();
-    if relearnable.is_empty() {
-        return Ok(BTreeMap::new());
+    if eligible.is_empty() {
+        return Ok(Claims::default());
     }
 
-    // How many of each cluster's segments each relearnable Speaker owned.
-    // Segments nobody was speaking in have no cluster and vote in nothing:
-    // silence belongs to nobody, as the join already says.
-    let mut votes: BTreeMap<Cluster, BTreeMap<String, usize>> = BTreeMap::new();
+    // Per cluster, the distinct Speakers its segments point at in each
+    // direction. `None` is a segment that supports nobody — unattributed, or
+    // attributed to somebody a re-run may not relearn — and it is *kept* in
+    // the set rather than skipped, because it is the whole difference
+    // between "all of this is Alice's" and "some of this is Alice's".
+    let mut owners: BTreeMap<Cluster, BTreeSet<Option<String>>> = BTreeMap::new();
+    let mut taken_from: BTreeMap<Cluster, BTreeSet<Option<String>>> = BTreeMap::new();
     for assignment in &reconciliation.assignments {
+        // Silence is in no cluster, so it supports and denies nothing.
         let Some(cluster) = assignment.cluster else {
             continue;
         };
-        let Some(owner) = speakers::attributed_speaker(connection, &assignment.segment_id)? else {
-            continue;
-        };
-        if relearnable.contains(&owner) {
-            *votes.entry(cluster).or_default().entry(owner).or_default() += 1;
-        }
+        let owner = speakers::attributed_speaker(connection, &assignment.segment_id)?
+            .filter(|id| eligible.contains(id));
+        owners.entry(cluster).or_default().insert(owner);
+        let taken = speakers::replaced_speaker(connection, &assignment.segment_id)?
+            .filter(|id| eligible.contains(id));
+        taken_from.entry(cluster).or_default().insert(taken);
     }
 
-    Ok(votes
-        .into_iter()
-        .filter_map(|(cluster, owners)| {
-            owners
-                .into_iter()
-                // Most segments wins. The tie-break is the smaller id — any
-                // rule would do, so long as two runs over the same History
-                // reach the same answer rather than whichever the map
-                // happened to yield last.
-                .max_by(|left, right| left.1.cmp(&right.1).then_with(|| right.0.cmp(&left.0)))
-                .map(|(owner, _)| (cluster, owner))
-        })
-        .collect())
+    // Unanimity or nothing: one entry in the set, and that entry names
+    // somebody. A cluster with no segments and a cluster nobody vouched for
+    // both fall out here without needing a guard of their own.
+    let agreed = |who: &BTreeSet<Option<String>>| -> Option<String> {
+        if who.len() == 1 {
+            who.iter().next().cloned().flatten()
+        } else {
+            None
+        }
+    };
+
+    let claimed: BTreeMap<Cluster, String> = owners
+        .iter()
+        .filter_map(|(cluster, who)| agreed(who).map(|speaker| (*cluster, speaker)))
+        .collect();
+    let mut denied: BTreeSet<(String, Cluster)> = taken_from
+        .iter()
+        .filter_map(|(cluster, who)| agreed(who).map(|speaker| (speaker, *cluster)))
+        .collect();
+    // A Speaker who still owns a cluster is not also denied it: the
+    // Operator's latest word about those words is that they are theirs.
+    denied.retain(|(speaker, cluster)| claimed.get(cluster) != Some(speaker));
+
+    Ok(Claims { claimed, denied })
+}
+
+/// Writes the negative half of the Operator's corrections, in this run's
+/// vector space. Answers how many were written.
+///
+/// The positive half rides along with the assignment — a claimed cluster is
+/// filed under its Speaker as it is persisted. What is left over is what the
+/// corrections *denied*, "these words were not yours", which has no
+/// assignment to travel with and so is written here, from the centroid of
+/// the cluster the words turned out to be.
+///
+/// **Whole clusters only**, by [`claims`]'s construction: the vector this
+/// files against a Speaker is cut entirely from audio the Operator took away
+/// from them. A centroid that mixed disputed audio with audio nobody
+/// questioned would suppress a voice using evidence *for* it.
+///
+/// **Idempotent, and it deletes nothing.** A negative the Speaker already
+/// holds for the same vector in the same Meeting is left where it is rather
+/// than rewritten, so a Meeting re-run twice inside one pass writes its
+/// negatives once — copies are votes in [`centroid`]. Withdrawing a previous
+/// model's evidence is ticket 05's wipe, which takes every exemplar; nothing
+/// here removes anything, because a negative exemplar deleted by a path that
+/// cannot re-derive it is a correction the Operator made and the system
+/// quietly forgot.
+pub fn relearn(
+    connection: &rusqlite::Connection,
+    meeting_id: &str,
+    embeddings: &BTreeMap<Cluster, Embedding>,
+    claims: &Claims,
+) -> anyhow::Result<usize> {
+    use crate::store::speakers;
+
+    let mut written = 0;
+    for (speaker_id, cluster) in &claims.denied {
+        // A cluster this run never embedded has no centroid to file.
+        let Some(embedding) = embeddings.get(cluster) else {
+            continue;
+        };
+        // Exact comparison is right here: both sides are the same vector
+        // through a BLOB round-trip, with no arithmetic between them.
+        let held = speakers::exemplars(connection, speaker_id)?;
+        let already = held.iter().any(|exemplar| {
+            exemplar.is_negative
+                && exemplar.meeting_id.as_deref() == Some(meeting_id)
+                && exemplar.model == embedding.model
+                && exemplar.model_version == embedding.model_version
+                && exemplar.vector == embedding.vector
+        });
+        if !already {
+            speakers::add_exemplar(
+                connection,
+                speakers::NewExemplar {
+                    speaker_id,
+                    meeting_id: Some(meeting_id),
+                    vector: &embedding.vector,
+                    model: &embedding.model,
+                    model_version: &embedding.model_version,
+                    voiced_ms: embedding.voiced_ms as i64,
+                    from_operator: true,
+                    is_negative: true,
+                    // Never played back as this Speaker: it is somebody
+                    // else's voice, which is the whole content of the claim.
+                    sample: None,
+                },
+            )?;
+            written += 1;
+        }
+        // Refreshed whether or not this call wrote, not only after a write:
+        // a run interrupted between the exemplar and the Voiceprint leaves
+        // the evidence recorded and the vector stale, and a retry that
+        // skipped the refresh because the evidence was already there would
+        // leave it stale for good.
+        refresh_voiceprint(connection, speaker_id)?;
+    }
+    Ok(written)
 }
 
 /// What rebuilding stale evidence did.
@@ -1530,7 +1648,9 @@ mod tests {
             &[(Some(0), Some(&alice)), (Some(0), Some(&alice))],
         );
         assert_eq!(
-            claims(&connection, &reconciliation).expect("claims"),
+            claims(&connection, &reconciliation)
+                .expect("claims")
+                .claimed,
             [(Cluster(0), alice)].into_iter().collect()
         );
     }
@@ -1561,10 +1681,9 @@ mod tests {
         );
 
         let reconciliation = spoken(&connection, &meeting.id, &[(Some(0), Some(&me))]);
+        let said = claims(&connection, &reconciliation).expect("claims");
         assert!(
-            claims(&connection, &reconciliation)
-                .expect("claims")
-                .is_empty(),
+            said.claimed.is_empty() && said.denied.is_empty(),
             "the channel rules own the Operator, not the old attributions"
         );
     }
@@ -1585,7 +1704,9 @@ mod tests {
             .expect("correct");
 
         assert_eq!(
-            claims(&connection, &reconciliation).expect("claims")[&Cluster(0)],
+            claims(&connection, &reconciliation)
+                .expect("claims")
+                .claimed[&Cluster(0)],
             bob
         );
     }
@@ -1604,6 +1725,7 @@ mod tests {
         assert!(
             claims(&connection, &reconciliation)
                 .expect("claims")
+                .claimed
                 .is_empty()
         );
     }
@@ -1619,12 +1741,13 @@ mod tests {
         assert!(
             claims(&connection, &reconciliation)
                 .expect("claims")
+                .claimed
                 .is_empty()
         );
     }
 
     #[test]
-    fn the_cluster_goes_to_whoever_owned_most_of_it_and_silence_votes_in_nothing() {
+    fn silence_is_in_no_cluster_and_breaks_no_claim() {
         use crate::store::meetings;
         let connection = db();
         let meeting = meetings::start(&connection, None, None).expect("meeting");
@@ -1635,32 +1758,32 @@ mod tests {
             &connection,
             &meeting.id,
             &[
-                (Some(0), Some(&bob)),
                 (Some(0), Some(&alice)),
                 (Some(0), Some(&alice)),
-                // Nobody was speaking here, and nobody owns it either way.
+                // Nobody was speaking here, whatever the record says was
+                // standing on it, so it is evidence about no cluster.
                 (None, Some(&bob)),
                 (None, None),
             ],
         );
         assert_eq!(
-            claims(&connection, &reconciliation).expect("claims"),
-            [(Cluster(0), alice)].into_iter().collect(),
-            "two segments against one, and the silence changed nothing"
+            claims(&connection, &reconciliation)
+                .expect("claims")
+                .claimed,
+            [(Cluster(0), alice)].into_iter().collect()
         );
     }
 
-    /// A plurality among relearnable owners, with no floor under it.
+    /// A name does not claim a cluster it only partly owns.
     ///
-    /// One named segment in a cluster otherwise owned by a pseudonym claims
-    /// the whole cluster, because pseudonyms do not vote. Deliberate and
-    /// worth pinning: it is the Operator's only statement about these words,
-    /// and the alternative — a floor, or letting pseudonyms outvote a name —
-    /// is a rule nobody has asked for. The cost is real: the Voiceprint the
-    /// re-run then builds is cut from the whole cluster, most of which that
-    /// person may not have said.
+    /// The re-run redraws the clusters, so one can arrive holding a named
+    /// person's words *and* audio nobody has vouched for. Claiming it whole
+    /// would enroll the unvouched part under a name the Operator trusts, and
+    /// the Voiceprint the re-run then builds would be cut from all of it.
+    /// Abstaining costs the shortcut past the resolve, not the person: the
+    /// seeding path can still rebuild them from the ranges that are theirs.
     #[test]
-    fn one_named_segment_outvotes_a_pseudonym_that_owns_the_rest() {
+    fn a_name_does_not_claim_a_cluster_it_only_partly_owns() {
         use crate::store::{meetings, speakers};
         let connection = db();
         let meeting = meetings::start(&connection, None, None).expect("meeting");
@@ -1676,16 +1799,18 @@ mod tests {
                 (Some(0), Some(&alice)),
             ],
         );
-        assert_eq!(
-            claims(&connection, &reconciliation).expect("claims")[&Cluster(0)],
-            alice
+        assert!(
+            claims(&connection, &reconciliation)
+                .expect("claims")
+                .claimed
+                .is_empty()
         );
     }
 
     #[test]
-    fn a_tie_resolves_the_same_way_every_time() {
-        // Two runs over the same History must agree; which one wins matters
-        // less than that it is not whichever the map yielded last.
+    fn a_cluster_two_named_voices_share_is_claimed_by_neither() {
+        // A merged cluster is the case with no right answer, and picking
+        // one by comparing two UUIDs would be picking it at random.
         use crate::store::meetings;
         let connection = db();
         let meeting = meetings::start(&connection, None, None).expect("meeting");
@@ -1697,10 +1822,205 @@ mod tests {
             &meeting.id,
             &[(Some(0), Some(&alice)), (Some(0), Some(&bob))],
         );
-        let once = claims(&connection, &reconciliation).expect("claims");
-        assert_eq!(once, claims(&connection, &reconciliation).expect("again"));
-        let expected = std::cmp::min(&alice, &bob);
-        assert_eq!(&once[&Cluster(0)], expected);
+        assert!(
+            claims(&connection, &reconciliation)
+                .expect("claims")
+                .claimed
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn splitting_an_utterance_cannot_change_which_identity_is_claimed() {
+        // How finely the transcript was cut is not evidence about whose
+        // voice it is, so it must not be able to decide one.
+        use crate::store::meetings;
+        let connection = db();
+        let alice = named(&connection, "Alice");
+        let bob = named(&connection, "Bob");
+
+        // Cluster 0 is all Alice's; cluster 1 holds hers and Bob's together.
+        let coarse = meetings::start(&connection, None, None).expect("meeting");
+        let coarse = spoken(
+            &connection,
+            &coarse.id,
+            &[
+                (Some(0), Some(&alice)),
+                (Some(1), Some(&alice)),
+                (Some(1), Some(&bob)),
+            ],
+        );
+        // The same words, cut into more segments.
+        let fine = meetings::start(&connection, None, None).expect("meeting");
+        let fine = spoken(
+            &connection,
+            &fine.id,
+            &[
+                (Some(0), Some(&alice)),
+                (Some(0), Some(&alice)),
+                (Some(0), Some(&alice)),
+                (Some(1), Some(&alice)),
+                (Some(1), Some(&alice)),
+                (Some(1), Some(&alice)),
+                (Some(1), Some(&bob)),
+            ],
+        );
+
+        let coarse = claims(&connection, &coarse).expect("coarse").claimed;
+        assert_eq!(
+            coarse,
+            claims(&connection, &fine).expect("fine").claimed,
+            "three Alice segments against one of Bob's is still a shared cluster"
+        );
+        assert_eq!(coarse, [(Cluster(0), alice)].into_iter().collect());
+    }
+
+    // ---- Ticket 12: the other half, what the correction denied ----
+
+    #[test]
+    fn a_correction_denies_the_cluster_it_took_every_word_from() {
+        use crate::store::{meetings, speakers};
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let alice = named(&connection, "Alice");
+        let bob = named(&connection, "Bob");
+
+        let reconciliation = spoken(
+            &connection,
+            &meeting.id,
+            &[(Some(0), Some(&alice)), (Some(0), Some(&alice))],
+        );
+        for assignment in &reconciliation.assignments {
+            speakers::correct_attribution(&connection, &assignment.segment_id, &bob)
+                .expect("correct");
+        }
+
+        let said = claims(&connection, &reconciliation).expect("claims");
+        assert_eq!(said.claimed[&Cluster(0)], bob);
+        assert_eq!(
+            said.denied,
+            [(alice, Cluster(0))].into_iter().collect(),
+            "a correction says whose voice it was and whose it was not"
+        );
+    }
+
+    /// The negative half is held to the standard the positive half is.
+    ///
+    /// Two of these three segments are audio the Operator never disputed.
+    /// A negative exemplar cut from the whole cluster would suppress Alice
+    /// using evidence that is partly *for* her.
+    #[test]
+    fn a_correction_over_part_of_a_cluster_denies_none_of_it() {
+        use crate::store::{meetings, speakers};
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let alice = named(&connection, "Alice");
+        let bob = named(&connection, "Bob");
+
+        let reconciliation = spoken(
+            &connection,
+            &meeting.id,
+            &[
+                (Some(0), Some(&alice)),
+                (Some(0), Some(&alice)),
+                (Some(0), Some(&alice)),
+            ],
+        );
+        speakers::correct_attribution(&connection, &reconciliation.assignments[0].segment_id, &bob)
+            .expect("correct");
+
+        let said = claims(&connection, &reconciliation).expect("claims");
+        assert!(said.denied.is_empty(), "one word of three denies nothing");
+        assert!(
+            said.claimed.is_empty(),
+            "and the cluster is now shared, so nobody claims it either"
+        );
+    }
+
+    #[test]
+    fn a_cluster_its_owner_still_owns_is_not_denied_to_them() {
+        // Re-asserting an attribution is not a correction against the person
+        // it was re-asserted for.
+        use crate::store::{meetings, speakers};
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let alice = named(&connection, "Alice");
+
+        let reconciliation = spoken(&connection, &meeting.id, &[(Some(0), Some(&alice))]);
+        speakers::correct_attribution(
+            &connection,
+            &reconciliation.assignments[0].segment_id,
+            &alice,
+        )
+        .expect("correct");
+
+        let said = claims(&connection, &reconciliation).expect("claims");
+        assert_eq!(said.claimed[&Cluster(0)], alice);
+        assert!(said.denied.is_empty());
+    }
+
+    #[test]
+    fn relearn_files_the_denied_cluster_against_the_voice_it_was_not() {
+        use crate::store::{meetings, speakers};
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let alice = named(&connection, "Alice");
+        let bob = named(&connection, "Bob");
+
+        let reconciliation = spoken(&connection, &meeting.id, &[(Some(0), Some(&alice))]);
+        speakers::correct_attribution(&connection, &reconciliation.assignments[0].segment_id, &bob)
+            .expect("correct");
+        let said = claims(&connection, &reconciliation).expect("claims");
+        let voices = clusters(&[(0, &[1.0, 0.0])]);
+
+        assert_eq!(
+            relearn(&connection, &meeting.id, &voices, &said).expect("relearn"),
+            1
+        );
+        let evidence = speakers::exemplars(&connection, &alice).expect("exemplars");
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence[0].is_negative, "against, not for");
+        assert!(
+            evidence[0].from_operator,
+            "the Operator said so, not a guess"
+        );
+        assert_eq!(evidence[0].vector, voices[&Cluster(0)].vector);
+        assert!(
+            evidence[0].sample.is_none(),
+            "never played back as this voice: it is somebody else's"
+        );
+    }
+
+    #[test]
+    fn relearning_the_same_meeting_twice_writes_the_evidence_once() {
+        // Copies are votes in `centroid`, so a retried Meeting that stacked
+        // its negatives would suppress the voice harder each attempt.
+        use crate::store::{meetings, speakers};
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let alice = named(&connection, "Alice");
+        let bob = named(&connection, "Bob");
+
+        let reconciliation = spoken(&connection, &meeting.id, &[(Some(0), Some(&alice))]);
+        speakers::correct_attribution(&connection, &reconciliation.assignments[0].segment_id, &bob)
+            .expect("correct");
+        let said = claims(&connection, &reconciliation).expect("claims");
+        let voices = clusters(&[(0, &[1.0, 0.0])]);
+
+        assert_eq!(
+            relearn(&connection, &meeting.id, &voices, &said).expect("first"),
+            1
+        );
+        assert_eq!(
+            relearn(&connection, &meeting.id, &voices, &said).expect("second"),
+            0
+        );
+        assert_eq!(
+            speakers::exemplars(&connection, &alice)
+                .expect("exemplars")
+                .len(),
+            1
+        );
     }
 
     #[test]

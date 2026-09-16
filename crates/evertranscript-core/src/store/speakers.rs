@@ -842,6 +842,25 @@ pub fn attributed_speaker(connection: &Connection, segment_id: &str) -> Result<O
         .flatten())
 }
 
+/// Who a correction took a segment away from, if one did.
+///
+/// The machine's attribution as it stood when the Operator disagreed — the
+/// negative half of what the correction taught, and after a model change the
+/// only surviving record of it. The newest hint, matching
+/// [`attributed_speaker`]: the Operator's latest word is the one that counts
+/// in both directions.
+pub fn replaced_speaker(connection: &Connection, segment_id: &str) -> Result<Option<String>> {
+    Ok(connection
+        .query_row(
+            "SELECT replaced_speaker_id FROM attribution_hints WHERE segment_id = ?1 \
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+            params![segment_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten())
+}
+
 /// Writes the machine's attribution onto a segment.
 pub fn attribute_segment(
     connection: &Connection,
