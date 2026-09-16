@@ -78,11 +78,17 @@ pub struct Speaker {
     pub voiceprint_model: Option<String>,
     pub voiceprint_model_version: Option<String>,
     pub confirmed: bool,
+    /// The Operator deleted this Speaker's Voiceprint, and no re-run may
+    /// give it one back. Set by that act and by nothing else — after a model
+    /// change "named, no vector" is the ordinary state of most of the
+    /// Registry, so the deliberate case needs a mark of its own.
+    pub forgotten: bool,
     pub created_at: String,
 }
 
 const SPEAKER_COLUMNS: &str = "id, display_name, is_operator, voiceprint IS NOT NULL, \
-                               voiceprint_model, voiceprint_model_version, confirmed, created_at";
+                               voiceprint_model, voiceprint_model_version, confirmed, \
+                               forgotten, created_at";
 
 fn row_to_speaker(row: &rusqlite::Row<'_>) -> rusqlite::Result<Speaker> {
     Ok(Speaker {
@@ -93,7 +99,8 @@ fn row_to_speaker(row: &rusqlite::Row<'_>) -> rusqlite::Result<Speaker> {
         voiceprint_model: row.get(4)?,
         voiceprint_model_version: row.get(5)?,
         confirmed: row.get::<_, i64>(6)? != 0,
-        created_at: row.get(7)?,
+        forgotten: row.get::<_, i64>(7)? != 0,
+        created_at: row.get(8)?,
     })
 }
 
@@ -279,11 +286,18 @@ pub fn join(connection: &Connection, from: &str, into: &str) -> Result<Speaker> 
 /// Voiceprint", and there is no longer a Voiceprint to vouch for; leaving it
 /// set would make a future re-enrolled vector inherit a confirmation nobody
 /// gave it.
+///
+/// It also marks the Speaker **forgotten**, and it is the only thing that
+/// does. After a model change clears every vector (ADR-0037), a Speaker the
+/// Operator deliberately forgot is indistinguishable by its columns from one
+/// the migration cleared — and a re-run that relearns named Speakers from
+/// their attributed segments would bring the forgotten voice back without
+/// anyone being told. The mark is what [`relearnable`] consults.
 pub fn delete_voiceprint(connection: &Connection, id: &str) -> Result<bool> {
     let changed = connection.execute(
         "UPDATE speakers
             SET voiceprint = NULL, voiceprint_model = NULL,
-                voiceprint_model_version = NULL, confirmed = 0
+                voiceprint_model_version = NULL, confirmed = 0, forgotten = 1
           WHERE id = ?1",
         params![id],
     )?;
@@ -292,6 +306,30 @@ pub fn delete_voiceprint(connection: &Connection, id: &str) -> Result<bool> {
         params![id],
     )?;
     Ok(changed > 0)
+}
+
+/// The Speakers a re-run may give a Voiceprint back to.
+///
+/// Every Speaker the Operator has vouched for — named, or the Operator's own
+/// row — **except** the ones they deliberately forgot. A re-run rebuilds
+/// recognition for the first set from their attributed segments; the second
+/// set is the whole reason the `forgotten` mark exists, and leaving them out
+/// here is what makes "a deleted Voiceprint stays deleted" true of a bulk
+/// re-run rather than only of the moment of deletion.
+///
+/// Deliberately not a guard on the *correction* path: an Operator
+/// re-attributing a segment to a forgotten Speaker is a statement about that
+/// one Speaker, made on purpose, and is a different act from a re-run
+/// sweeping the voice back in unasked.
+pub fn relearnable(connection: &Connection) -> Result<Vec<Speaker>> {
+    let sql = format!(
+        "SELECT {SPEAKER_COLUMNS} FROM speakers \
+          WHERE forgotten = 0 AND (display_name IS NOT NULL OR is_operator = 1) \
+          ORDER BY id"
+    );
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map([], row_to_speaker)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
 /// Speakers nobody has vouched for: unnamed, unconfirmed, not the Operator.
@@ -1162,6 +1200,88 @@ mod tests {
             attributed_speaker(&connection, &segment_id).expect("attr"),
             Some(speaker.id),
             "the record is untouched"
+        );
+        assert!(
+            after.forgotten,
+            "and the act left a mark, so a re-run cannot undo it silently"
+        );
+    }
+
+    #[test]
+    fn a_forgotten_speaker_is_never_relearned() {
+        // Asserted here rather than through the re-run, so the guarantee
+        // does not wait on the re-run being built. Three named Speakers, one
+        // of whom the Operator deliberately forgot.
+        let connection = db();
+        let alice = create(&connection, false).expect("alice");
+        rename(&connection, &alice.id, "Alice").expect("name");
+        let bob = create(&connection, false).expect("bob");
+        rename(&connection, &bob.id, "Bob").expect("name");
+        let operator = create(&connection, true).expect("operator");
+        let stranger = create(&connection, false).expect("stranger");
+
+        delete_voiceprint(&connection, &bob.id).expect("forget");
+
+        let relearnable: Vec<String> = relearnable(&connection)
+            .expect("relearnable")
+            .into_iter()
+            .map(|speaker| speaker.id)
+            .collect();
+        assert!(relearnable.contains(&alice.id), "a named voice comes back");
+        assert!(
+            relearnable.contains(&operator.id),
+            "and so does the Operator's own"
+        );
+        assert!(
+            !relearnable.contains(&bob.id),
+            "but the forgotten one stays forgotten"
+        );
+        assert!(
+            !relearnable.contains(&stranger.id),
+            "and a pseudonym is not something to relearn — it is re-derived"
+        );
+
+        assert_eq!(
+            get(&connection, &bob.id)
+                .expect("get")
+                .expect("exists")
+                .display_name
+                .as_deref(),
+            Some("Bob"),
+            "forgotten is about the voice, never about the record"
+        );
+    }
+
+    #[test]
+    fn only_forgetting_marks_a_speaker_forgotten() {
+        // A Speaker with no Voiceprint is the ordinary state after a model
+        // change. The mark has to mean the Operator's act and nothing else,
+        // or it means nothing.
+        let connection = db();
+        let never_enrolled = create(&connection, false).expect("create");
+        assert!(!never_enrolled.forgotten);
+
+        rename(&connection, &never_enrolled.id, "Alice").expect("name");
+        set_voiceprint(&connection, &never_enrolled.id, &[1.0, 0.0], "m", "1").expect("voiceprint");
+        let named = get(&connection, &never_enrolled.id)
+            .expect("get")
+            .expect("exists");
+        assert!(
+            !named.forgotten,
+            "naming and enrolling leave the mark alone"
+        );
+
+        // What a model change does: the vector goes, the mark does not
+        // appear.
+        connection
+            .execute("UPDATE speakers SET voiceprint = NULL", [])
+            .expect("clear");
+        assert!(
+            !get(&connection, &never_enrolled.id)
+                .expect("get")
+                .expect("exists")
+                .forgotten,
+            "a cleared Voiceprint is not a forgotten one"
         );
     }
 

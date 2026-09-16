@@ -1239,6 +1239,11 @@ pub struct Speaker {
     /// (ADR-0008 as amended), and a confirmed Voiceprint outranks an
     /// unconfirmed one when matching.
     pub confirmed: bool,
+    /// The Operator deleted this Speaker's Voiceprint. Present so a Registry
+    /// can say "forgotten on purpose" rather than "no Voiceprint", which
+    /// after a model change is the ordinary state of most rows.
+    #[serde(default)]
+    pub forgotten: bool,
     /// Which model produced the stored Voiceprint. Present so a Registry can
     /// explain why an upgrade re-embedded, rather than recognition silently
     /// changing quality.

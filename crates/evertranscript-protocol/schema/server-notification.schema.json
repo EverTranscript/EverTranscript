@@ -445,6 +445,11 @@
             "null"
           ]
         },
+        "forgotten": {
+          "description": "The Operator deleted this Speaker's Voiceprint. Present so a Registry\ncan say \"forgotten on purpose\" rather than \"no Voiceprint\", which\nafter a model change is the ordinary state of most rows.",
+          "type": "boolean",
+          "default": false
+        },
         "hasSample": {
           "description": "Whether `speaker/sample` has something to play: the voice was\ncaptured since samples were kept, and the Meeting it came from is\nstill here. False for every Speaker minted before then.",
           "type": "boolean",

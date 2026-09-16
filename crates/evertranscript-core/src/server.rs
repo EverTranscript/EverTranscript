@@ -186,6 +186,7 @@ fn speaker_to_wire(
         is_operator: row.is_operator,
         has_voiceprint: row.has_voiceprint,
         confirmed: row.confirmed,
+        forgotten: row.forgotten,
         voiceprint_model: row.voiceprint_model,
         meetings_seen_in: seen.meetings,
         first_seen_at: seen.first_seen_at,

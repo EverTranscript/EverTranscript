@@ -907,6 +907,10 @@ function RegistryPanel({
     // says why. The model that made the old vector outlives the vector for
     // exactly this sentence (ADR-0037).
     if (!speaker.hasVoiceprint) {
+      // Three states wear "no Voiceprint" and mean different things: one the
+      // Operator chose, one a model change caused, and one that is simply a
+      // voice never enrolled. Saying so is the point of the Registry.
+      if (speaker.forgotten) return t("registry.voiceprint.forgotten");
       return speaker.voiceprintModel
         ? t("registry.voiceprint.cleared")
         : t("registry.voiceprint.none");

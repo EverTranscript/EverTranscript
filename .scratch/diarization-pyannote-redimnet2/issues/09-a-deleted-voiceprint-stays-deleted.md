@@ -19,10 +19,19 @@ harm and fixes it later.
 
 **Blocked by:** 05.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Deleting a Voiceprint marks the Speaker forgotten; nothing else sets the mark
-- [ ] A forgotten Speaker keeps its name, its appearances, and its place in the record
-- [ ] A forgotten Speaker is never re-embedded, asserted directly rather than through the re-run, so the guarantee does not depend on 12 landing
-- [ ] The Registry distinguishes forgotten from merely without a Voiceprint
-- [ ] The existing delete-stops-recognition test still holds, Mirror bytes included
+- [x] Deleting a Voiceprint marks the Speaker forgotten; nothing else sets the mark
+- [x] A forgotten Speaker keeps its name, its appearances, and its place in the record
+- [x] A forgotten Speaker is never re-embedded, asserted directly rather than through the re-run, so the guarantee does not depend on 12 landing
+- [x] The Registry distinguishes forgotten from merely without a Voiceprint
+- [x] The existing delete-stops-recognition test still holds, Mirror bytes included
+
+The guard is `speakers::relearnable`, which ticket 12's re-run consumes. Deliberately not
+a guard on the correction path: an Operator re-attributing a segment to a forgotten
+Speaker is a statement about that one Speaker, made on purpose, which is a different act
+from a re-run sweeping the voice back in unasked.
+
+Not retroactive. A Voiceprint deleted before this shipped left no record that it was
+deleted rather than never taken, and marking those rows forgotten would invent an
+Operator act that may never have happened.
