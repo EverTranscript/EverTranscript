@@ -2599,8 +2599,7 @@ fn the_split_grid_changes_only_who_supplies_the_identity() {
         // the models.
         for &clustering in &SPLIT_MODELS {
             let threshold = arm.threshold(clustering);
-            let mut control = score::Der::default();
-            for &identity in &SPLIT_MODELS {
+            let tally_for = |identity: &str| {
                 let mut tally = score::Der::default();
                 for chapter in &chapters {
                     let partition = &inferred[clustering][&chapter.meeting];
@@ -2617,20 +2616,26 @@ fn the_split_grid_changes_only_who_supplies_the_identity() {
                         &hypothesis(&diarization.turns),
                     ));
                 }
+                tally
+            };
+            // The control first, whatever order the models are listed in:
+            // it is what every other cell with this partition is read
+            // against, so it cannot be computed halfway through the loop.
+            let control = tally_for(clustering);
+            let four = |der: &score::Der| {
+                (
+                    der.total_ms,
+                    der.missed_ms,
+                    der.false_alarm_ms,
+                    der.confusion_ms,
+                )
+            };
+            for &identity in &SPLIT_MODELS {
                 if identity == clustering {
-                    control = tally;
                     continue;
                 }
-                let four = |der: &score::Der| {
-                    (
-                        der.total_ms,
-                        der.missed_ms,
-                        der.false_alarm_ms,
-                        der.confusion_ms,
-                    )
-                };
                 assert_eq!(
-                    four(&tally),
+                    four(&tally_for(identity)),
                     four(&control),
                     "{clustering} clustering / {identity} identity moved DER away \
                      from its control. The partition and the turns are the \
