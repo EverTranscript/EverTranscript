@@ -35,6 +35,7 @@ use evertranscript_core::diarize::score;
 use evertranscript_core::diarize::score::Der;
 use evertranscript_core::diarize::score::Span;
 use evertranscript_core::diarize::score::Trial;
+use evertranscript_core::models::registry::VoiceprintId;
 
 /// Set to run at all. Separate from the corpus path because they answer
 /// different questions — "should this machine measure" and "where is the
@@ -121,18 +122,24 @@ fn corpus() -> Option<Vec<Meeting>> {
 ///
 ///   EVERTRANSCRIPT_EMBEDDING=wespeaker   (default) diarize-embedding.onnx
 ///   EVERTRANSCRIPT_EMBEDDING=redimnet2             diarize-embedding-redimnet2.onnx
-fn embedding_under_test() -> (String, PathBuf, diarize::live::Frontend) {
+fn embedding_under_test() -> (VoiceprintId, PathBuf, diarize::live::Frontend) {
     match std::env::var("EVERTRANSCRIPT_EMBEDDING")
         .unwrap_or_else(|_| "wespeaker".into())
         .as_str()
     {
         "redimnet2" => (
-            "redimnet2-b3".into(),
+            VoiceprintId {
+                model: "redimnet2-b3",
+                version: "1",
+            },
             "diarize-embedding-redimnet2.onnx".into(),
             diarize::live::Frontend::Waveform,
         ),
+        // The identity production stamps, so the replay's gallery lookup
+        // and the vectors it stores are in one space rather than two that
+        // happen to be the same width.
         "wespeaker" => (
-            "wespeaker-resnet34-LM".into(),
+            diarize::live::EMBEDDING_IDENTITY,
             "diarize-embedding.onnx".into(),
             diarize::live::Frontend::Fbank,
         ),
@@ -187,9 +194,14 @@ fn models() -> (PathBuf, PathBuf) {
         .map(PathBuf::from)
         .unwrap_or_else(evertranscript_core::paths::models_dir);
     let segmentation = dir.join("diarize-segmentation.onnx");
-    let (name, file, _) = embedding_under_test();
+    let (identity, file, _) = embedding_under_test();
     let embedding = dir.join(&file);
-    println!("embedding under test: {name} ({})", file.display());
+    println!(
+        "embedding under test: {} v{} ({})",
+        identity.model,
+        identity.version,
+        file.display()
+    );
     println!("segmentation step: {} ms", step_under_test());
     println!(
         "same-window cannot-link: {}",
@@ -388,10 +400,14 @@ fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Inf
     let reference =
         score::parse_rttm(&std::fs::read_to_string(&meeting.reference).expect("read reference"));
 
-    let mut diarizer =
-        diarize::live::LiveDiarizer::load_with(segmentation, embedding, embedding_under_test().2)
-            .expect("load models")
-            .with_step(step_under_test());
+    let mut diarizer = diarize::live::LiveDiarizer::load_with(
+        segmentation,
+        embedding,
+        embedding_under_test().2,
+        embedding_under_test().0,
+    )
+    .expect("load models")
+    .with_step(step_under_test());
 
     // Wall clock per meeting, because a ceiling is one of the things being
     // fixed: clustering was cubic, and 70 s at 1,259 windows projected to a
@@ -1170,8 +1186,8 @@ fn replay(
         // cannot make a person enrolled-before.
         let enrolled_before: BTreeSet<String> = diarize::cluster::seeds(
             &connection,
-            diarize::live::EMBEDDING_MODEL,
-            diarize::live::EMBEDDING_MODEL_VERSION,
+            embedding_under_test().0.model,
+            embedding_under_test().0.version,
         )
         .expect("seeds")
         .iter()
@@ -1775,6 +1791,7 @@ fn the_constrained_path_is_the_one_the_replay_gets() {
     // Two local speakers of one window, close enough that an unconstrained
     // merge at this threshold takes them for one voice.
     let observed = diarize::live::Observed {
+        embedding: diarize::live::EMBEDDING_IDENTITY,
         observations: vec![
             voice(0, 1_000, vec![1.0, 0.10, 0.0]),
             voice(1, 2_000, vec![1.0, -0.10, 0.0]),
@@ -1993,7 +2010,7 @@ fn the_gallery_recognizes_who_it_has_met_before() {
     };
     let chapters = load_manifest(Path::new(&manifest), &corpus);
 
-    let (name, _, _) = embedding_under_test();
+    let name = embedding_under_test().0.model;
     let (segmentation, embedding) = models();
     let thresholds = thresholds_under_test();
     assert_eq!(

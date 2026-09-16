@@ -56,6 +56,7 @@ use super::fbank::FRAME_SHIFT;
 use super::fbank::MEL_BINS;
 use super::fbank::MelBank;
 use super::fbank::SAMPLE_RATE;
+use crate::models::registry::VoiceprintId;
 
 /// Window the segmentation model was trained on: 10 s at 16 kHz.
 pub const SEGMENT_WINDOW: usize = 10 * SAMPLE_RATE as usize;
@@ -115,8 +116,17 @@ pub const MERGE_GAP_MS: u64 = 400;
 /// into every timestamp it produced. A fixed grid cannot drift.
 pub const GRID_MS: u64 = 10;
 
+/// What production stamps on the vectors it stores, from the registry entry
+/// for the model it actually loads.
+///
+/// The registry is the source. These two constants remain so the call sites
+/// that read them do not all have to change, but they are now derived rather
+/// than declared, and the value is byte-for-byte what was already stored.
+pub const EMBEDDING_IDENTITY: VoiceprintId =
+    crate::models::registry::DIARIZE_EMBEDDING.voiceprint();
+
 /// The embedding model, as every vector it produces is labelled.
-pub const EMBEDDING_MODEL: &str = "wespeaker-voxceleb-resnet34-LM";
+pub const EMBEDDING_MODEL: &str = EMBEDDING_IDENTITY.model;
 
 /// Which front end fed it.
 ///
@@ -126,7 +136,7 @@ pub const EMBEDDING_MODEL: &str = "wespeaker-voxceleb-resnet34-LM";
 /// cosine 0.36 on average, so they must never be compared: seeds are read
 /// by version, and a "1" exemplar is rebuilt from its kept sample before
 /// the next Diarization reads seeds at all (`cluster::adopt_rebuilt`).
-pub const EMBEDDING_MODEL_VERSION: &str = "2";
+pub const EMBEDDING_MODEL_VERSION: &str = EMBEDDING_IDENTITY.version;
 
 fn failed(error: impl std::fmt::Display) -> DiarizeError {
     DiarizeError::Failed(anyhow::anyhow!("{error}"))
@@ -147,6 +157,7 @@ pub struct Embedder {
     session: Session,
     mel: MelBank,
     frontend: Frontend,
+    identity: VoiceprintId,
 }
 
 /// Where the model's filterbank lives.
@@ -170,15 +181,32 @@ pub enum Frontend {
 
 impl Embedder {
     pub fn load(path: &Path) -> Result<Self, DiarizeError> {
-        Self::load_with(path, Frontend::Fbank)
+        Self::load_with(path, Frontend::Fbank, EMBEDDING_IDENTITY)
     }
 
-    pub fn load_with(path: &Path, frontend: Frontend) -> Result<Self, DiarizeError> {
+    /// As [`load`](Self::load), for a harness holding a different model.
+    ///
+    /// The identity is a parameter because the stamp has to describe what
+    /// was loaded. It used to be the constant, so every vector the A/B
+    /// harness produced from ReDimNet2 was labelled WeSpeaker — harmless
+    /// while the harness threw its store away, and a silent corruption the
+    /// moment any other model shipped.
+    pub fn load_with(
+        path: &Path,
+        frontend: Frontend,
+        identity: VoiceprintId,
+    ) -> Result<Self, DiarizeError> {
         Ok(Self {
             session: open(path)?,
             mel: MelBank::new(),
             frontend,
+            identity,
         })
+    }
+
+    /// What this embedder stamps on the vectors it produces.
+    pub fn identity(&self) -> VoiceprintId {
+        self.identity
     }
 
     pub fn frontend(&self) -> Frontend {
@@ -274,6 +302,10 @@ pub struct Observed {
     /// Every window the segmentation model ran, as `(channel, start, end)`
     /// on the capture clock.
     ///
+    /// Which model produced these vectors, so what is stamped on them comes
+    /// from the pass that made them rather than from a constant that may
+    /// describe a different model entirely.
+    pub embedding: VoiceprintId,
     /// **Kept even where a window produced no observation**, which is the
     /// whole reason this is carried separately rather than read off the
     /// observations. A window that looked and found nobody is a vote for
@@ -318,11 +350,9 @@ impl LiveDiarizer {
     /// Loads both models. Failure here is [`DiarizeError::Unavailable`] at
     /// the call site, never a lost Meeting.
     pub fn load(segmentation: &Path, embedding: &Path) -> Result<Self, DiarizeError> {
-        Self::load_with(segmentation, embedding, Frontend::Fbank)
+        Self::load_with(segmentation, embedding, Frontend::Fbank, EMBEDDING_IDENTITY)
     }
 
-    /// As [`load`](Self::load), choosing which front end the embedding wants.
-    /// The measurement harness is the caller; production takes the default.
     /// How far the window advances, in milliseconds.
     ///
     /// For the harness, so the step can be measured without a rebuild;
@@ -333,15 +363,19 @@ impl LiveDiarizer {
         self
     }
 
+    /// As [`load`](Self::load), choosing which front end the embedding wants
+    /// and what the vectors it produces are labelled with. The measurement
+    /// harness is the caller; production takes the defaults.
     pub fn load_with(
         segmentation: &Path,
         embedding: &Path,
         frontend: Frontend,
+        identity: VoiceprintId,
     ) -> Result<Self, DiarizeError> {
         Ok(Self {
             step: SEGMENT_STEP,
             segmentation: open(segmentation)?,
-            embedder: Embedder::load_with(embedding, frontend)?,
+            embedder: Embedder::load_with(embedding, frontend, identity)?,
         })
     }
 
@@ -500,6 +534,7 @@ impl LiveDiarizer {
         Ok(Observed {
             observations,
             windows,
+            embedding: self.embedder.identity(),
         })
     }
 }
@@ -821,8 +856,8 @@ pub fn provisional_of(observed: &Observed) -> BTreeMap<Cluster, Embedding> {
                 observation.cluster,
                 Embedding::new(
                     observation.vector.clone(),
-                    EMBEDDING_MODEL,
-                    EMBEDDING_MODEL_VERSION,
+                    observed.embedding.model,
+                    observed.embedding.version,
                     observation.voiced_ms(),
                 ),
             )
@@ -989,6 +1024,7 @@ mod tests {
             "the defaults are unchanged; only these windows overlap"
         );
         let overlapped = Observed {
+            embedding: EMBEDDING_IDENTITY,
             observations: vec![observation(AudioChannel::Mic, 0, &[(1_000, 2_000)], &[])],
             windows: vec![
                 (AudioChannel::Mic, 0, 10_000),
@@ -1005,15 +1041,57 @@ mod tests {
     #[should_panic(expected = "came from no window")]
     fn an_observation_outside_every_window_is_refused_rather_than_skipped() {
         let stray = Observed {
+            embedding: EMBEDDING_IDENTITY,
             observations: vec![observation(AudioChannel::Mic, 0, &[(50_000, 51_000)], &[])],
             windows: vec![(AudioChannel::Mic, 0, 10_000)],
         };
         let _ = cannot_link_of(&stray);
     }
 
+    /// The stamp says which model ran, not which model usually runs.
+    ///
+    /// It used to be the constant. The whole ReDimNet2 A/B therefore
+    /// labelled its vectors WeSpeaker — invisible while the harness threw
+    /// its store away each run, and a silent corruption the first time a
+    /// second model shipped, because `seeds` would then have handed
+    /// WeSpeaker Voiceprints to a ReDimNet2 resolve.
+    #[test]
+    fn the_stamp_names_the_model_that_actually_ran() {
+        let other = VoiceprintId {
+            model: "redimnet2-b3",
+            version: "1",
+        };
+        let observed = Observed {
+            embedding: other,
+            observations: vec![observation(AudioChannel::Mic, 0, &[(0, 1_000)], &[])],
+            windows: vec![(AudioChannel::Mic, 0, 10_000)],
+        };
+        let stamped = provisional_of(&observed);
+        let one = stamped.values().next().expect("one observation");
+        assert_eq!(
+            (one.model.as_str(), one.model_version.as_str()),
+            ("redimnet2-b3", "1")
+        );
+        assert_ne!(one.model, EMBEDDING_MODEL);
+    }
+
+    /// Production's own stamp still comes from the registry, unchanged.
+    #[test]
+    fn production_stamps_what_the_registry_says_it_stores() {
+        assert_eq!(
+            (EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION),
+            ("wespeaker-voxceleb-resnet34-LM", "2")
+        );
+        assert_eq!(
+            EMBEDDING_IDENTITY,
+            crate::models::registry::DIARIZE_EMBEDDING.voiceprint()
+        );
+    }
+
     #[test]
     fn two_local_speakers_of_one_window_may_never_be_one_voice() {
         let tiled = Observed {
+            embedding: EMBEDDING_IDENTITY,
             observations: vec![
                 observation(AudioChannel::Mic, 0, &[(1_000, 2_000)], &[]),
                 observation(AudioChannel::Mic, 1, &[(1_500, 2_500)], &[]),
@@ -1067,6 +1145,7 @@ mod tests {
             })
             .collect();
         Observed {
+            embedding: EMBEDDING_IDENTITY,
             observations,
             windows,
         }
@@ -1080,6 +1159,7 @@ mod tests {
         // Under a union that single dissenting window would have been
         // believed and the second reported as two people talking at once.
         let observed = Observed {
+            embedding: EMBEDDING_IDENTITY,
             observations: vec![
                 observation(AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
                 observation(AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
@@ -1104,6 +1184,7 @@ mod tests {
         // puts inside a window as often as outside it should land, not
         // vanish. The threshold is `>=`, and this is the case that says so.
         let observed = Observed {
+            embedding: EMBEDDING_IDENTITY,
             observations: vec![
                 observation(AudioChannel::Mic, 0, &[(0, 1_000)], &[]),
                 observation(AudioChannel::Mic, 0, &[(0, 1_000)], &[]),

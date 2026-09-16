@@ -81,6 +81,10 @@ pub struct SeedVoice {
     pub vector: Vec<f32>,
     /// Operator-confirmed Voiceprints win ties (ADR-0008 as amended).
     pub confirmed: bool,
+    /// Which model's space this vector lives in, carried so that
+    /// [`resolve_with`] can refuse to score it against another one.
+    pub model: String,
+    pub model_version: String,
 }
 
 /// What resolution concluded about one cluster.
@@ -153,6 +157,30 @@ pub fn resolve_with(
     margin: f32,
 ) -> BTreeMap<Cluster, Resolved> {
     let mut resolved = BTreeMap::new();
+
+    // A Voiceprint from another model is not a candidate, however close the
+    // numbers come out. [`cosine`] already refuses a dimension mismatch,
+    // which is all that stood between the ReDimNet2 A/B and a silent
+    // cross-space match: its vectors are 192 wide against WeSpeaker's 256,
+    // so every such score was zero. Two models of the same width would have
+    // scored, and the match would have looked like any other.
+    //
+    // Every cluster in one call comes from one pass, so the space is the
+    // first one's. A caller that mixes passes is asking a question that has
+    // no answer, and gets no seeds rather than a plausible wrong one.
+    let space = clusters
+        .values()
+        .next()
+        .map(|one| (one.model.as_str(), one.model_version.as_str()));
+    let seeds: Vec<&SeedVoice> = seeds
+        .iter()
+        .filter(|seed| {
+            space.is_some_and(|(model, version)| {
+                seed.model == model && seed.model_version == version
+            })
+        })
+        .collect();
+
     if seeds.is_empty() {
         for cluster in clusters.keys() {
             resolved.insert(*cluster, Resolved::New);
@@ -580,6 +608,8 @@ pub fn seeds(
                 speaker_id,
                 vector,
                 confirmed,
+                model: model.to_string(),
+                model_version: model_version.to_string(),
             })
             .collect(),
     )
@@ -870,7 +900,60 @@ mod tests {
             speaker_id: id.into(),
             vector: vector.to_vec(),
             confirmed,
+            model: "test".into(),
+            model_version: "1".into(),
         }
+    }
+
+    /// Same width, same numbers, different model: still a stranger.
+    ///
+    /// `cosine` refuses a dimension mismatch, so two models of different
+    /// widths could never have matched by accident. Two of the *same* width
+    /// would have, and a version bump is exactly that case — the front-end
+    /// fix behind version 2 left vectors of the same 256 dimensions
+    /// agreeing with version 1's at cosine 0.36 (DECISIONS Q115). Nothing
+    /// in the numbers says which space a vector is in; only the label does.
+    #[test]
+    fn a_voiceprint_from_another_model_is_never_a_match() {
+        let this_meeting = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let mut elsewhere = seed("alice", &[1.0, 0.0, 0.0], true);
+        elsewhere.model = "some-other-model".into();
+
+        // The control: the identical seed in this space is recognized, so
+        // the refusal below is about the label and nothing else.
+        assert_eq!(
+            resolve(&this_meeting, &[seed("alice", &[1.0, 0.0, 0.0], true)])[&Cluster(0)],
+            Resolved::Existing("alice".into())
+        );
+        assert_eq!(
+            resolve(&this_meeting, &[elsewhere])[&Cluster(0)],
+            Resolved::New
+        );
+    }
+
+    /// A version bump is a different space, and reads as one.
+    #[test]
+    fn a_voiceprint_from_another_version_is_never_a_match() {
+        let this_meeting = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let mut older = seed("alice", &[1.0, 0.0, 0.0], true);
+        older.model_version = "0".into();
+        assert_eq!(resolve(&this_meeting, &[older])[&Cluster(0)], Resolved::New);
+    }
+
+    /// One out-of-space seed must not take the in-space one down with it.
+    #[test]
+    fn a_stale_seed_beside_a_current_one_leaves_the_current_one_matching() {
+        let this_meeting = clusters(&[(0, &[1.0, 0.0, 0.0])]);
+        let mut stale = seed("bob", &[1.0, 0.0, 0.0], true);
+        stale.model_version = "0".into();
+        assert_eq!(
+            resolve(
+                &this_meeting,
+                &[stale, seed("alice", &[0.98, 0.1, 0.0], true)]
+            )[&Cluster(0)],
+            Resolved::Existing("alice".into()),
+            "the stale seed is not a candidate, so it is also not a runner-up the margin trips on"
+        );
     }
 
     #[test]
@@ -1856,11 +1939,15 @@ mod tests {
         .collect();
         let seeds = vec![
             SeedVoice {
+                model: "test".into(),
+                model_version: "1".into(),
                 speaker_id: "alice".into(),
                 vector: vec![1.0, 0.0, 0.0],
                 confirmed: false,
             },
             SeedVoice {
+                model: "test".into(),
+                model_version: "1".into(),
                 speaker_id: "bob".into(),
                 vector: vec![0.0, 1.0, 0.0],
                 confirmed: false,

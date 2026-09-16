@@ -154,6 +154,7 @@ fn entry_for(payload: &[u8]) -> ModelEntry {
             source: "https://example.invalid/fixture",
         },
         driving: None,
+        voiceprint: None,
     }
 }
 

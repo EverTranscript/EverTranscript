@@ -98,6 +98,26 @@ pub struct Provenance {
     pub source: &'static str,
 }
 
+/// How this model's vectors are labelled wherever they are stored.
+///
+/// **Deliberately not the registry `key`.** The key is a download address
+/// and is lower-case by convention; the stored identity is whatever was
+/// written into existing Voiceprints and cannot be changed without
+/// retagging every one of them. For the embedding model those two differ in
+/// exactly one character — `-lm` against `-LM` — so a tidy-minded change
+/// from one to the other would orphan every Voiceprint on every installed
+/// copy, and each returning speaker would come back as a stranger. That is
+/// what `the_stored_identity_is_not_the_download_key` exists to prevent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoiceprintId {
+    /// The `model` column written on every exemplar.
+    pub model: &'static str,
+    /// The `model_version` column. Bumped when the *front end* changes, not
+    /// only the weights: a version 1 and a version 2 vector of the same
+    /// audio agree at cosine 0.36 and must never be compared.
+    pub version: &'static str,
+}
+
 /// One required artifact.
 pub struct ModelEntry {
     /// Stable key used by the protocol and the CLI.
@@ -117,6 +137,9 @@ pub struct ModelEntry {
     /// How a generative model wants to be driven. `None` for models that are
     /// not prompted at all — the ONNX pair, and whisper.
     pub driving: Option<Driving>,
+    /// How this model's vectors are labelled in the store. `None` for every
+    /// model that does not produce stored vectors.
+    pub voiceprint: Option<VoiceprintId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +162,19 @@ pub enum ModelPurpose {
 impl ModelEntry {
     pub fn local_path(&self, models_dir: &std::path::Path) -> PathBuf {
         models_dir.join(self.filename)
+    }
+
+    /// The stored identity, for a model that has one.
+    ///
+    /// `const` so the one place that stamps vectors can take it from here
+    /// rather than repeating the strings, which is the whole point: the
+    /// registry entry is the source, and a literal somewhere else is how the
+    /// two drift apart.
+    pub const fn voiceprint(&self) -> VoiceprintId {
+        match self.voiceprint {
+            Some(identity) => identity,
+            None => panic!("this model does not produce stored vectors"),
+        }
     }
 }
 
@@ -163,6 +199,7 @@ pub const WHISPER_DEFAULT: ModelEntry = ModelEntry {
     },
     // Not prompted: whisper is handed audio, not a conversation.
     driving: None,
+    voiceprint: None,
 };
 
 /// Speaker segmentation: where speech is, and where two voices overlap.
@@ -189,6 +226,7 @@ pub const DIARIZE_SEGMENTATION: ModelEntry = ModelEntry {
         source: "https://huggingface.co/onnx-community/pyannote-segmentation-3.0",
     },
     driving: None,
+    voiceprint: None,
 };
 
 /// Speaker embedding: the vector a Voiceprint is made of.
@@ -212,6 +250,10 @@ pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
         source: "https://huggingface.co/onnx-community/wespeaker-voxceleb-resnet34-LM",
     },
     driving: None,
+    voiceprint: Some(VoiceprintId {
+        model: "wespeaker-voxceleb-resnet34-LM",
+        version: "2",
+    }),
 };
 
 /// The local Summary model (ADR-0031: "its small instruct model downloads
@@ -275,6 +317,7 @@ pub const SUMMARY_DEFAULT: ModelEntry = ModelEntry {
         context_tokens: 16_384,
         single_pass_tokens: 12_000,
     }),
+    voiceprint: None,
 };
 
 /// Every artifact this build knows how to fetch.
@@ -315,6 +358,39 @@ pub fn download_url(entry: &ModelEntry, base_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The one-character difference is the whole test.
+    ///
+    /// `key` is an address and `voiceprint().model` is a label on rows that
+    /// already exist. Someone will one day notice they differ only in case
+    /// and reach for the tidy fix; this is what stops them. Changing either
+    /// side of this assertion means every installed copy's Voiceprints have
+    /// to be retagged in the same change.
+    #[test]
+    fn the_stored_identity_is_not_the_download_key() {
+        let stored = DIARIZE_EMBEDDING.voiceprint();
+        assert_eq!(
+            (stored.model, stored.version),
+            ("wespeaker-voxceleb-resnet34-LM", "2"),
+            "this is what is written on every Voiceprint in every installed History"
+        );
+        assert_ne!(
+            DIARIZE_EMBEDDING.key, stored.model,
+            "they differ only in case, which is exactly why one cannot stand in for the other"
+        );
+    }
+
+    /// A model that stores no vectors has nothing to say about Voiceprints,
+    /// and saying it anyway would be a second place for the identity to live.
+    #[test]
+    fn only_the_embedding_model_carries_a_voiceprint_identity() {
+        let carrying: Vec<&str> = ALL
+            .iter()
+            .filter(|entry| entry.voiceprint.is_some())
+            .map(|entry| entry.key)
+            .collect();
+        assert_eq!(carrying, vec![DIARIZE_EMBEDDING.key]);
+    }
 
     #[test]
     fn every_entry_has_a_unique_key_and_filename() {

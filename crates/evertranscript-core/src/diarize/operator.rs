@@ -281,6 +281,8 @@ pub fn known_operator(
                 speaker_id,
                 vector,
                 confirmed,
+                model: model.to_string(),
+                model_version: model_version.to_string(),
             }),
     )
 }
@@ -448,6 +450,8 @@ mod tests {
             speaker_id: "me".into(),
             vector: operator_vector,
             confirmed: true,
+            model: "fixture".into(),
+            model_version: "1".into(),
         };
         assert_eq!(
             identify(&d, Some(&known), &unsaid()),
@@ -501,6 +505,8 @@ mod tests {
             speaker_id: "me".into(),
             vector: vec![1.0, 0.0],
             confirmed: true,
+            model: "fixture".into(),
+            model_version: "1".into(),
         };
         assert!(
             match_gate_met(&d),

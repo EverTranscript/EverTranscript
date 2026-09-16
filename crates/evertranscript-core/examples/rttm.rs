@@ -31,10 +31,9 @@ use evertranscript_core::diarize::Embedding;
 use evertranscript_core::diarize::MeetingAudio;
 use evertranscript_core::diarize::cluster::agglomerate;
 use evertranscript_core::diarize::fbank::SAMPLE_RATE;
-use evertranscript_core::diarize::live::EMBEDDING_MODEL;
-use evertranscript_core::diarize::live::EMBEDDING_MODEL_VERSION;
 use evertranscript_core::diarize::live::LiveDiarizer;
 use evertranscript_core::diarize::live::assemble;
+use evertranscript_core::diarize::live::provisional_of;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -110,20 +109,9 @@ fn main() {
             writeln!(file, "{line}").expect("write dump");
         }
     }
-    let provisional: BTreeMap<Cluster, Embedding> = observations
-        .iter()
-        .map(|observation| {
-            (
-                observation.cluster,
-                Embedding::new(
-                    observation.vector.clone(),
-                    EMBEDDING_MODEL,
-                    EMBEDDING_MODEL_VERSION,
-                    observation.voiced_ms(),
-                ),
-            )
-        })
-        .collect();
+    // The one place the stamp is applied, rather than a copy of it here
+    // that would go on naming the old model after a swap.
+    let provisional: BTreeMap<Cluster, Embedding> = provisional_of(&observed);
     let result = assemble(&observed, &agglomerate(&provisional));
     eprintln!(
         "{uri}: {:.0} s of audio, {} observations, {} turns, {} voices, {} with a Voiceprint, in {:.1} s",

@@ -573,6 +573,7 @@ mod tests {
                 license: "MIT",
                 source: "https://example.invalid/fixture",
             },
+            voiceprint: None,
             driving: None,
         }
     }
