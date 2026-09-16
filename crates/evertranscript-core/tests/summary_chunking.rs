@@ -70,6 +70,17 @@ async fn meeting_of(core: &Core, lines: usize) -> String {
 
 async fn core_in(dir: &std::path::Path, backend: &'static str) -> Arc<Core> {
     let core = Core::with_history_dir_acknowledged(dir.join("History")).expect("core");
+    // An empty script, not the live factory this would otherwise default to.
+    // Nothing here is synthesised through a source — the transcript is written
+    // straight to the store — but `meeting_of` still goes through
+    // `start_meeting`, and that opens a real microphone on the machine running
+    // the test.
+    core.set_source_factory(Arc::new(|| {
+        Box::new(evertranscript_core::audio::fixture::FixtureSource::new(
+            Vec::new(),
+        ))
+    }))
+    .await;
     core.update_settings(SettingsSetParams {
         summary_backend: Some(backend.to_string()),
         // ADR-0013: choosing Cloud requires accepting the one-time warning
