@@ -10,8 +10,6 @@
 //! Meeting back — with a scripted Backend, because what is being tested is
 //! everything around generation rather than generation itself. No model.
 
-#![cfg(unix)]
-
 use std::sync::Arc;
 
 use anyhow::Result;
