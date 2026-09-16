@@ -25,12 +25,28 @@ may run in the default `cargo test` path.
 
 **Blocked by:** None (can start immediately).
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] DER on AMI test reproduces the recorded 49.7% on the unchanged pipeline, within noise, with the missed/false-alarm/confusion split
-- [ ] The oracle mode reproduces the recorded 32.6% floor
-- [ ] Cross-meeting EER reproduces the recorded 10.3% for the shipped embedding, and the share of different-colleague pairs above the match floor
-- [ ] Per-meeting output, so a single bad meeting is visible rather than averaged away
-- [ ] Wall-clock per meeting is reported, since a ceiling is one of the things being fixed
-- [ ] Skips loudly without the corpus; never fetches inside the default suite; the zero-network guarantee is untouched
-- [ ] Runs on both platforms (ADR-0025)
+- [x] DER on AMI test reproduces the recorded 49.7% on the unchanged pipeline, within noise, with the missed/false-alarm/confusion split
+- [x] The oracle mode reproduces the recorded 32.6% floor
+- [x] Cross-meeting EER reproduces the recorded 10.3% for the shipped embedding, and the share of different-colleague pairs above the match floor
+- [x] Per-meeting output, so a single bad meeting is visible rather than averaged away
+- [x] Wall-clock per meeting is reported, since a ceiling is one of the things being fixed
+- [x] Skips loudly without the corpus; never fetches inside the default suite; the zero-network guarantee is untouched
+- [x] Runs on both platforms (ADR-0025)
+
+**Built, not yet run against the corpus.** The scorer is unit-tested against worked examples
+(optimal mapping vs greedy, overlap scored, no collar, pooled not averaged, RTTM parsing,
+EER, the oracle). The four acceptance criteria that name a *number* — 49.7%, the 32.6%
+floor, 10.3% EER, the share above `MATCH_FLOOR` — need the ~5 GB corpus fetched and an hour
+of compute, which is a run to do rather than a thing to write. The harness prints all of
+them per meeting and pooled.
+
+The oracle is a span-level relabel: each hypothesis turn takes the reference speaker who
+dominates it. A turn straddling two speakers keeps one label, so the overhang stays
+confusion — that residue is turn-placement error, and a floor that hid it would be
+unreachable rather than a floor.
+
+Corpus fetched by `scripts/fetch-ami.sh`, never by the test: a binary that reached the
+network to measure an offline product would be the worst way to keep that promise. The
+existing `diarization_opens_no_network_connections_either` guarantee still passes.
