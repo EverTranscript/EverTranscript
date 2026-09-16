@@ -91,7 +91,7 @@ pub fn cut(path: &Path, channel: AudioChannel, start_ms: u64, end_ms: u64) -> Re
             AudioChannel::Mic => decoded.mic,
             AudioChannel::System => decoded.system,
         };
-        let rate = crate::diarize::fbank::SAMPLE_RATE;
+        let rate = crate::diarize::SAMPLE_RATE;
         let from = (start_ms * rate as u64 / 1000) as usize;
         let to = (end_ms * rate as u64 / 1000) as usize;
         (

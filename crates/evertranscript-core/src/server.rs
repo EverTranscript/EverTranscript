@@ -1454,7 +1454,7 @@ impl Core {
             // transcription path does — the kept audio stays raw (ADR-0029
             // as amended), so a filter that is wrong costs one run, which
             // can be repeated, and never the record.
-            audio::aec::EchoCanceller::new(diarize::fbank::SAMPLE_RATE)
+            audio::aec::EchoCanceller::new(diarize::SAMPLE_RATE)
                 .process(&mut decoded.mic, &decoded.system);
             let mut diarizer = diarize::live::LiveDiarizer::load(&segmentation, &embedding)
                 .map_err(|error| anyhow::anyhow!("{error}"))?;

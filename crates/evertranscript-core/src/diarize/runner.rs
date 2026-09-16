@@ -33,7 +33,7 @@ use super::DiarizeError;
 use super::Diarizer;
 use super::MeetingAudio;
 use super::Progress;
-use super::fbank::SAMPLE_RATE;
+use super::SAMPLE_RATE;
 
 /// The two channels of a finished Meeting, at the rate the models want.
 pub struct DecodedMeeting {

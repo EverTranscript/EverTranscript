@@ -39,7 +39,13 @@ pub const MATCH_FLOOR: f32 = 0.62;
 /// sound, the more confidently the system mislabels them.
 pub const MATCH_MARGIN: f32 = 0.08;
 
-/// Agglomerative merge threshold on L2-normalized embeddings (catalog M3).
+/// Agglomerative merge threshold on L2-normalized embeddings.
+///
+/// The bake-off's measured value for ReDimNet2-B3, which happens to be the
+/// same 0.60 the catalog gave for the WeSpeaker export it replaced — a
+/// coincidence rather than a carry-over, and worth saying so, because a
+/// threshold that survives a model change unexamined is the usual way one
+/// stops meaning anything.
 pub const MERGE_THRESHOLD: f32 = 0.6;
 
 /// Least voice a cluster must hold before it is minted as a Speaker.

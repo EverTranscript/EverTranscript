@@ -205,27 +205,53 @@ pub const DIARIZE_SEGMENTATION: ModelEntry = ModelEntry {
 
 /// Speaker embedding: the vector a Voiceprint is made of.
 ///
-/// `input_features [B, T, 80]` — the 80-mel filterbank `diarize::fbank`
-/// computes — and `last_hidden_state [B, 256]`.
+/// `waveform [B, T]` of raw float32 at 16 kHz, and `embedding [B, 192]`.
+/// **The mel frontend is inside the graph**, which is why there is no
+/// filterbank on the Rust side any more: `TFMelBanks` is convolutional, so
+/// the export is 34 ordinary operators with no `STFT` node and nothing for
+/// two platforms' ONNX Runtime builds to disagree about.
+///
+/// One model does both jobs here — clustering and Voiceprints — where the
+/// reference product splits them across a masked WeSpeaker export and this.
+/// The masked half needs an ONNX carrying a speaker-mask input that nobody
+/// publishes, so either design ships an export of its own; this one ships
+/// one instead of two, and does the masking by gathering frames instead
+/// (see `diarize::live::gather`).
+///
+/// Ours is an export of `PalabraAI/redimnet2` v1.0.0, MIT, made by
+/// `scripts/export-redimnet2.py` and published unchanged. Size and checksum
+/// are read off the published artifact, and the export was checked at cosine
+/// 1.000000 against PyTorch and then through `ort` on macOS arm64 and
+/// Windows x86_64, the two agreeing to six decimals (DECISIONS Q121).
 pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
-    key: "wespeaker-voxceleb-resnet34-lm",
-    display_name: "WeSpeaker VoxCeleb ResNet34-LM",
+    key: "redimnet2-b3-vox2-lm",
+    display_name: "ReDimNet2-B3 (VoxBlink2 + VoxCeleb2, LM)",
     filename: "diarize-embedding.onnx",
-    remote_path: "onnx-community/wespeaker-voxceleb-resnet34-LM/resolve/main/onnx/model.onnx",
+    remote_path: concat!(
+        "soulmachine/evertranscript-redimnet2-b3-vox2-lm",
+        "/resolve/main/redimnet2-b3-vox2-lm.onnx"
+    ),
     version: "1",
     integrity: Integrity {
-        size_bytes: 26_535_549,
-        sha256: Some("3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb"),
+        size_bytes: 18_045_013,
+        sha256: Some("dcecdce7d52bbd4739b24d0874359ec564d43f4b3a392f0104f505593b566d41"),
         crc32: None,
     },
     purpose: ModelPurpose::Diarization,
     required: true,
     provenance: Provenance {
-        license: "Apache-2.0",
-        source: "https://huggingface.co/onnx-community/wespeaker-voxceleb-resnet34-LM",
+        license: "MIT",
+        source: "https://huggingface.co/soulmachine/evertranscript-redimnet2-b3-vox2-lm",
     },
     driving: None,
 };
+
+/// How wide a vector [`DIARIZE_EMBEDDING`] returns.
+///
+/// Named because a Voiceprint's width is a fact about the model and a
+/// mismatch is silent: two vectors of different widths never match, which
+/// reads as "recognition stopped working" rather than as an error.
+pub const DIARIZE_EMBEDDING_DIM: usize = 192;
 
 /// The local Summary model (ADR-0031: "its small instruct model downloads
 /// during onboarding when the Operator picks Local").

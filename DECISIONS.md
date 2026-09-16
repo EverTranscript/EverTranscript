@@ -1655,3 +1655,73 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Ticket 11 names "80% of mic time, the existing margin, and at least 20 seconds" as the rule, so removing a named component to tidy up would be a silent narrowing of the spec. It costs two comparisons and is correct again the moment `DOMINANCE` is lowered. Noted here because a later reader finding a branch no test can reach deserves to know it was looked at rather than missed. `one_quiet_voice_among_many_does_not_become_the_operator` was resized past `MIN_OPERATOR_MS` so that it is the share refusing, not the new floor — its old numbers passed for a reason the test name did not describe.
 **Outcome:** applied
 **Ref:** (pending)
+
+## Q130 — diarization-pyannote-redimnet2/06 — irreversible-action
+
+**Question:** ReDimNet2-B3 carries its mel frontend inside the ONNX graph, so the Rust filterbank has no caller. Delete it or keep it for a future mel-input model?
+**Options considered:** delete `diarize/fbank.rs` / keep it behind `#[allow(dead_code)]` / keep it and leave the module wired but unused
+**Chosen:** Deleted, 373 lines. `SAMPLE_RATE`, its one still-used item, moved to `diarize/mod.rs`.
+**Decided-by:** agent
+**Justification:** It is the only code in the crate whose correctness nothing can check once nothing calls it — an FFT and a mel scale that no test can compare against a model's expectations. Keeping it would mean carrying a silently rotting reimplementation of a transform against the day a model wants it back, and any such model would ship its own parameters anyway. Recoverable from git if that day comes, which is what makes the deletion the cheap option rather than the brave one.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q131 — diarization-pyannote-redimnet2/06 — gate-resolution
+
+**Question:** `MERGE_THRESHOLD` was 0.60 for the WeSpeaker export. The bake-off's measured value for ReDimNet2-B3 is also 0.60. Carry it over silently?
+**Options considered:** leave the constant and say nothing / restate it with the coincidence named
+**Chosen:** Left at 0.60, with the doc rewritten to say it is this model's measured value and that the match with the old one is a coincidence.
+**Decided-by:** agent
+**Justification:** An unchanged constant across a model swap is exactly what a careful reader would flag as a carry-over someone forgot — the failure mode ADR-0037 exists to prevent, since two 192-d models produce arithmetic that succeeds and means nothing. The number is right; the diff had to say why, or the next reader re-derives it.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q132 — diarization-pyannote-redimnet2/06 — tradeoff
+
+**Question:** The embedding width assertion in `the_models_load_and_actually_run` was the literal 256. What should it assert now?
+**Options considered:** the literal 192 / `registry::DIARIZE_EMBEDDING_DIM` / drop the assertion
+**Chosen:** A new `DIARIZE_EMBEDDING_DIM` constant on the registry, asserted by the test.
+**Decided-by:** agent
+**Justification:** The literal 256 is what caught this model change — the test failed loudly instead of the pipeline producing vectors nothing could compare. That is worth keeping, but a literal repeated at the assertion site drifts from the registry it describes. Putting the width beside the checksum makes the two halves of the model's identity travel together, and the test then fails on the next swap for the same reason it failed on this one.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q133 — diarization-pyannote-redimnet2/06 — deviation
+
+**Question:** The first real corpus run failed ticket 01's assertion that the oracle floor sits at or below the real DER: EN2002c scored oracle 22.92% against a real 22.82%. Is the pipeline wrong, or the assertion?
+**Options considered:** treat it as a pipeline defect / redefine the oracle as a count-based floor that is a true lower bound / keep the oracle and replace the unsound assertion
+**Chosen:** Kept the oracle, replaced the assertion with `oracle.confusion_ms <= pooled.confusion_ms`.
+**Decided-by:** agent
+**Justification:** Not a lower bound by construction, and the corpus proved it. `oracle_relabel` gives each hypothesis span its dominant reference speaker independently, so two speakers talking at once can both be relabelled to the same person and the second stops covering anybody; real DER's mapping is one-to-one and keeps covering both while naming one wrong. Measured: the oracle took 159 s more missed speech for 129 s less confusion and 27 s less false alarm. A count-based floor would be a true bound but would score a straddling turn as zero error, which ticket 01 explicitly rejected ("a floor that hid it would be unreachable rather than a floor"). Confusion is the quantity the oracle exists to isolate and the one ADR-0037 reads, and per-span dominant labelling minimises it while the real rate is constrained to one global mapping — so that comparison is sound where the rate comparison is not. Latent since ticket 01, which never ran the corpus; fixture tests have no overlap and could not have caught it.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q134 — diarization-pyannote-redimnet2/06 — tradeoff
+
+**Question:** A corpus run is hours long and was killed once by memory pressure, losing everything. Per-meeting lines print rates only, which cannot be pooled without their denominator.
+**Options considered:** leave it and re-run from scratch on any interruption / print each meeting's reference duration / write intermediate results to a file
+**Chosen:** Added `ref <seconds>` to the per-meeting line.
+**Decided-by:** agent
+**Justification:** The pooled figure weighs each meeting by its reference speech, so one extra field makes a partial run poolable by hand and makes the printed rates checkable against their own denominator. A results file would be more, and this harness's output is already the artifact it exists to produce.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q135 — diarization-pyannote-redimnet2/06 — gate-resolution
+
+**Question:** DER on the AMI test set is 20.00% against ticket 06's bar of 18.8%, which the ticket says the merge does not land without. The oracle floor is 19.19% — above the bar on its own — so no embedding can reach 18.8% while turn placement stays as it is. Land the swap anyway, or hold it?
+**Options considered:** hold the merge as the ticket says / land the swap and reopen turn placement as its own work / lower the bar to what this pipeline can reach / keep tuning inside ticket 06
+**Chosen:** —
+**Decided-by:** human
+**Justification:** Only a human can decide this. The ticket's bar is a release criterion someone chose, and the measurement says it is unreachable by the change the ticket describes: clustering costs 0.81 of the 20.00 points, so a perfect embedding wins at most 0.81 and still lands at 19.19%. Meanwhile the swap is a large improvement on what shipped — M3 measured 49.7% with a 32.6% floor — and every other criterion on the ticket is met. Holding a correct, much better pipeline out of the branch to honour a number it cannot reach, versus landing it and reopening turn placement, is a product call about what "the merge does not land otherwise" was meant to protect. The remaining error is 11.42 points of missed speech against 27.0% overlapped reference speaker-time, which is ticket 03's subject. Tuning further inside ticket 06 was ruled out rather than offered: there is nothing left in this ticket's scope to tune, since the floor is above the bar.
+**Outcome:** escalated
+**Ref:** (pending)
+
+## Q136 — diarization-pyannote-redimnet2/06 — deviation
+
+**Question:** The sixteen-meeting corpus run was killed three times by the machine's low-memory guard, losing everything each time. How should the measurement be taken?
+**Options considered:** keep retrying the single-process run / one process per meeting, pooling by hand / shrink the pipeline's memory use
+**Chosen:** One process per meeting, resumable, pooled afterwards weighted by each meeting's reference speech.
+**Decided-by:** agent
+**Justification:** The process peaks around 500 MB on the corpus's longest meeting, so it is not the pipeline that is large — the guard fires on system-wide pressure, and retrying a 1.7-hour run against it loses the whole corpus each time. Per meeting, a kill costs one meeting and the loop skips what is already measured. The cost is that cross-meeting EER cannot be computed this way, because it needs every meeting's voiceprints in one process; that is ticket 07's bar and is recorded as owed rather than quietly skipped. The pooled DER is unaffected: pooling weights each meeting by its reference speech exactly as the harness does, and the reference total matches an independent sum over the RTTMs.
+**Outcome:** applied
+**Ref:** (pending)

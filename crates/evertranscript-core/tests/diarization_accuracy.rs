@@ -135,11 +135,11 @@ fn read_wav(path: &Path) -> Vec<f32> {
     let spec = reader.spec();
     assert_eq!(
         spec.sample_rate,
-        diarize::fbank::SAMPLE_RATE,
+        diarize::SAMPLE_RATE,
         "{} is at {} Hz; scripts/fetch-ami.sh resamples to {}",
         path.display(),
         spec.sample_rate,
-        diarize::fbank::SAMPLE_RATE
+        diarize::SAMPLE_RATE
     );
     assert_eq!(spec.channels, 1, "{} is not mono", path.display());
 
@@ -187,7 +187,7 @@ struct Measured {
 
 fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured {
     let samples = read_wav(&meeting.audio);
-    let audio_seconds = samples.len() as f64 / diarize::fbank::SAMPLE_RATE as f64;
+    let audio_seconds = samples.len() as f64 / diarize::SAMPLE_RATE as f64;
     let reference =
         score::parse_rttm(&std::fs::read_to_string(&meeting.reference).expect("read reference"));
 
@@ -196,7 +196,7 @@ fn measure(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Measured
     let audio = diarize::MeetingAudio {
         mic: &samples,
         system: &[],
-        sample_rate: diarize::fbank::SAMPLE_RATE,
+        sample_rate: diarize::SAMPLE_RATE,
     };
 
     // Wall clock per meeting, because a ceiling is one of the things being
@@ -290,15 +290,20 @@ fn the_pipeline_scores_what_the_record_says_it_scores() {
             let one = measure(meeting, &segmentation, &embedding);
             // Per meeting, so one bad meeting is visible rather than
             // averaged into the corpus figure.
+            // `ref` is the denominator, printed so a run that dies part way
+            // through is still poolable from its own output: the pooled
+            // figure weighs each meeting by its reference speech, and
+            // without it the per-meeting rates cannot be combined.
             println!(
                 "{:<12}  DER {:>6.1}%  (missed {:>5.1}  false alarm {:>5.1}  confusion {:>5.1})  \
-                 oracle {:>6.1}%  {:>6.1}s for {:>6.1}s of audio  ({:.2}x)",
+                 oracle {:>6.1}%  ref {:>7.1}s  {:>6.1}s for {:>6.1}s of audio  ({:.2}x)",
                 one.name,
                 one.der.rate() * 100.0,
                 one.der.missed_rate() * 100.0,
                 one.der.false_alarm_rate() * 100.0,
                 one.der.confusion_rate() * 100.0,
                 one.oracle.rate() * 100.0,
+                one.der.total_ms as f64 / 1000.0,
                 one.seconds,
                 one.audio_seconds,
                 one.seconds / one.audio_seconds.max(1.0),
@@ -361,10 +366,31 @@ fn the_pipeline_scores_what_the_record_says_it_scores() {
     // silently stopped producing turns pass. So: it ran, it produced
     // something, and the floor is below the real thing.
     assert!(pooled.total_ms > 0, "no reference speech was scored at all");
+    // **Confusion, not the rate.** The obvious assertion here was that the
+    // oracle floor sits below the real rate, and the first real corpus run
+    // failed it: on EN2002c the oracle scored 22.92% against a real 22.82%.
+    //
+    // That is not a bug in the pipeline, it is the oracle's definition
+    // meeting overlapped speech. `oracle_relabel` gives each hypothesis span
+    // the reference speaker who dominates it, independently — so two
+    // hypothesis speakers talking at once can both be relabelled to the same
+    // person, and the second one stops covering anybody. Real DER's optimal
+    // mapping is one-to-one and cannot do that, so it keeps covering both,
+    // even while naming one of them wrong. The oracle traded 159 s of extra
+    // missed speech for 129 s less confusion and 27 s less false alarm.
+    //
+    // So "perfect clustering is at least as good" is false with overlap
+    // scored and no collar, which is the protocol this file measures under.
+    // What *is* true is the part the oracle exists to isolate: labelling
+    // each span with its dominant speaker minimises that span's confusion,
+    // and the real rate is constrained to one global mapping, so the
+    // oracle's confusion can never be the larger of the two. That is also
+    // the number ADR-0037 reads — the gap between the two confusions is what
+    // clustering is costing.
     assert!(
-        oracle.rate() <= pooled.rate() + 1e-9,
-        "the oracle floor is above the real rate, which cannot happen: \
-         {oracle:?} vs {pooled:?}"
+        oracle.confusion_ms <= pooled.confusion_ms,
+        "perfect clustering confused more speech than the real run, which \
+         cannot happen: {oracle:?} vs {pooled:?}"
     );
     assert!(
         pooled.rate() < 1.0,

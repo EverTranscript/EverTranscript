@@ -669,6 +669,109 @@ mod tests {
     }
 
     #[test]
+    fn recognition_restarts_on_the_new_model_after_the_upgrade() {
+        // The other half of the upgrade, and the half the migration test
+        // above cannot see. That one proves the record survives; this one
+        // proves the product still works afterwards — an Operator whose
+        // History migrated cleanly but who is never recognized again has
+        // lost the feature, not the data.
+        //
+        // Three things, in the order an upgraded install meets them: the old
+        // vectors are gone and are never offered to the new model, the first
+        // Meeting after the upgrade mints rather than recognizing (the wipe
+        // is real, not cosmetic), and the second Meeting recognizes the
+        // first — which is recognition running again, from scratch, in the
+        // new space.
+        use crate::diarize::{Embedding, cluster};
+        use crate::store::meetings;
+        use std::collections::{BTreeMap, BTreeSet};
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("history.sqlite3");
+
+        let before_wipe = 10;
+        let mut connection = Connection::open(&path).expect("open");
+        configure(&connection).expect("configure");
+        for migration in &MIGRATIONS[..before_wipe] {
+            connection.execute_batch(migration).expect("migrate");
+        }
+        connection
+            .pragma_update(None, "user_version", before_wipe as i64)
+            .expect("user_version");
+        // A History the old model built: a named Speaker recognition had
+        // been using, with a vector of the old width.
+        connection
+            .execute_batch(
+                "INSERT INTO speakers
+                     (id, display_name, is_operator, voiceprint, voiceprint_model,
+                      voiceprint_model_version, confirmed, created_at)
+                 VALUES ('alice', 'Alice', 0, x'0011', 'wespeaker', '1', 1, 'now');",
+            )
+            .expect("seed");
+        migrate(&mut connection).expect("upgrade");
+
+        // The new model asks History for seeds and is offered none. Not
+        // because the row is gone — it is still there, still named — but
+        // because nothing in it was made by this embedding.
+        let new_model = crate::models::registry::DIARIZE_EMBEDDING.key;
+        let new_version = crate::models::registry::DIARIZE_EMBEDDING.version;
+        assert!(
+            cluster::seeds(&connection, new_model, new_version)
+                .expect("seeds")
+                .is_empty(),
+            "an upgraded History starts the new model with a clean slate"
+        );
+        assert!(
+            cluster::seeds(&connection, "wespeaker", "1")
+                .expect("seeds")
+                .is_empty(),
+            "and the old model has nothing left either, so neither can be revived"
+        );
+
+        let voice = |vector: &[f32]| -> BTreeMap<crate::diarize::Cluster, Embedding> {
+            BTreeMap::from([(
+                crate::diarize::Cluster(0),
+                Embedding::new(vector.to_vec(), new_model, new_version, 30_000),
+            )])
+        };
+        let heard = BTreeSet::from([crate::diarize::Cluster(0)]);
+
+        let first = meetings::start(&connection, None, None).expect("m1");
+        let after_upgrade = cluster::persist(&connection, &first.id, &voice(&[1.0, 0.0]), &heard, None)
+            .expect("persist");
+        let minted = after_upgrade[&crate::diarize::Cluster(0)].clone();
+        assert_ne!(
+            minted, "alice",
+            "Alice's voice is a stranger now — that is what the wipe means, \
+             and re-embedding the old cuts is what ADR-0037 declined to do"
+        );
+
+        // Alice is still there, still named, still confirmed — the upgrade
+        // took her Voiceprint and nothing else. Asserted here rather than
+        // only in the migration test above, because "recognition restarted"
+        // and "the record survived" are the two halves of the same claim,
+        // and a wipe that quietly dropped the row would satisfy every other
+        // assertion in this test.
+        let alice: (Option<String>, i64, i64) = connection
+            .query_row(
+                "SELECT display_name, confirmed, voiceprint IS NULL FROM speakers WHERE id = 'alice'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("Alice survives the upgrade");
+        assert_eq!(alice, (Some("Alice".to_string()), 1, 1));
+
+        // And from here recognition is ordinary again.
+        let second = meetings::start(&connection, None, None).expect("m2");
+        let later = cluster::persist(&connection, &second.id, &voice(&[0.99, 0.1]), &heard, None)
+            .expect("persist");
+        assert_eq!(
+            later[&crate::diarize::Cluster(0)], minted,
+            "the voice the new model learned last Meeting is recognized this one"
+        );
+    }
+
+    #[test]
     fn the_second_you_is_reduced_to_one_and_then_made_impossible() {
         // The defect migration 14 closes, reproduced from the outside: a
         // History written by the old code, where deleting the Operator's

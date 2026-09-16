@@ -48,8 +48,7 @@ use super::MeetingAudio;
 use super::Progress;
 use super::SampleWindow;
 use super::Turn;
-use super::fbank::MelBank;
-use super::fbank::SAMPLE_RATE;
+use super::SAMPLE_RATE;
 
 /// Window the segmentation model was trained on: 10 s at 16 kHz.
 pub const SEGMENT_WINDOW: usize = 10 * SAMPLE_RATE as usize;
@@ -77,7 +76,8 @@ pub const LOCAL_SPEAKERS: usize = 3;
 ///
 /// Order is the model's, not ours. Getting this wrong produces a pipeline
 /// that runs perfectly and mislabels every overlap — the exact class of
-/// silent error the fbank module is also written to avoid.
+/// silent error the waveform contract is written to avoid: the mel
+/// frontend is inside the graph, so nothing here can disagree with it.
 const POWERSET: [&[usize]; POWERSET_CLASSES] = [&[], &[0], &[1], &[2], &[0, 1], &[0, 2], &[1, 2]];
 
 /// Resolution the timeline is rebuilt on.
@@ -97,6 +97,12 @@ pub const GRID_MS: u64 = 10;
 /// from is a separate and much stricter question, answered by
 /// [`MIN_SPAN_MS`] and [`super::cluster::MIN_SPEAKER_MS`].
 pub const MIN_EMBED_MS: u64 = 250;
+
+/// The same floor in samples, which is what [`LiveDiarizer::embed`] can
+/// actually check. The convolutional mel frontend inside the graph needs
+/// enough samples to produce a frame at all, and an input below that is an
+/// ONNX error — which would fail a whole Meeting for one short window.
+const MIN_EMBED_SAMPLES: usize = (MIN_EMBED_MS * SAMPLE_RATE as u64 / 1_000) as usize;
 
 /// Shortest span worth holding a voice up by.
 ///
@@ -133,7 +139,6 @@ pub struct LocalWindow {
 pub struct LiveDiarizer {
     segmentation: Session,
     embedding: Session,
-    mel: MelBank,
     model_name: String,
     model_version: String,
 }
@@ -150,7 +155,6 @@ impl LiveDiarizer {
         Ok(Self {
             segmentation: open(segmentation)?,
             embedding: open(embedding)?,
-            mel: MelBank::new(),
             // Read from the registry rather than written here. A literal in
             // this constructor is an account of what produced a Voiceprint
             // that nobody updates when the model behind it changes, and the
@@ -224,21 +228,25 @@ impl LiveDiarizer {
     }
 
     /// Embeds one stretch of audio.
+    ///
+    /// Raw waveform in, because the mel frontend lives inside the graph
+    /// (ADR-0037). The filterbank this used to compute in Rust was the one
+    /// place where two implementations of the same convention — ours and
+    /// the one the model was trained under — had to agree exactly, and a
+    /// disagreement there is silent: the vectors come out plausible and
+    /// simply stop matching each other.
     fn embed(&mut self, samples: &[f32]) -> Result<Option<Vec<f32>>, DiarizeError> {
-        let features = self.mel.compute(samples);
-        if features.is_empty() {
+        if samples.len() < MIN_EMBED_SAMPLES {
             return Ok(None);
         }
-        let frames = features.len();
-        let flat: Vec<f32> = features.into_iter().flatten().collect();
 
-        let input = Value::from_array(([1_usize, frames, super::fbank::MEL_BINS], flat))
+        let input = Value::from_array(([1_usize, samples.len()], samples.to_vec()))
             .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
         let outputs = self
             .embedding
-            .run(ort::inputs!["input_features" => input])
+            .run(ort::inputs!["waveform" => input])
             .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
-        let (_, vector) = outputs["last_hidden_state"]
+        let (_, vector) = outputs["embedding"]
             .try_extract_tensor::<f32>()
             .map_err(|error| DiarizeError::Failed(anyhow::anyhow!("{error}")))?;
 
@@ -418,8 +426,13 @@ pub fn embeddable(start_ms: u64, end_ms: u64) -> Option<(u64, u64)> {
 /// The samples one local speaker holds, with everybody else's removed.
 ///
 /// Concatenated rather than zeroed in place: silence dragged through the
-/// filterbank pulls an embedding toward "quiet room", and the point of
-/// masking is to hand the model one voice and nothing else.
+/// model's mel frontend pulls an embedding toward "quiet room", and the
+/// point of masking is to hand the model one voice and nothing else.
+///
+/// This is also what stands in for the speaker-mask input the reference
+/// product's masked export takes. Nobody publishes an ONNX carrying that
+/// input, so the choice was to export one or to do the masking here; doing
+/// it here is why one model covers both jobs (ADR-0037).
 fn gather(samples: &[f32], ranges: &[(u64, u64)]) -> Vec<f32> {
     let index = |ms: u64| (ms as usize * SAMPLE_RATE as usize / 1000).min(samples.len());
     let mut held = Vec::new();
@@ -1080,7 +1093,17 @@ mod tests {
 
         let speech = tone(140.0, 3.0, 6);
         let vector = diarizer.embed(&speech).expect("embeds").expect("a vector");
-        assert_eq!(vector.len(), 256, "the embedding model's stated width");
+        // Against the registry rather than a literal. A width mismatch is
+        // the quietest failure this pipeline has: vectors of two widths
+        // never match, so recognition simply stops working and nothing
+        // anywhere reports an error. This test caught exactly that when the
+        // model changed from a 256-d WeSpeaker to a 192-d ReDimNet2, which
+        // is the only reason to keep asserting something so obvious.
+        assert_eq!(
+            vector.len(),
+            crate::models::registry::DIARIZE_EMBEDDING_DIM,
+            "the embedding model's stated width"
+        );
         let norm: f32 = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-3, "L2-normalized, got {norm}");
     }

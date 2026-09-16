@@ -33,7 +33,6 @@
 //! fifty minutes. [`fixture`] exists to produce the ugly shapes on purpose.
 
 pub mod cluster;
-pub mod fbank;
 pub mod fixture;
 pub mod live;
 pub mod operator;
@@ -47,6 +46,19 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
 use evertranscript_protocol::AudioChannel;
+
+/// Sample rate every speaker model here expects.
+///
+/// Not a preference: the models were trained at 16 kHz, and feeding them
+/// 48 kHz audio produces confident nonsense rather than an error.
+///
+/// This used to live in a `fbank` module alongside an 80-mel filterbank and
+/// a radix-2 FFT written out by hand. ReDimNet2-B3 carries its own
+/// convolutional mel frontend inside the ONNX graph, so all of that went:
+/// it was the one place where our implementation of a feature convention
+/// and the model's had to agree exactly, and where a disagreement produced
+/// plausible vectors that quietly stopped matching (ADR-0037).
+pub const SAMPLE_RATE: u32 = 16_000;
 
 use crate::audio::CaptureOffset;
 
