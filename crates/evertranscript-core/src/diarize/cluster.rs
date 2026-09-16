@@ -254,9 +254,51 @@ pub fn agglomerate_with(
         .map(|(cluster, embedding)| Group {
             members: vec![*cluster],
             centroid: embedding.vector.clone(),
+            blocked: BTreeSet::new(),
         })
         .collect();
 
+    agglomerate_groups(groups, threshold)
+}
+
+/// [`agglomerate_with`], plus pairs that must not end up in one cluster.
+///
+/// Two local speakers of one segmentation window are different people by
+/// segmentation's own account — that is what made them two — and nothing in
+/// the merge loop knows it. This exists to measure what the constraint is
+/// worth, and **production has no way to reach it**: `agglomerate` passes
+/// the constant and no constraints, as it always did.
+///
+/// `forbidden` maps each cluster to the clusters it may not join. It is
+/// expected to be symmetric; anything asymmetric is silently one-directional
+/// and would make the answer depend on merge order, so the harness that
+/// builds it builds both directions.
+///
+/// **The constraints are hypotheses, not ground truth.** Segmentation
+/// assigning two local tracks is a claim that can be wrong, and when it is,
+/// this refuses a merge that should have happened. That cost is part of what
+/// the experiment measures, which is why the pairs come from provenance
+/// rather than from reference labels — a constraint read off the answer key
+/// would be an oracle, and would measure nothing a product can ship.
+pub fn agglomerate_constrained(
+    embeddings: &BTreeMap<Cluster, Embedding>,
+    threshold: f32,
+    forbidden: &BTreeMap<Cluster, BTreeSet<Cluster>>,
+) -> BTreeMap<Cluster, Cluster> {
+    let groups: Vec<Group> = embeddings
+        .iter()
+        .map(|(cluster, embedding)| Group {
+            members: vec![*cluster],
+            centroid: embedding.vector.clone(),
+            blocked: forbidden.get(cluster).cloned().unwrap_or_default(),
+        })
+        .collect();
+
+    agglomerate_groups(groups, threshold)
+}
+
+/// The two stages, and the canonical naming, shared by both entry points.
+fn agglomerate_groups(groups: Vec<Group>, threshold: f32) -> BTreeMap<Cluster, Cluster> {
     // One pass while the meeting is small enough, two when it is not. The
     // second stage runs over block centroids, of which there are a handful
     // per block, so it is never the expensive one.
@@ -304,6 +346,32 @@ const BLOCK: usize = 2_000;
 struct Group {
     members: Vec<Cluster>,
     centroid: Vec<f32>,
+    /// Clusters this group may never merge with, unioned as it grows.
+    ///
+    /// Empty for every production path. Carrying it on the group rather
+    /// than consulting a pair table is what makes the constraint survive
+    /// merging: once two groups are one, the survivor inherits both sets,
+    /// so a pair that was never compared directly is still refused when
+    /// its members end up on opposite sides of a later candidate merge.
+    blocked: BTreeSet<Cluster>,
+}
+
+/// Whether a constraint forbids merging these two rows.
+///
+/// Symmetric by construction — both groups carry the pair — so one
+/// direction is enough. `owner` is the current row of each cluster, which
+/// turns "does the group over there contain any cluster I am blocked from"
+/// into one lookup per blocked entry instead of a scan of its members.
+fn forbidden(
+    groups: &[Group],
+    owner: &BTreeMap<Cluster, usize>,
+    left: usize,
+    right: usize,
+) -> bool {
+    groups[left]
+        .blocked
+        .iter()
+        .any(|cluster| owner.get(cluster) == Some(&right))
 }
 
 /// Closest pair first, repeatedly, against a running centroid.
@@ -331,9 +399,22 @@ fn merge_closest_first(mut groups: Vec<Group>, threshold: f32) -> Vec<Group> {
         return groups;
     }
 
+    // Where each cluster currently lives. Both stages run through here, so
+    // maintaining it here is what makes constraints hold in the second one
+    // as well as the first.
+    let mut owner: BTreeMap<Cluster, usize> = BTreeMap::new();
+    for (row, group) in groups.iter().enumerate() {
+        for member in &group.members {
+            owner.insert(*member, row);
+        }
+    }
+
     let mut score = vec![f32::NEG_INFINITY; count * count];
     for left in 0..count {
         for right in (left + 1)..count {
+            if forbidden(&groups, &owner, left, right) {
+                continue;
+            }
             let value = cosine(&groups[left].centroid, &groups[right].centroid);
             score[left * count + right] = value;
             score[right * count + left] = value;
@@ -369,20 +450,31 @@ fn merge_closest_first(mut groups: Vec<Group>, threshold: f32) -> Vec<Group> {
         // group drifts apart one window at a time.
         let taken = std::mem::take(&mut groups[drop].members);
         let vector = std::mem::take(&mut groups[drop].centroid);
+        let inherited = std::mem::take(&mut groups[drop].blocked);
         let weight = groups[keep].members.len() as f32;
         let total = weight + taken.len() as f32;
         for (slot, value) in groups[keep].centroid.iter_mut().zip(vector.iter()) {
             *slot = (*slot * weight + value * taken.len() as f32) / total;
         }
         l2_normalize(&mut groups[keep].centroid);
+        for member in &taken {
+            owner.insert(*member, keep);
+        }
         groups[keep].members.extend(taken);
+        groups[keep].blocked.extend(inherited);
         alive[drop] = false;
 
         for other in 0..count {
             if !alive[other] || other == keep {
                 continue;
             }
-            let value = cosine(&groups[keep].centroid, &groups[other].centroid);
+            // The survivor inherited the constraints of both, so a pair that
+            // was merely far apart a moment ago can be forbidden now.
+            let value = if forbidden(&groups, &owner, keep, other) {
+                f32::NEG_INFINITY
+            } else {
+                cosine(&groups[keep].centroid, &groups[other].centroid)
+            };
             score[keep * count + other] = value;
             score[other * count + keep] = value;
         }
@@ -1695,6 +1787,112 @@ mod tests {
                 (Cluster(index as u32), embedding(&vector))
             })
             .collect()
+    }
+
+    /// A pair can be forbidden and still end up merged, unless the
+    /// constraint survives the merge that carries them together.
+    ///
+    /// This is the whole reason constraints live on the group. A and B are
+    /// forbidden and are never the closest pair, so a check that only looked
+    /// at the candidate merge in front of it would never see them: what
+    /// happens is A merges with C, and then B merges with *that group*,
+    /// which puts A and B in one cluster without any step having compared
+    /// them. The refusal has to come from the survivor inheriting A's
+    /// constraint.
+    #[test]
+    fn a_forbidden_pair_is_still_refused_when_a_third_cluster_would_carry_them_together() {
+        let unit = |vector: &[f32]| embedding(vector);
+        let windows: BTreeMap<Cluster, Embedding> = [
+            (Cluster(0), unit(&[1.0, 0.1, 0.0])),
+            (Cluster(1), unit(&[1.0, -0.1, 0.0])),
+            (Cluster(2), unit(&[1.0, 0.0, 0.0])),
+        ]
+        .into_iter()
+        .collect();
+
+        // Unconstrained, all three are one voice: each outer window is
+        // within the threshold of the middle one, and of the group after
+        // it absorbs the other.
+        let free = agglomerate_with(&windows, 0.95);
+        assert_eq!(
+            free.values().copied().collect::<BTreeSet<_>>().len(),
+            1,
+            "without the constraint the three collapse through the middle window"
+        );
+
+        let forbidden: BTreeMap<Cluster, BTreeSet<Cluster>> = [
+            (Cluster(0), BTreeSet::from([Cluster(1)])),
+            (Cluster(1), BTreeSet::from([Cluster(0)])),
+        ]
+        .into_iter()
+        .collect();
+        let held = agglomerate_constrained(&windows, 0.95, &forbidden);
+        assert_ne!(
+            held[&Cluster(0)],
+            held[&Cluster(1)],
+            "a forbidden pair must not arrive in one cluster by way of a third"
+        );
+    }
+
+    /// The constraint has to hold in the second stage too, where the things
+    /// being compared are block centroids rather than windows.
+    #[test]
+    fn a_constraint_across_two_blocks_survives_the_second_stage() {
+        // Two voices over two full blocks, so every voice appears in both
+        // and it is the second stage that puts each one back together.
+        let windows = many_windows(2, BLOCK * 2);
+        let one_voice = |merged: &BTreeMap<Cluster, Cluster>, of: Cluster| {
+            merged
+                .iter()
+                .filter(|(member, _)| member.0 % 2 == of.0 % 2)
+                .map(|(_, canonical)| *canonical)
+                .collect::<BTreeSet<_>>()
+                .len()
+        };
+
+        let free = agglomerate_with(&windows, MERGE_THRESHOLD);
+        assert_eq!(one_voice(&free, Cluster(0)), 1, "one voice, one cluster");
+
+        // One window from each block, same voice — a pair the second stage
+        // is exactly what would otherwise reunite.
+        // The first window of the second block: `chunks(BLOCK)` splits the
+        // 2 * BLOCK windows there, and it is even, so it is the same voice
+        // as Cluster(0).
+        let across = BLOCK as u32;
+        let forbidden: BTreeMap<Cluster, BTreeSet<Cluster>> = [
+            (Cluster(0), BTreeSet::from([Cluster(across)])),
+            (Cluster(across), BTreeSet::from([Cluster(0)])),
+        ]
+        .into_iter()
+        .collect();
+        let held = agglomerate_constrained(&windows, MERGE_THRESHOLD, &forbidden);
+        assert_eq!(
+            one_voice(&held, Cluster(0)),
+            2,
+            "the blocks of that voice must stay apart in the second stage"
+        );
+        assert_eq!(
+            one_voice(&held, Cluster(1)),
+            1,
+            "the untouched voice is unaffected"
+        );
+    }
+
+    /// No constraints must mean no change, or the experiment measures the
+    /// rewrite instead of the constraint.
+    #[test]
+    fn clustering_with_no_constraints_is_the_clustering_we_already_had() {
+        let empty = BTreeMap::new();
+        for (voices, count) in [(2, 40), (3, 200), (4, BLOCK + 50)] {
+            let windows = many_windows(voices, count);
+            for threshold in [0.30_f32, 0.60, 0.65, 0.90] {
+                assert_eq!(
+                    agglomerate_constrained(&windows, threshold, &empty),
+                    agglomerate_with(&windows, threshold),
+                    "{voices} voices, {count} windows, threshold {threshold}"
+                );
+            }
+        }
     }
 
     #[test]

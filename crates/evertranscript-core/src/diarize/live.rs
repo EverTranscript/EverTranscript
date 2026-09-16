@@ -34,7 +34,7 @@
 //! is closed by clustering rather than stitching: both halves of a turn
 //! embed to the same voice, and `merge_adjacent` joins them.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use evertranscript_protocol::AudioChannel;
@@ -794,6 +794,18 @@ pub fn cluster_observed(observed: &Observed, threshold: f32) -> Diarization {
     assemble(observed, &canonical)
 }
 
+/// [`cluster_observed`] with segmentation's own cannot-link pairs enforced.
+///
+/// Harness-only, and the reason the constraint can be measured without
+/// shipping it: production still calls `agglomerate`, which has no
+/// constraints and never did.
+pub fn cluster_observed_constrained(observed: &Observed, threshold: f32) -> Diarization {
+    let provisional = provisional_of(observed);
+    let forbidden = cannot_link_of(observed);
+    let canonical = super::cluster::agglomerate_constrained(&provisional, threshold, &forbidden);
+    assemble(observed, &canonical)
+}
+
 /// Every observation as its own cluster, which is where agglomeration starts.
 ///
 /// Public so a measurement can reach the partition itself rather than only
@@ -816,6 +828,69 @@ pub fn provisional_of(observed: &Observed) -> BTreeMap<Cluster, Embedding> {
             )
         })
         .collect()
+}
+
+/// Pairs of provisional clusters that segmentation says are different people.
+///
+/// Two local speakers of one window are two *because* the segmentation model
+/// separated them there, so merging them later contradicts the evidence the
+/// pipeline already has. Nothing in [`super::cluster::agglomerate`] knows
+/// that, and no fixture can catch it: fixture vectors are orthogonal and
+/// never come close enough to merge.
+///
+/// **Provenance only.** The pairs come from which window and channel an
+/// observation was produced in, never from what a reference transcript says
+/// about it. A constraint derived from the answer key would be an oracle:
+/// it would improve the measurement and could not ship, and it would hide
+/// exactly the cost worth knowing, which is what happens when segmentation
+/// splits one person into two local tracks and this refuses to put them
+/// back together.
+///
+/// Same channel only. The two channels are separate recordings with their
+/// own windows, and one person can be on both, so simultaneity across them
+/// says nothing.
+///
+/// Harness-only, like [`provisional_of`]. Returns both directions of every
+/// pair, because [`super::cluster::agglomerate_constrained`] checks one.
+pub fn cannot_link_of(observed: &Observed) -> BTreeMap<Cluster, BTreeSet<Cluster>> {
+    // The recovery below gives each observation exactly one window, which is
+    // true only while windows tile rather than overlap. Under a sliding step
+    // an observation sits in up to ten of them and "same window" stops being
+    // a partition — so this fails loudly rather than quietly building
+    // constraints from the first window that happened to match.
+    assert_eq!(
+        SEGMENT_STEP, SEGMENT_WINDOW,
+        "cannot-link pairs assume non-overlapping windows; a sliding step needs \
+         the constraint rebuilt against every window covering an observation"
+    );
+
+    let mut together: BTreeMap<(usize, u64), Vec<Cluster>> = BTreeMap::new();
+    for observation in &observed.observations {
+        let Some(&(_, start, _)) = observed.windows.iter().find(|(channel, start, end)| {
+            *channel == observation.channel
+                && observation
+                    .runs
+                    .first()
+                    .is_some_and(|(at, _)| at >= start && at < end)
+        }) else {
+            continue;
+        };
+        together
+            .entry((slot(observation.channel), start))
+            .or_default()
+            .push(observation.cluster);
+    }
+
+    let mut forbidden: BTreeMap<Cluster, BTreeSet<Cluster>> = BTreeMap::new();
+    for clusters in together.values() {
+        for (index, left) in clusters.iter().enumerate() {
+            for right in &clusters[index + 1..] {
+                forbidden.entry(*left).or_default().insert(*right);
+                forbidden.entry(*right).or_default().insert(*left);
+            }
+        }
+    }
+    forbidden
 }
 
 impl Diarizer for LiveDiarizer {

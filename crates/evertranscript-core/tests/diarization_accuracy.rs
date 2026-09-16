@@ -191,6 +191,14 @@ fn models() -> (PathBuf, PathBuf) {
     let embedding = dir.join(&file);
     println!("embedding under test: {name} ({})", file.display());
     println!("segmentation step: {} ms", step_under_test());
+    println!(
+        "same-window cannot-link: {}",
+        if cannot_link_enabled() {
+            "enforced"
+        } else {
+            "off (shipped clusterer)"
+        }
+    );
     assert!(
         segmentation.exists() && embedding.exists(),
         "the diarization models are not in {}. Fetch them with \
@@ -432,9 +440,28 @@ fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Inf
 /// `SEGMENT_WINDOW`: an observation's first run then sits in exactly one
 /// window. At a sliding step this needs the window index carried on the
 /// observation instead of recovered from its runs.
+/// Whether to enforce segmentation's cannot-link pairs, from
+/// `EVERTRANSCRIPT_CANNOT_LINK=1`.
+///
+/// Off is the shipped clusterer, so a sweep with this unset reproduces the
+/// numbers already on record.
+fn cannot_link_enabled() -> bool {
+    std::env::var("EVERTRANSCRIPT_CANNOT_LINK").as_deref() == Ok("1")
+}
+
 fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64) {
     let provisional = diarize::live::provisional_of(&one.observed);
-    let canonical = diarize::cluster::agglomerate_with(&provisional, threshold);
+    // Scored against whichever clusterer actually ran, or a constrained
+    // sweep would report the unconstrained violation rate.
+    let canonical = if cannot_link_enabled() {
+        diarize::cluster::agglomerate_constrained(
+            &provisional,
+            threshold,
+            &diarize::live::cannot_link_of(&one.observed),
+        )
+    } else {
+        diarize::cluster::agglomerate_with(&provisional, threshold)
+    };
 
     // Observation indices grouped by the window they were heard in, each
     // carrying who the reference says it actually is.
@@ -481,7 +508,11 @@ fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64) {
 
 fn score_at(one: &Inferred, threshold: f32, with_windows: bool) -> Measured {
     let reference = &one.reference;
-    let result = diarize::live::cluster_observed(&one.observed, threshold);
+    let result = if cannot_link_enabled() {
+        diarize::live::cluster_observed_constrained(&one.observed, threshold)
+    } else {
+        diarize::live::cluster_observed(&one.observed, threshold)
+    };
     let spans = hypothesis(&result.turns);
     let cannot_link = same_window_merges(one, threshold);
 
