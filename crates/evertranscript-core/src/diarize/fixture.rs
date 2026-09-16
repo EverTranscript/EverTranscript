@@ -148,6 +148,22 @@ impl FixtureDiarizer {
         ])
     }
 
+    /// A sub-second interjection inside somebody else's turn.
+    ///
+    /// The shape turn placement produces now and could not before: two
+    /// voices hold the same instant and one of them holds it for 300 ms.
+    /// Downstream policy has to cope with both at once, and a fixture that
+    /// only ever produces one or the other lets through the bug that needs
+    /// both. The interjector speaks at length later, so this is a voice the
+    /// run knows rather than 300 ms of nobody.
+    pub fn interjection() -> Self {
+        Self::new(vec![
+            Turn::new(AudioChannel::System, 0, 20_000, 0),
+            Turn::new(AudioChannel::System, 8_000, 8_300, 1),
+            Turn::new(AudioChannel::System, 21_000, 30_000, 1),
+        ])
+    }
+
     /// A turn shorter than any sane embedding window.
     ///
     /// "Mm-hm" is not noise to be dropped — it is a real turn by a real
@@ -316,6 +332,33 @@ mod tests {
             .filter(|turn| turn.channel == AudioChannel::System && turn.contains(at))
             .count();
         assert_eq!(covering, 2, "both voices are speaking");
+    }
+
+    #[test]
+    fn an_interjection_is_both_overlapping_and_sub_second() {
+        // Turn placement produces this shape routinely now, so the fixture
+        // has to be able to. Asserting both properties of the same instant,
+        // because it is the combination that breaks downstream code.
+        let result = run(&mut FixtureDiarizer::interjection()).expect("runs");
+        let at = crate::audio::CaptureOffset(8_100);
+        let covering: Vec<_> = result
+            .turns
+            .iter()
+            .filter(|turn| turn.channel == AudioChannel::System && turn.contains(at))
+            .collect();
+        assert_eq!(covering.len(), 2, "both voices hold it: {covering:?}");
+        assert!(
+            covering.iter().any(|turn| turn.duration_ms() < 1_000),
+            "and one of them only briefly"
+        );
+        let brief = covering
+            .iter()
+            .find(|turn| turn.duration_ms() < 1_000)
+            .expect("the interjection");
+        assert!(
+            result.embeddings.contains_key(&brief.cluster),
+            "the interjector is a voice the run knows from elsewhere"
+        );
     }
 
     #[test]
