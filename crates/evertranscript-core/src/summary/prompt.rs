@@ -525,6 +525,35 @@ fn same_person(speaker: &str, who: &str) -> bool {
     !speaker.is_empty() && (who.contains(&speaker) || speaker.contains(&who))
 }
 
+/// Headings that name the document instead of the meeting.
+///
+/// Rule 3 asks for a heading naming the meeting, and measured across five
+/// attempts the model complies twice: the other three are the bare words
+/// "Meeting Summary" (DECISIONS Q121). English and Chinese for the same
+/// reason `asr::filters` carries both — a code-switching meeting is this
+/// product's normal case (story 7). A label in a third language is the
+/// ceiling here, and what it costs is a wrong name, not a wrong Summary.
+const DOCUMENT_LABELS: &[&str] = &[
+    "summary",
+    "meeting summary",
+    "notes",
+    "meeting notes",
+    "minutes",
+    "meeting minutes",
+    "摘要",
+    "会议摘要",
+    "纪要",
+    "会议纪要",
+    "会议记录",
+];
+
+/// Whether a heading names the document rather than the meeting.
+fn is_document_label(heading: &str) -> bool {
+    let folded = heading.to_lowercase();
+    let bare = folded.trim_matches(|c: char| !c.is_alphanumeric());
+    DOCUMENT_LABELS.contains(&bare)
+}
+
 /// The title, per the catalog's output contract: the first `#` heading.
 ///
 /// The transcript-derived suggestion in the Title Chain — manual > calendar >
@@ -532,13 +561,27 @@ fn same_person(speaker: &str, who: &str) -> bool {
 /// summarize path offers whatever this returns to the store, which applies it
 /// only where the Meeting has no name: the precedence is a `WHERE` clause
 /// rather than a rule this function has to know.
+///
+/// **A heading that is the document's label is not a name**, and refusing it
+/// is not fussiness. The store applies this wherever a Meeting has no name,
+/// so the Meetings that would take the label are exactly the ones nobody has
+/// named yet — a real 30-minute Meeting was renamed "Meeting Summary" this
+/// way (Q121). The asymmetry decides it: a missing name is a gap an Operator
+/// can fill, and a wrong one is a record ADR-0009 will not let them edit out,
+/// so this function is biased towards `None`.
 pub fn title_from(summary: &str) -> Option<String> {
-    summary
+    let heading = summary
         .lines()
         .find_map(|line| line.trim().strip_prefix("# "))
         .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .map(str::to_string)
+        .filter(|heading| !heading.is_empty())?;
+    // "Meeting Summary: Data Ingestion and Unique ID Discussion" is a name
+    // wearing a label. Keep the name rather than discarding both.
+    let named = match heading.split_once([':', '：']) {
+        Some((label, name)) if is_document_label(label) && !name.trim().is_empty() => name.trim(),
+        _ => heading,
+    };
+    (!is_document_label(named)).then(|| named.to_string())
 }
 
 #[cfg(test)]
@@ -908,6 +951,36 @@ mod tests {
         assert_eq!(title_from("Just some prose about the meeting."), None);
         assert_eq!(title_from("## Only a subheading"), None);
         assert_eq!(title_from("#\n\nempty heading"), None);
+    }
+
+    #[test]
+    fn a_heading_that_names_the_document_is_not_a_title() {
+        // Measured: asked five times the model headed three Summaries with
+        // the bare label, and a real 30-minute Meeting was renamed to it
+        // (Q121). The store applies this where a Meeting has no name, so the
+        // Meetings at risk are the ones nobody has named.
+        assert_eq!(
+            title_from("# Meeting Summary\n\nWe discussed storage."),
+            None
+        );
+        assert_eq!(title_from("# 会议摘要\n\n讨论了存储。"), None);
+        // Punctuation does not smuggle it through.
+        assert_eq!(title_from("# Summary.\n\nBody."), None);
+        // A name wearing the label keeps the name.
+        assert_eq!(
+            title_from("# Meeting Summary: Data Ingestion and Unique ID Discussion\n\nBody."),
+            Some("Data Ingestion and Unique ID Discussion".to_string())
+        );
+        // And a real title merely containing the word is left alone, which is
+        // what keeps this from eating the honest case.
+        assert_eq!(
+            title_from("# Data Storage and Retrieval Meeting\n\nBody."),
+            Some("Data Storage and Retrieval Meeting".to_string())
+        );
+        assert_eq!(
+            title_from("# Q3: budget\n\nBody."),
+            Some("Q3: budget".to_string())
+        );
     }
 
     #[test]

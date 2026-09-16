@@ -133,17 +133,22 @@ from somewhere else, and each is already labelled that way in its ticket.
   right cost it the word it needed. That item scored 2 of 5 where 3 were
   wanted. `When` still merely repeats `Said at` — rule 5 names the column and
   never says what belongs in it.
-- **A Summary can name the Meeting after itself.** `prompt::title_from` takes
-  the Summary's first `#` heading and the store applies it where a Meeting has
-  no name (ADR-0030 as amended by ADR-0036). The model does not reliably put a
-  name there: of the five Summaries standing at the end of the sweep, three are
-  headed with the bare words `# Meeting Summary` against one `# Data Storage
-  and Retrieval Meeting`. Both Meetings that had no name of their own were
-  renamed to the label, the 30-minute one included, and it is not junk data
-  that is at risk — it is precisely the Meetings nobody has named yet. The
-  Title Chain is working as designed — a person's word and the calendar's both
-  outrank it — but nothing rejects a heading that is the label rather than a
-  title, and ADR-0009 makes what lands there immutable.
+- **A Summary could name the Meeting after itself, and now cannot in two
+  languages.** `prompt::title_from` takes the Summary's first `#` heading and
+  the store applies it where a Meeting has no name (ADR-0030 as amended by
+  ADR-0036). The model does not reliably put a name there: of the five
+  Summaries standing at the end of the sweep, three were headed with the bare
+  words `# Meeting Summary` against one `# Data Storage and Retrieval
+  Meeting`. Both Meetings that had no name of their own were renamed to the
+  label, the 30-minute one included — and it was never junk data at risk, but
+  precisely the Meetings nobody has named yet, under a name ADR-0009 will not
+  let them edit out. `title_from` now refuses a heading that is the document's
+  label and keeps the name under one worn as a prefix, so `# Meeting Summary:
+  Data Ingestion and Unique ID Discussion` yields the half that is a title
+  (Q122). **The list is English and Chinese**, for the same reason
+  `asr::filters` carries both, and a label in a third language is the standing
+  ceiling: the model would have to head a summary `# Zusammenfassung`, and what
+  it costs is a wrong name rather than a wrong Summary.
 - **Diarization is measured on real meetings now, and the number is 26.3%.**
   This entry used to say DER 3.9% on a construction — one speaker and their
   own resampling. AMI, scored the way pyannote publishes it, said 51.4%
