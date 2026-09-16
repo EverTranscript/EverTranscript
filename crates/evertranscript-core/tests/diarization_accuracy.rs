@@ -1966,6 +1966,10 @@ fn the_gallery_recognizes_who_it_has_met_before() {
         return;
     };
     let Some(corpus) = corpus() else {
+        // Silence here once cost a whole grid run: the manifest was set, the
+        // corpus variable was not, and the test passed in no time at all
+        // having replayed nothing.
+        eprintln!("{MEASURE_ENV} is unset — skipping the enrollment replay");
         return;
     };
     let chapters = load_manifest(Path::new(&manifest), &corpus);
