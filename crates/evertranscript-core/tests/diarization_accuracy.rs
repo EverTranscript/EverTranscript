@@ -262,6 +262,14 @@ struct Measured {
     /// Pre-merge window vectors, each labelled by the reference speaker who
     /// holds most of it. The raw material for the oracle ceiling.
     windows: Vec<(String, Vec<f32>)>,
+    /// Pairs of observations from the same window whose reference speakers
+    /// differ, and how many of them agglomeration merged anyway.
+    ///
+    /// Two local speakers in one window are two people by construction, and
+    /// `agglomerate` has no cannot-link constraint to say so. Ticket 03
+    /// flagged it and no fixture can catch it, because fixture vectors are
+    /// orthogonal and never come close enough to merge.
+    cannot_link: (u64, u64),
 }
 
 /// The reference speaker holding most of these milliseconds, if any is.
@@ -409,10 +417,72 @@ fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Path) -> Inf
 /// the model said before any clustering — so exactly one pass of a sweep
 /// keeps them and the oracle is reported once, rather than holding thirteen
 /// identical copies of every window in the corpus.
+/// How often agglomeration merged two people who were provably talking at
+/// the same time.
+///
+/// Two observations from one segmentation window are two *local* speakers —
+/// the model separated them within that window, so they are different people
+/// by construction. Nothing in `agglomerate` says so: it has no cannot-link
+/// constraint, and ticket 03 flagged that as unchecked. This counts the pairs
+/// it could have got wrong and the ones it did, scored against the reference
+/// so a merge only counts when the two really are different speakers.
+///
+/// Assumes windows do not overlap, which holds while `SEGMENT_STEP` equals
+/// `SEGMENT_WINDOW`: an observation's first run then sits in exactly one
+/// window. At a sliding step this needs the window index carried on the
+/// observation instead of recovered from its runs.
+fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64) {
+    let provisional = diarize::live::provisional_of(&one.observed);
+    let canonical = diarize::cluster::agglomerate_with(&provisional, threshold);
+
+    // Observation indices grouped by the window they were heard in, each
+    // carrying who the reference says it actually is.
+    let mut per_window: BTreeMap<usize, Vec<(diarize::Cluster, String)>> = BTreeMap::new();
+    for observation in &one.observed.observations {
+        let Some((start, _)) = observation.runs.first() else {
+            continue;
+        };
+        let Some(window) = one
+            .observed
+            .windows
+            .iter()
+            .position(|&(channel, from, to)| {
+                channel == observation.channel && *start >= from && *start < to
+            })
+        else {
+            continue;
+        };
+        // No owner in the reference means the pair says nothing either way.
+        if let Some(who) = dominant_speaker(&observation.runs, &one.reference) {
+            per_window
+                .entry(window)
+                .or_default()
+                .push((observation.cluster, who));
+        }
+    }
+
+    let (mut merged, mut pairs) = (0u64, 0u64);
+    for held in per_window.values() {
+        for (i, (left, left_who)) in held.iter().enumerate() {
+            for (right, right_who) in &held[i + 1..] {
+                if left_who == right_who {
+                    continue;
+                }
+                pairs += 1;
+                if canonical.get(left) == canonical.get(right) {
+                    merged += 1;
+                }
+            }
+        }
+    }
+    (merged, pairs)
+}
+
 fn score_at(one: &Inferred, threshold: f32, with_windows: bool) -> Measured {
     let reference = &one.reference;
     let result = diarize::live::cluster_observed(&one.observed, threshold);
     let spans = hypothesis(&result.turns);
+    let cannot_link = same_window_merges(one, threshold);
 
     Measured {
         windows: if with_windows {
@@ -428,6 +498,7 @@ fn score_at(one: &Inferred, threshold: f32, with_windows: bool) -> Measured {
             Vec::new()
         },
         name: one.name.clone(),
+        cannot_link,
         der: score::der(reference, &spans),
         oracle: score::der(reference, &score::oracle_relabel(&spans, reference)),
         seconds: one.seconds,
@@ -540,6 +611,16 @@ fn report(measured: &[Measured], with_oracle: bool) -> (Der, Der) {
     println!(
         "oracle floor   {:>6.2}%   what perfect clustering would still cost",
         oracle.rate() * 100.0
+    );
+    let merged: u64 = measured.iter().map(|one| one.cannot_link.0).sum();
+    let pairs: u64 = measured.iter().map(|one| one.cannot_link.1).sum();
+    println!(
+        "same-window    {:>6.2}%   {merged} of {pairs} pairs heard talking at once were merged anyway",
+        if pairs == 0 {
+            0.0
+        } else {
+            merged as f64 / pairs as f64 * 100.0
+        }
     );
     match score::equal_error_rate(&trials) {
         Some((rate, threshold)) => println!(

@@ -789,9 +789,19 @@ pub fn assemble(observed: &Observed, canonical: &BTreeMap<Cluster, Cluster>) -> 
 /// production must not do. **Production reaches it only through `diarize`**,
 /// which passes [`super::cluster::MERGE_THRESHOLD`].
 pub fn cluster_observed(observed: &Observed, threshold: f32) -> Diarization {
-    // Every observation starts as its own cluster; grouping them is what
-    // turns local speakers into voices.
-    let provisional: BTreeMap<Cluster, Embedding> = observed
+    let provisional = provisional_of(observed);
+    let canonical = super::cluster::agglomerate_with(&provisional, threshold);
+    assemble(observed, &canonical)
+}
+
+/// Every observation as its own cluster, which is where agglomeration starts.
+///
+/// Public so a measurement can reach the partition itself rather than only
+/// the turns it produces — the cannot-link question ticket 03 raised is about
+/// which observations ended up together, which `assemble` has already thrown
+/// away by the time it returns.
+pub fn provisional_of(observed: &Observed) -> BTreeMap<Cluster, Embedding> {
+    observed
         .observations
         .iter()
         .map(|observation| {
@@ -805,9 +815,7 @@ pub fn cluster_observed(observed: &Observed, threshold: f32) -> Diarization {
                 ),
             )
         })
-        .collect();
-    let canonical = super::cluster::agglomerate_with(&provisional, threshold);
-    assemble(observed, &canonical)
+        .collect()
 }
 
 impl Diarizer for LiveDiarizer {
