@@ -9,3 +9,6 @@ A live and archived transcript of every meeting.
 
 Transcribed locally with whisper.cpp, saved as plain markdown you own.
 
+## Private by construction
+
+**Your meetings never leave your machine — unless you turn on cloud summaries.**
