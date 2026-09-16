@@ -182,6 +182,16 @@ pub struct DiarizeJob {
     pub total_ms: u64,
 }
 
+/// What the blocking half of a run handed back: the diarizer's own answer,
+/// and the Voiceprints it re-embedded on the way past (Q115).
+type RunResult = std::result::Result<
+    (
+        std::result::Result<crate::diarize::Diarization, crate::diarize::DiarizeError>,
+        Vec<(String, Option<Vec<f32>>)>,
+    ),
+    anyhow::Error,
+>;
+
 /// What a Diarization run did, as the queue worker has to read it.
 ///
 /// `Ok(0)` used to carry three unrelated answers — nothing to attribute, a
@@ -213,6 +223,34 @@ pub enum DiarizeOutcome {
 /// anybody waiting.
 fn yields_to_recording(priority: crate::store::diarize_queue::Priority, recording: bool) -> bool {
     recording && matches!(priority, crate::store::diarize_queue::Priority::Back)
+}
+
+/// Stops a run because a Meeting is recording, and records *that* as the
+/// reason. Answers whether it stopped anything.
+///
+/// The reason has to be written down when the token is set, not worked out
+/// afterwards from whether a Meeting happens to be recording by then. A
+/// recording can start and end inside one inference pass, and then asking
+/// `is_recording` on the way out reports an Operator cancellation that never
+/// happened — losing the one fact the queue needs, which is that the Meeting
+/// is still owed.
+///
+/// `recording: None` is a run that does not yield at all, so nothing can stand
+/// it down.
+fn stand_down_for_recording(
+    recording: Option<&Arc<std::sync::atomic::AtomicBool>>,
+    cancel: &crate::diarize::Cancel,
+    stood_down: &Arc<std::sync::atomic::AtomicBool>,
+) -> bool {
+    let Some(recording) = recording else {
+        return false;
+    };
+    if !recording.load(std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    stood_down.store(true, std::sync::atomic::Ordering::SeqCst);
+    cancel.cancel();
+    true
 }
 
 /// A stored Speaker as the protocol shows it, with its appearance counts.
@@ -1604,10 +1642,16 @@ impl Core {
         // Read on the blocking thread, which is why it is an atomic and not
         // the `recorder` mutex: a recording that starts mid-pass stops this
         // run cooperatively, through the same token `diarize/cancel` uses, so
-        // there is one way to stop and one place that decides nothing is
-        // written afterwards.
+        // there is one way to stop.
         let stands_down = yields_to_recording(priority, true).then(|| Arc::clone(&self.recording));
-        let pause = cancel.clone();
+        let stop_in_run = cancel.clone();
+        // Both of these outlive the blocking task on purpose. The token is the
+        // only thing that can say a stop was asked for after `diarize`
+        // produced its answer, and the flag is the only thing that can say a
+        // recording is why — see `finish_run`.
+        let stop = cancel.clone();
+        let stood_down = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stood_down_in_run = Arc::clone(&stood_down);
 
         // The models are CPU-bound C++; keeping them off the async runtime is
         // what stops a long Meeting from stalling every Client request.
@@ -1617,6 +1661,14 @@ impl Core {
             // stayed claimed would turn one bad Meeting into a permanently
             // broken feature.
             let _slot = slot;
+            // Decoding and the stale rebuild below both run before the first
+            // progress tick, and both are expensive — a rebuild re-reads and
+            // re-embeds a window of kept audio per stale exemplar. A recording
+            // that began while this run was waiting for its slot is noticed
+            // here rather than after them.
+            if stand_down_for_recording(stands_down.as_ref(), &stop_in_run, &stood_down_in_run) {
+                return Ok((Err(diarize::DiarizeError::Cancelled), Vec::new()));
+            }
             let mut decoded = diarize::runner::decode(&audio_path)?;
             // The far end comes back through the speakers into the
             // microphone, and diarization heard it there as strangers: on
@@ -1630,6 +1682,9 @@ impl Core {
                 .process(&mut decoded.mic, &decoded.system);
             let mut diarizer = diarize::live::LiveDiarizer::load(&segmentation, &embedding)
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
+            if stand_down_for_recording(stands_down.as_ref(), &stop_in_run, &stood_down_in_run) {
+                return Ok((Err(diarize::DiarizeError::Cancelled), Vec::new()));
+            }
             let rebuilt = diarize::runner::rebuild(&stale, &history_dir, &mut |samples| {
                 diarizer.embedder().embed(samples)
             });
@@ -1639,11 +1694,11 @@ impl Core {
                 &mut diarizer,
                 decoded.audio(),
                 &mut |progress| {
-                    if let Some(recording) = &stands_down
-                        && recording.load(std::sync::atomic::Ordering::SeqCst)
-                    {
-                        pause.cancel();
-                    }
+                    stand_down_for_recording(
+                        stands_down.as_ref(),
+                        &stop_in_run,
+                        &stood_down_in_run,
+                    );
                     // Throttled to whole percent: a notification per span
                     // would flood every attached Client with numbers nobody
                     // reads.
@@ -1668,24 +1723,62 @@ impl Core {
 
         *self.diarization.lock().await = None;
 
-        let (diarization, rebuilt) = match outcome {
-            Ok((Ok(diarization), rebuilt)) => (diarization, rebuilt),
-            // Nothing is written on this path — the transaction below is
-            // never reached — so the only question left is whether the
-            // Meeting is still owed. If a recording is what stopped it, it
-            // is. An Operator cancelling a `Back` run mid-recording is
-            // reported as a pause, which costs nothing: `diarize/cancel` has
-            // already taken the row out, so both answers leave the same
-            // queue.
-            Ok((Err(diarize::DiarizeError::Cancelled), _)) => {
-                return Ok(
-                    if yields_to_recording(priority, self.is_recording().await) {
-                        DiarizeOutcome::Paused
-                    } else {
-                        DiarizeOutcome::Cancelled
-                    },
-                );
+        self.finish_run(meeting_id, outcome, &stop, &stood_down)
+            .await
+    }
+
+    /// Turns a finished run into an outcome, and writes its evidence — or
+    /// writes nothing and says the Meeting is still owed.
+    ///
+    /// **The persistence boundary, and the last place a stop can be honoured.**
+    /// `LiveDiarizer::observe` polls the token at window starts only, and
+    /// `diarize` returns `Ok` after its final progress tick, so a stop asked
+    /// for during the last window, during clustering, or during the tick
+    /// itself arrives *after* a successful result exists. Taking that result
+    /// on trust is what made "an interrupted run writes nothing" untrue: the
+    /// transaction below adopts rebuilt Voiceprints, mints Speakers, moves
+    /// attributions and marks the Meeting diarized. So the token is read again
+    /// here, immediately before that transaction and after every stage that
+    /// could have set it.
+    ///
+    /// `stood_down` is why, recorded when the token was set rather than
+    /// inferred now. A recording that has already ended by the time this runs
+    /// must still leave the Meeting owed.
+    async fn finish_run(
+        &self,
+        meeting_id: &str,
+        outcome: RunResult,
+        stop: &crate::diarize::Cancel,
+        stood_down: &Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<DiarizeOutcome> {
+        use crate::diarize;
+
+        // Nothing has been written on any of these paths, so the only question
+        // left is whether the Meeting is still owed. A recording standing the
+        // run down means it is; anything else means the Operator or a
+        // disconnecting Client stopped it, and `diarize/cancel` has already
+        // taken the row out.
+        let stopped = || {
+            if stood_down.load(std::sync::atomic::Ordering::SeqCst) {
+                DiarizeOutcome::Paused
+            } else {
+                DiarizeOutcome::Cancelled
             }
+        };
+
+        let (diarization, rebuilt) = match outcome {
+            Ok((Ok(diarization), rebuilt)) => {
+                // Between the last token poll inside the run and this line
+                // lies the final window, the clustering pass and the final
+                // progress tick. A stop that arrived in any of them has a
+                // successful result sitting in front of it, and honouring it
+                // is refusing to write.
+                if stop.is_cancelled() {
+                    return Ok(stopped());
+                }
+                (diarization, rebuilt)
+            }
+            Ok((Err(diarize::DiarizeError::Cancelled), _)) => return Ok(stopped()),
             Ok((Err(error), _)) => {
                 tracing::warn!(%error, "diarization did not run; the Meeting is unattributed");
                 return Ok(DiarizeOutcome::Wrote(0));
@@ -1880,6 +1973,18 @@ impl Core {
     /// stays in the line, in the record, so it survives both the recording and
     /// a restart; it resumes when the recording ends, because stopping a
     /// Meeting queues it and that wakes this loop.
+    ///
+    /// Standing down is cooperative, and these are the only points that notice
+    /// it, in order: before the run starts at all; inside the blocking task
+    /// before decoding and again before the stale rebuild, both of which run
+    /// ahead of the first progress tick and are expensive; at each window start
+    /// inside `LiveDiarizer::observe`; at each progress tick; and finally in
+    /// [`Core::finish_run`], immediately before the transaction. **No stage
+    /// bounds the delay on its own** — model load, decode, the rebuild and the
+    /// clustering pass all sit between consecutive checks, so "within one
+    /// window" is not a guarantee this offers. What it does guarantee is that
+    /// the run is stopped before anything is written, because the last check is
+    /// at the persistence boundary.
     pub async fn run_diarization_queue(
         self: std::sync::Arc<Self>,
         shutdown: tokio_util::sync::CancellationToken,
@@ -3812,6 +3917,166 @@ mod tests {
             chrono::DateTime::parse_from_rfc3339(&ended).expect("end"),
             chrono::DateTime::parse_from_rfc3339(touched).expect("touched")
         );
+    }
+
+    /// A run that was told to stop *after* it succeeded must write nothing.
+    ///
+    /// `LiveDiarizer::observe` polls the token at window starts, and `diarize`
+    /// returns `Ok` after its final progress tick — so a recording that starts
+    /// during the last window, during clustering, or during that tick arrives
+    /// with a finished `Diarization` already in hand. Nothing in the run can
+    /// refuse it by then; `finish_run` is the only place left that can.
+    ///
+    /// Needs no models: the completion and persistence half takes the run's
+    /// result as an argument, so a synthetic one exercises the real
+    /// transaction. The second half of the test is the control that makes the
+    /// first mean something — the same result, with nothing stopping it, does
+    /// write.
+    #[tokio::test]
+    async fn a_stop_that_arrives_after_a_successful_pass_writes_nothing_and_stays_owed() {
+        use crate::diarize::Cancel;
+        use crate::diarize::Diarization;
+        use crate::diarize::Embedding;
+        use crate::diarize::Turn;
+        use crate::store::diarize_queue::Priority;
+        use evertranscript_protocol::AudioChannel;
+        use std::sync::atomic::AtomicBool;
+        use std::sync::atomic::Ordering::SeqCst;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+
+        // A Meeting with words in it, so the transaction below has something
+        // to attribute and "nothing was written" is a property of the stop
+        // rather than of an empty Meeting.
+        let meeting = core
+            .store
+            .write(|connection| {
+                connection.execute(
+                    "INSERT INTO meetings (id, started_at, created_at, updated_at, audio_path)
+                     VALUES ('m1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                             '2026-01-01T00:00:00Z', 'm1.wav')",
+                    [],
+                )?;
+                connection.execute(
+                    "INSERT INTO transcript_segments (id, meeting_id, sequence, channel,
+                     start_ms, end_ms, text)
+                     VALUES ('s1', 'm1', 0, 'mic', 0, 11000, 'hello')",
+                    [],
+                )?;
+                Ok("m1".to_string())
+            })
+            .await
+            .expect("meeting");
+
+        // What the diarizer handed back before anyone asked it to stop.
+        // Longer than `cluster::MIN_SPEAKER_MS`, or `persist` refuses to mint a
+        // Speaker for it and the control below would write nothing for a
+        // reason that has nothing to do with the stop.
+        let turns = vec![Turn::new(AudioChannel::Mic, 0, 12_000, 0)];
+        let succeeded = || -> RunResult {
+            Ok((
+                Ok(Diarization {
+                    turns: turns.clone(),
+                    embeddings: [(
+                        turns[0].cluster,
+                        Embedding::new(
+                            vec![1.0, 0.0],
+                            crate::diarize::live::EMBEDDING_MODEL,
+                            crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                            12_000,
+                        ),
+                    )]
+                    .into_iter()
+                    .collect(),
+                }),
+                Vec::new(),
+            ))
+        };
+        let written = |connection: &rusqlite::Connection| -> Result<(i64, i64, i64)> {
+            Ok((
+                connection.query_row(
+                    "SELECT count(*) FROM transcript_segments WHERE speaker_id IS NOT NULL",
+                    [],
+                    |row| row.get(0),
+                )?,
+                connection.query_row("SELECT count(*) FROM speakers", [], |row| row.get(0))?,
+                connection.query_row(
+                    "SELECT count(*) FROM meetings WHERE diarized_at IS NOT NULL",
+                    [],
+                    |row| row.get(0),
+                )?,
+            ))
+        };
+
+        // It is owed, and the stop must not change that.
+        core.enqueue_diarization(&meeting, Priority::Back)
+            .await
+            .expect("queue");
+
+        // Stood down by a recording that then ended before this ran. Reading
+        // live recording state here would call it an Operator cancellation and
+        // lose the one fact the queue needs.
+        let stop = Cancel::new();
+        let stood_down = Arc::new(AtomicBool::new(true));
+        stop.cancel();
+        core.recording.store(false, SeqCst);
+
+        assert_eq!(
+            core.finish_run(&meeting, succeeded(), &stop, &stood_down)
+                .await
+                .expect("finish"),
+            DiarizeOutcome::Paused,
+            "a recording stopped it, whether or not one is still running now"
+        );
+        assert_eq!(
+            core.store.read(written).await.expect("read"),
+            (0, 0, 0),
+            "no attribution, no Speaker and no diarized mark from a run that was stopped"
+        );
+        assert!(
+            core.diarization_holds(&meeting).await.expect("holds"),
+            "and it is still owed"
+        );
+
+        // A stop with no recording behind it is the Operator's, and
+        // `diarize/cancel` has already taken the row out.
+        let cancelled = Cancel::new();
+        cancelled.cancel();
+        assert_eq!(
+            core.finish_run(
+                &meeting,
+                succeeded(),
+                &cancelled,
+                &Arc::new(AtomicBool::new(false))
+            )
+            .await
+            .expect("finish"),
+            DiarizeOutcome::Cancelled
+        );
+        assert_eq!(
+            core.store.read(written).await.expect("read"),
+            (0, 0, 0),
+            "an Operator's stop writes nothing either"
+        );
+
+        // The control. Without it every assertion above passes on a
+        // `finish_run` that never writes anything at all.
+        let outcome = core
+            .finish_run(
+                &meeting,
+                succeeded(),
+                &Cancel::new(),
+                &Arc::new(AtomicBool::new(false)),
+            )
+            .await
+            .expect("finish");
+        assert!(
+            matches!(outcome, DiarizeOutcome::Wrote(attributed) if attributed > 0),
+            "the same result, unstopped, does write: {outcome:?}"
+        );
+        let (attributed, speakers, diarized) = core.store.read(written).await.expect("read");
+        assert!(attributed > 0 && speakers > 0 && diarized > 0);
     }
 
     /// The one rule the queue worker's pause is: only bulk work yields.

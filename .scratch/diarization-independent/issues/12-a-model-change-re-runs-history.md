@@ -68,14 +68,33 @@ of them wired and working.
 
 **The queue worker stands bulk work down for a recording, and keeps it owed.**
 `Back` work does not start while a Meeting records and stops if one starts
-mid-pass, through the same cancellation `diarize/cancel` uses, so nothing is
-written by an interrupted run; the queue row survives the pause and a restart,
-and the worker picks it up when recording ends. `Front` work does not yield.
-This is live in `run_diarization_queue` rather than groundwork, because it is
-the one part of the re-run that the existing catch-up path already needed:
+mid-pass, through the same cancellation `diarize/cancel` uses; the queue row
+survives the pause and a restart, and the worker picks it up when recording
+ends. `Front` work does not yield. This is live in `run_diarization_queue`
+rather than groundwork, because the existing catch-up path already needed it:
 `finish_interrupted_diarization` queues at `Back` on every start, so a Core
 launched during a call was competing with it for the machine before ticket 12
-existed. See `DiarizeOutcome` and `yields_to_recording` in `server.rs`.
+existed. See `DiarizeOutcome`, `yields_to_recording`, `stand_down_for_recording`
+and `Core::finish_run` in `server.rs`.
+
+Two properties of the stop are worth carrying forward, because both were
+briefly got wrong. **The stop is honoured at the persistence boundary, not
+only inside the run.** `LiveDiarizer::observe` polls the token at window starts
+and `diarize` returns `Ok` after its final progress tick, so a stop arriving
+during the last window, the clustering pass or that tick has a successful
+`Diarization` in front of it — and the transaction adopts Voiceprints, mints
+Speakers, moves attributions and marks the Meeting diarized. `finish_run` reads
+the token again before that transaction. **And the reason a run stopped is
+recorded when it stops, never inferred afterwards.** A recording can start and
+end inside one pass, so asking whether one is running by the time the run
+unwinds reports an Operator cancellation that never happened and loses the fact
+that the Meeting is still owed.
+
+Cooperative boundaries, for anyone extending this: before the run; before
+decode; before the stale rebuild; each window start; each progress tick; the
+persistence boundary. Model load, decode, the rebuild and clustering all lie
+between consecutive checks, so **no single stage bounds the delay** — the
+guarantee is that nothing is written, not that the stop lands within a window.
 
 The two that are written and **unwired**: `store::rerun` exists — `Rerun`, `state`, `begin`,
 `begin_if_the_model_changed`, `cancel`, the last enqueuing at
@@ -140,9 +159,10 @@ A stray gitignored `client-request.schema.json.actual` from 2026-09-15 mentions
       are rebuilt
 - [x] Recording pauses the re-run and it resumes afterwards; a just-ended
       Meeting is diarized ahead of the backlog — in the queue worker, covered
-      by `tests/diarize_queue.rs`. The interrupt landing mid-inference is not
-      covered offline, since that needs the ONNX models; the decision behind it
-      is asserted in `server::tests::only_bulk_work_stands_down_for_a_recording`
+      by `tests/diarize_queue.rs` (five cases, with a no-recording control) and
+      by `server::tests::a_stop_that_arrives_after_a_successful_pass_writes_nothing_and_stays_owed`,
+      which drives the real persistence transaction with a synthetic successful
+      run and needs no models
 - [ ] Quitting mid-run and restarting resumes rather than restarts, and reaches
       the same end state as an uninterrupted run
 - [ ] Cancelling stops it, reports honestly how far it got, and leaves every

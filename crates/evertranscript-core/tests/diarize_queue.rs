@@ -205,9 +205,16 @@ async fn worker_until(
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         queued = core.diarize_status().await.queued;
     }
+    // Cancelling is enough to wake it: both of the worker's waits select on
+    // the shutdown token. And the join is asserted rather than discarded — a
+    // `let _ =` here would let a worker that never noticed shutdown keep
+    // running against the next test's temporary directory, and every assertion
+    // about what it did or did not do would be about a live process.
     shutdown.cancel();
-    core.diarize_wake().notify_one();
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), worker).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+        .await
+        .expect("the worker did not stop when shutdown was cancelled")
+        .expect("the worker panicked");
     queued
 }
 
