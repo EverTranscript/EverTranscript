@@ -79,23 +79,29 @@ impl Rerun {
     }
 }
 
-/// What the re-run is doing, if this History has ever recorded one.
-pub fn state(connection: &Connection) -> Result<Option<Rerun>> {
-    // The tables are not in `MIGRATIONS`, so every History in the field is
-    // missing them. Asked for by name rather than inferred from the error
-    // text of the query below, so that a genuinely broken read — a corrupt
-    // page, a locked file — is still an error and not reported as "no
-    // re-run". If this table is here and the backlog one is not, the count
-    // below fails and that failure is propagated, which is the right answer
-    // for a half-installed schema.
-    let installed: Option<i64> = connection
+/// Whether this History has the re-run tables at all.
+///
+/// Asked of `sqlite_master` by name rather than inferred from the error text
+/// of a query, so that a genuinely broken read — a corrupt page, a locked
+/// file — stays an error instead of being reported as "no re-run". The tables
+/// are not in `MIGRATIONS`, so every History in the field answers `false`. If
+/// this table is here and the backlog one is not, the queries that follow fail
+/// and that failure is propagated, which is the right answer for a
+/// half-installed schema.
+fn installed(connection: &Connection) -> Result<bool> {
+    Ok(connection
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'diarize_rerun'",
             [],
-            |row| row.get(0),
+            |_| Ok(()),
         )
-        .optional()?;
-    if installed.is_none() {
+        .optional()?
+        .is_some())
+}
+
+/// What the re-run is doing, if this History has ever recorded one.
+pub fn state(connection: &Connection) -> Result<Option<Rerun>> {
+    if !installed(connection)? {
         return Ok(None);
     }
     let row: Option<(String, String, i64, i64, bool)> = connection
@@ -262,27 +268,20 @@ pub fn begin_if_the_model_changed(
     }
 }
 
-/// Whether this re-run owns a Meeting that is still waiting as bulk work.
-///
-/// [`cancel`]'s rule asked about one Meeting. The caller stopping a running
-/// job uses it so that the job is stopped exactly when cancelling would have
-/// taken its row out anyway: a Meeting somebody promoted to `Front` keeps
-/// running, because it is no longer this job's to cancel, and a Meeting the
-/// re-run never asked for was never its business.
-pub fn owns_bulk_work(connection: &Connection, meeting_id: &str) -> Result<bool> {
-    Ok(connection
-        .query_row(
-            "SELECT 1 FROM diarize_rerun_backlog backlog \
-               JOIN diarize_queue queue ON queue.meeting_id = backlog.meeting_id \
-              WHERE backlog.meeting_id = ?1 AND queue.priority = ?2",
-            params![meeting_id, diarize_queue::Priority::Back as i64],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some())
+/// What a bulk stop did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Stopped {
+    /// Meetings it gave up on.
+    pub abandoned: usize,
+    /// Whether the Meeting named as running was one of them — the caller's
+    /// cue to stop that run, decided here so that the decision and the
+    /// mutation are the same transaction. Asked outside, it could be
+    /// overtaken by a promotion committing in between, and a Meeting somebody
+    /// is now waiting for would be stopped on a stale answer.
+    pub stopped_active: bool,
 }
 
-/// Stops the re-run. Answers how many Meetings it gave up on.
+/// Stops the re-run. Answers what it gave up.
 ///
 /// Every Meeting already walked keeps what that walk concluded: this empties
 /// the line, it does not undo attribution. Only the re-run's own Meetings,
@@ -295,39 +294,53 @@ pub fn owns_bulk_work(connection: &Connection, meeting_id: &str) -> Result<bool>
 /// here would drop it out of `remaining`, and `done` — total minus remaining
 /// minus abandoned — would report it as walked the moment it was promoted.
 ///
+/// **Nothing to stop is not something to stop.** A History without the tables,
+/// without a row, or with only the identity the first start records has never
+/// had a backlog; writing `cancelled` onto that would manufacture one out of
+/// metadata and put a stopped re-run in front of an Operator who never asked
+/// for anything. Those three are a no-op. A read that fails for any other
+/// reason is still an error.
+///
+/// A Meeting that has been walked is not here to be miscounted: its run took
+/// its own queue row out inside the transaction that wrote the attribution,
+/// so a row still in the queue has not been walked by definition rather than
+/// by inference.
+///
 /// The mark outlives the emptied queue, or the next start would find a
 /// drained backlog for the current model and read it as finished.
-pub fn cancel(connection: &Connection) -> Result<usize> {
+pub fn cancel(connection: &Connection, active: Option<&str>) -> Result<Stopped> {
+    if !installed(connection)? {
+        return Ok(Stopped::default());
+    }
     let transaction = connection.unchecked_transaction()?;
+    let recorded: Option<(i64, i64, bool)> = transaction
+        .query_row(
+            "SELECT total, abandoned, cancelled FROM diarize_rerun WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let Some((total, abandoned, cancelled)) = recorded else {
+        return Ok(Stopped::default());
+    };
+    if total == 0 && abandoned == 0 && !cancelled {
+        return Ok(Stopped::default());
+    }
+
     // Named before they are deleted, so membership can be given up for
-    // exactly the rows the queue gave up and no others — and each one says
-    // whether it has already been walked *by this re-run*, because a row
-    // still in the queue is not evidence that it has not been.
-    //
-    // A run commits its attribution and its `diarized_at` in one transaction
-    // on the store's writer thread, and the worker takes the queue row out
-    // afterwards in a second write. Between those two a cancellation can
-    // land, and counting what it finds as abandoned would report a Meeting
-    // that was walked as one that was given up on. `diarized_at` compared
-    // against this re-run's own start is what tells them apart; `julianday`
-    // rather than a string compare because both stamps are local-time RFC
-    // 3339 and two offsets do not sort.
-    let giving_up: Vec<(String, bool)> = {
+    // exactly the rows the queue gave up and no others.
+    let giving_up: Vec<String> = {
         let mut statement = transaction.prepare(
-            "SELECT backlog.meeting_id, \
-                    IFNULL(julianday(meeting.diarized_at) >= julianday(rerun.started_at), 0) \
-               FROM diarize_rerun_backlog backlog \
+            "SELECT backlog.meeting_id FROM diarize_rerun_backlog backlog \
                JOIN diarize_queue queue ON queue.meeting_id = backlog.meeting_id \
-               JOIN meetings meeting ON meeting.id = backlog.meeting_id \
-               JOIN diarize_rerun rerun ON rerun.id = 1 \
               WHERE queue.priority = ?1",
         )?;
         let rows = statement.query_map(params![diarize_queue::Priority::Back as i64], |row| {
-            Ok((row.get(0)?, row.get(1)?))
+            row.get(0)
         })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    for (meeting_id, _) in &giving_up {
+    for meeting_id in &giving_up {
         transaction.execute(
             "DELETE FROM diarize_queue WHERE meeting_id = ?1",
             params![meeting_id],
@@ -337,11 +350,7 @@ pub fn cancel(connection: &Connection) -> Result<usize> {
             params![meeting_id],
         )?;
     }
-    // A Meeting that was walked leaves both tables like the rest, which
-    // drops it out of `remaining` — so `done`, total minus remaining minus
-    // abandoned, counts it walked. Only the ones actually given up on are
-    // added to `abandoned`.
-    let dropped = giving_up.iter().filter(|(_, walked)| !walked).count();
+    let dropped = giving_up.len();
     // Recorded, not just counted out of the queue: emptying the line would
     // otherwise make done — total minus remaining — jump to total, and an
     // Operator who stopped a re-run at 1 of 40 would be told all forty had
@@ -351,7 +360,10 @@ pub fn cancel(connection: &Connection) -> Result<usize> {
         params![dropped as i64],
     )?;
     transaction.commit()?;
-    Ok(dropped)
+    Ok(Stopped {
+        abandoned: dropped,
+        stopped_active: active.is_some_and(|running| giving_up.iter().any(|id| id == running)),
+    })
 }
 
 /// The one row, written or replaced.
@@ -531,7 +543,7 @@ mod tests {
         begin(&connection, "redimnet2-b3", "1").expect("begin");
         diarize_queue::finish(&connection, "a").expect("walked");
 
-        assert_eq!(cancel(&connection).expect("cancel"), 2);
+        assert_eq!(cancel(&connection, None).expect("cancel").abandoned, 2);
         let stopped = state(&connection).expect("state").expect("a row");
         assert!(stopped.cancelled && !stopped.running());
         assert_eq!(
@@ -547,7 +559,7 @@ mod tests {
         let connection = db();
         history(&connection);
         begin(&connection, "redimnet2-b3", "1").expect("begin");
-        cancel(&connection).expect("cancel");
+        cancel(&connection, None).expect("cancel");
 
         assert_eq!(
             begin_if_the_model_changed(&connection, "redimnet2-b3", "1").expect("next start"),
@@ -582,7 +594,7 @@ mod tests {
         assert_eq!(during.remaining, 3, "the catch-up Meeting is not its work");
 
         assert_eq!(
-            cancel(&connection).expect("cancel"),
+            cancel(&connection, None).expect("cancel").abandoned,
             2,
             "and the promoted Meeting is no longer its work either"
         );
@@ -631,7 +643,7 @@ mod tests {
         );
 
         assert_eq!(
-            cancel(&connection).expect("cancel"),
+            cancel(&connection, None).expect("cancel").abandoned,
             3,
             "all three are this backlog's to give up"
         );

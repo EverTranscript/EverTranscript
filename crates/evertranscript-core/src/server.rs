@@ -202,10 +202,17 @@ type RunResult = std::result::Result<
 /// a count of zero cannot say whether it is owed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiarizeOutcome {
-    /// The run is over, and the count is what it attributed. Zero for a
-    /// Meeting with no audio or no models, which still takes it out of the
-    /// line: nothing about it would be different next time.
+    /// The attribution transaction committed, and the count is what it
+    /// attributed. It took the Meeting out of the queue as part of itself,
+    /// so nothing afterwards has to remove the row — and nothing may, since
+    /// by then a row under that id could be a fresh request somebody made in
+    /// between.
     Wrote(usize),
+    /// Nothing ran and nothing was written: no audio, no models, or a run
+    /// that failed on its own recording. The Meeting still leaves the line,
+    /// because the next pass would fail in exactly the same way — but it
+    /// leaves it afterwards, since there was no transaction to leave it in.
+    Skipped,
     /// Stood down for a recording without writing anything. Still owed.
     Paused,
     /// Stopped by the Operator or a disconnecting Client without writing
@@ -1586,14 +1593,14 @@ impl Core {
         let Some(audio_path) = meeting.audio_path.clone() else {
             // A Meeting whose audio was never written, or was deleted. Not
             // an error: there is simply nothing to listen to.
-            return Ok(DiarizeOutcome::Wrote(0));
+            return Ok(DiarizeOutcome::Skipped);
         };
         // Stored relative to the History folder so the record stays portable
         // (ADR-0035) — resolving it is the caller's job, not the row's.
         let audio_path = self.history_dir.join(audio_path);
         if !audio_path.exists() {
             tracing::info!(path = %audio_path.display(), "the Meeting's audio is gone; nothing to diarize");
-            return Ok(DiarizeOutcome::Wrote(0));
+            return Ok(DiarizeOutcome::Skipped);
         }
 
         let segmentation = self.models_dir.join("diarize-segmentation.onnx");
@@ -1602,7 +1609,7 @@ impl Core {
             tracing::info!(
                 "diarization models are not downloaded; leaving the Meeting unattributed"
             );
-            return Ok(DiarizeOutcome::Wrote(0));
+            return Ok(DiarizeOutcome::Skipped);
         }
 
         // Claimed before the job entry is written, not inside the spawned
@@ -1632,12 +1639,32 @@ impl Core {
         let history_dir = self.history_dir.clone();
 
         let cancel = diarize::Cancel::new();
-        *self.diarization.lock().await = Some(DiarizeJob {
-            meeting_id: meeting_id.to_string(),
-            cancel: cancel.clone(),
-            done_ms: 0,
-            total_ms: 0,
-        });
+        {
+            // Registration and the check that this work is still wanted are
+            // one step, under the lock a stop has to take to reach a running
+            // job. Apart, they are a race the worker loses: it reads the head
+            // of the queue, a bulk stop removes that row and counts the
+            // Meeting abandoned, and the run starts anyway and commits new
+            // evidence after the stop. Whichever side takes the lock first
+            // now wins cleanly — either the job is registered and the stop
+            // finds its handle, or the row is gone and this returns before
+            // anything is claimed.
+            let mut running = self.diarization.lock().await;
+            let owed = meeting_id.to_string();
+            if !self
+                .store
+                .read(move |connection| crate::store::diarize_queue::holds(connection, &owed))
+                .await?
+            {
+                return Ok(DiarizeOutcome::Cancelled);
+            }
+            *running = Some(DiarizeJob {
+                meeting_id: meeting_id.to_string(),
+                cancel: cancel.clone(),
+                done_ms: 0,
+                total_ms: 0,
+            });
+        }
         let notifications = self.notifications.clone();
         let id_for_progress = meeting_id.to_string();
         // Read on the blocking thread, which is why it is an atomic and not
@@ -1803,11 +1830,11 @@ impl Core {
             Ok((Err(diarize::DiarizeError::Cancelled), _)) => return Ok(stopped()),
             Ok((Err(error), _)) => {
                 tracing::warn!(%error, "diarization did not run; the Meeting is unattributed");
-                return Ok(DiarizeOutcome::Wrote(0));
+                return Ok(DiarizeOutcome::Skipped);
             }
             Err(error) => {
                 tracing::warn!(%error, "diarization failed; the Meeting is unattributed");
-                return Ok(DiarizeOutcome::Wrote(0));
+                return Ok(DiarizeOutcome::Skipped);
             }
         };
 
@@ -1912,6 +1939,16 @@ impl Core {
                 // a Meeting can never be marked diarized without the words
                 // that marking is about.
                 crate::store::meetings::set_diarized(&transaction, &meeting_id)?;
+                // And out of the line here rather than in a second write
+                // afterwards. That gap was a real one: between the commit and
+                // a later removal, a bulk stop could find the row still there
+                // and count a Meeting that had just been walked as one it
+                // gave up on. Nothing outside this transaction can tell those
+                // apart — a wall-clock stamp cannot, because two events a
+                // ten-thousandth of a second apart round to the same
+                // `julianday` and the clock can be adjusted under them — so
+                // the gap is closed rather than measured.
+                crate::store::diarize_queue::finish(&transaction, &meeting_id)?;
                 transaction.commit()?;
                 tracing::info!(
                     boundary_flips = reconciliation.boundary_flips,
@@ -2074,7 +2111,7 @@ impl Core {
             };
 
             match outcome {
-                DiarizeOutcome::Wrote(0) | DiarizeOutcome::Cancelled => {}
+                DiarizeOutcome::Wrote(0) | DiarizeOutcome::Skipped | DiarizeOutcome::Cancelled => {}
                 DiarizeOutcome::Wrote(attributed) => {
                     tracing::info!(meeting = %meeting_id, attributed, "Diarization attributed a Meeting")
                 }
@@ -2083,12 +2120,14 @@ impl Core {
                 }
             }
 
-            // The row goes only when the run is over for good. A pause left
-            // it owed on purpose, and a cancellation already deleted it in
-            // `diarize_cancel` — finishing either here would turn "stand
-            // aside" into "drop", which is the bug this outcome exists to
-            // stop.
-            if let DiarizeOutcome::Wrote(_) = outcome {
+            // Only for a run that never reached a transaction. A written one
+            // took its own row out inside the commit, and removing it again
+            // here could delete a fresh request made in between. A pause left
+            // it owed on purpose, and a cancellation already deleted it — in
+            // `diarize_cancel`, or in the bulk stop — so finishing either here
+            // would turn "stand aside" into "drop", which is the bug this
+            // outcome exists to stop.
+            if let DiarizeOutcome::Skipped = outcome {
                 let done = meeting_id.clone();
                 if let Err(error) = self
                     .store
@@ -2220,7 +2259,7 @@ impl Core {
     }
 
     /// What Diarization is doing, and what it owes.
-    pub async fn diarize_status(&self) -> DiarizeStatusResponse {
+    pub async fn diarize_status(&self) -> Result<DiarizeStatusResponse> {
         // Read before the running job, so a queue drained between the two
         // reads cannot produce a status that shows neither.
         let queued = self
@@ -2228,8 +2267,8 @@ impl Core {
             .read(crate::store::diarize_queue::list)
             .await
             .unwrap_or_default();
-        let rerun = self.rerun_block().await;
-        match self.diarization.lock().await.as_ref() {
+        let rerun = self.rerun_block().await?;
+        Ok(match self.diarization.lock().await.as_ref() {
             Some(job) => DiarizeStatusResponse {
                 state: DiarizeState::Running,
                 meeting_id: Some(job.meeting_id.clone()),
@@ -2254,7 +2293,7 @@ impl Core {
                 queued,
                 rerun,
             },
-        }
+        })
     }
 
     /// The bulk re-run's progress, when a backlog has been asked for.
@@ -2262,24 +2301,21 @@ impl Core {
     /// `None` for the two cases that have to keep the old wire shape exactly:
     /// a History whose re-run tables were never installed, which is every
     /// History in the field, and one whose first start merely wrote down
-    /// which embedding it is in without asking for anything. A read that
-    /// fails for any other reason is logged and also reported as no re-run,
-    /// because a status call that fails outright would take the running job
-    /// and the queue down with it — the same degradation `queued` above
-    /// already takes.
-    async fn rerun_block(&self) -> Option<DiarizeRerun> {
-        let state = self
-            .store
-            .read(crate::store::rerun::state)
-            .await
-            .unwrap_or_else(|error| {
-                warn!(%error, "could not read the bulk re-run's progress");
-                None
-            })?;
+    /// which embedding it is in without asking for anything. Both of those
+    /// are successes.
+    ///
+    /// Anything else is an error and is returned as one. Logging it and
+    /// answering "no re-run" would tell the Client something false in the one
+    /// shape it cannot question — a backlog that is running, reported as
+    /// none at all.
+    async fn rerun_block(&self) -> Result<Option<DiarizeRerun>> {
+        let Some(state) = self.store.read(crate::store::rerun::state).await? else {
+            return Ok(None);
+        };
         if !state.requested() {
-            return None;
+            return Ok(None);
         }
-        Some(DiarizeRerun {
+        Ok(Some(DiarizeRerun {
             total: state.total as i64,
             done: state.done() as i64,
             remaining: state.remaining as i64,
@@ -2291,7 +2327,7 @@ impl Core {
             cancelled: state.cancelled,
             model: state.model,
             model_version: state.model_version,
-        })
+        }))
     }
 
     /// Stops the bulk re-run, keeping every Meeting it already walked.
@@ -2301,62 +2337,42 @@ impl Core {
     /// throw away the catch-up pass and anything an Operator is waiting for
     /// along with the backlog.
     ///
-    /// The running job is stopped first and the queue is emptied second, and
-    /// that order is what makes the count honest. Both the job's commit and
-    /// this mutation go through the store's single writer thread, so they are
-    /// serialized: a job that has not reached its writer closure finds the
-    /// token already cancelled and writes nothing, and one that is past it
-    /// has its `diarized_at` set, which [`crate::store::rerun::cancel`] reads
-    /// so that a Meeting already walked is not counted as abandoned merely
-    /// because the worker has not taken its row out yet.
+    /// **Whether the running job is this backlog's is decided on the writer,
+    /// inside the mutation.** Asked beforehand on a read connection, the
+    /// answer can be overtaken: a promotion to `Front` commits in between and
+    /// the job is stopped anyway, on a Meeting somebody is now waiting for.
+    /// So the running Meeting's name goes in and the answer comes back out,
+    /// and the token is set on the writer thread before that thread takes any
+    /// other work. A run short of its own writer closure therefore finds the
+    /// token already cancelled and writes nothing, and one past it has
+    /// committed and taken its own queue row out inside that same
+    /// transaction, so this never sees it to miscount.
     ///
-    /// One window stays open and is not worth a lock: the worker can be
-    /// between reading the head of the queue and registering the job, in
-    /// which case that one Meeting is walked after the cancellation. It is
-    /// bounded at one — the next pass finds nothing of this backlog's — and
-    /// the Meeting keeps whatever the walk concluded.
-    pub async fn diarize_rerun_cancel(&self) -> DiarizeStatusResponse {
-        let running = self
-            .diarization
-            .lock()
-            .await
-            .as_ref()
-            .map(|job| job.meeting_id.clone());
-        if let Some(meeting_id) = running {
-            let asked = meeting_id.clone();
-            match self
-                .store
-                .read(move |connection| crate::store::rerun::owns_bulk_work(connection, &asked))
-                .await
-            {
-                // Read and re-checked under the lock, because the job can
-                // have ended and another started while that read was in
-                // flight — cancelling then would stop somebody else's work.
-                Ok(true) => {
-                    if let Some(job) = self.diarization.lock().await.as_ref()
-                        && job.meeting_id == meeting_id
-                    {
-                        job.cancel.cancel();
-                    }
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    warn!(meeting = %meeting_id, %error, "could not tell whether the running Diarization is the re-run's");
-                }
-            }
-        }
-        if let Err(error) = self
-            .store
-            .write(|connection| crate::store::rerun::cancel(connection))
-            .await
+    /// The job lock is held across the whole of it, which keeps the handle
+    /// the one the answer is about and stops a new job registering into the
+    /// window between reading the queue and mutating it.
+    pub async fn diarize_rerun_cancel(&self) -> Result<DiarizeStatusResponse> {
         {
-            warn!(%error, "could not stop the bulk re-run");
+            let running = self.diarization.lock().await;
+            let name = running.as_ref().map(|job| job.meeting_id.clone());
+            let token = running.as_ref().map(|job| job.cancel.clone());
+            self.store
+                .write(move |connection| {
+                    let stopped = crate::store::rerun::cancel(connection, name.as_deref())?;
+                    if stopped.stopped_active
+                        && let Some(token) = token
+                    {
+                        token.cancel();
+                    }
+                    Ok(stopped)
+                })
+                .await?;
         }
         self.diarize_status().await
     }
 
     /// Stops a running Diarization, keeping whatever attribution completed.
-    pub async fn diarize_cancel(&self, meeting_id: &str) -> DiarizeStatusResponse {
+    pub async fn diarize_cancel(&self, meeting_id: &str) -> Result<DiarizeStatusResponse> {
         // The running job holds a full id, so a short one would never match
         // and `cancel` would silently do nothing.
         let meeting_id = match self.resolve_meeting(meeting_id).await {
@@ -3806,7 +3822,7 @@ impl Server {
             )?),
 
             ClientRequest::DiarizeStatus(_) => {
-                Ok(serde_json::to_value(self.core.diarize_status().await)?)
+                Ok(serde_json::to_value(self.core.diarize_status().await?)?)
             }
 
             ClientRequest::DiarizeRun(params) => {
@@ -3828,15 +3844,15 @@ impl Server {
                          `diarize status` says where it is in line"
                     );
                 }
-                Ok(serde_json::to_value(self.core.diarize_status().await)?)
+                Ok(serde_json::to_value(self.core.diarize_status().await?)?)
             }
 
             ClientRequest::DiarizeCancel(params) => Ok(serde_json::to_value(
-                self.core.diarize_cancel(&params.meeting_id).await,
+                self.core.diarize_cancel(&params.meeting_id).await?,
             )?),
 
             ClientRequest::DiarizeRerunCancel(_) => Ok(serde_json::to_value(
-                self.core.diarize_rerun_cancel().await,
+                self.core.diarize_rerun_cancel().await?,
             )?),
 
             ClientRequest::TranscriptUnsubscribe(_) => {
@@ -4398,7 +4414,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
 
-        let before = serde_json::to_value(core.diarize_status().await).expect("json");
+        let before =
+            serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
         assert!(
             before.get("rerun").is_none(),
             "no tables, so no key at all — not a null and not a zeroed block: {before}"
@@ -4413,7 +4430,8 @@ mod tests {
             .await
             .expect("first start");
 
-        let baseline = serde_json::to_value(core.diarize_status().await).expect("json");
+        let baseline =
+            serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
         assert!(
             baseline.get("rerun").is_none(),
             "a recorded model with no backlog behind it is not a re-run: {baseline}"
@@ -4432,7 +4450,12 @@ mod tests {
         meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
         assert_eq!(begin_rerun(&core).await, 3);
 
-        let asked = core.diarize_status().await.rerun.expect("a backlog");
+        let asked = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
         assert_eq!(
             (asked.total, asked.done, asked.remaining, asked.abandoned),
             (3, 0, 3, 0)
@@ -4444,12 +4467,22 @@ mod tests {
             .write(|connection| crate::store::diarize_queue::finish(connection, "m1"))
             .await
             .expect("walked");
-        let partway = core.diarize_status().await.rerun.expect("a backlog");
+        let partway = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
         assert_eq!((partway.total, partway.done, partway.remaining), (3, 1, 2));
 
         // A recording holds the rest. Still owed, so a wait and not a stop.
         core.recording.store(true, SeqCst);
-        let paused = core.diarize_status().await.rerun.expect("a backlog");
+        let paused = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
         assert!(
             paused.paused_for_recording && !paused.cancelled && paused.remaining == 2,
             "a recording pauses the backlog; it does not cancel it: {paused:?}"
@@ -4458,8 +4491,13 @@ mod tests {
 
         // Stopped. The two still in line were given up on, and the one
         // already walked stays walked.
-        core.diarize_rerun_cancel().await;
-        let stopped = core.diarize_status().await.rerun.expect("a backlog");
+        core.diarize_rerun_cancel().await.expect("stop");
+        let stopped = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
         assert_eq!(
             (stopped.done, stopped.remaining, stopped.abandoned),
             (1, 0, 2),
@@ -4501,7 +4539,7 @@ mod tests {
             total_ms: 1,
         });
 
-        core.diarize_rerun_cancel().await;
+        core.diarize_rerun_cancel().await.expect("stop");
         assert!(
             !promoted.is_cancelled(),
             "a promoted Meeting is no longer this backlog's to stop"
@@ -4509,11 +4547,16 @@ mod tests {
         *core.diarization.lock().await = None;
 
         assert_eq!(
-            core.diarize_status().await.queued,
+            core.diarize_status().await.expect("status").queued,
             vec!["m3".to_string(), "catchup".to_string()],
             "what somebody is waiting for, and what the re-run never asked for"
         );
-        let stopped = core.diarize_status().await.rerun.expect("a backlog");
+        let stopped = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
         assert_eq!(
             (stopped.done, stopped.remaining, stopped.abandoned),
             (0, 1, 2),
@@ -4521,12 +4564,141 @@ mod tests {
         );
     }
 
-    /// Stopping the backlog stops the Meeting it is walking right now.
+    /// A promotion committing *while* the stop runs still saves the job.
     ///
-    /// The token is the one the run already holds, so the writer-closure
-    /// check refuses the commit — the cancellation reaches a run that has
-    /// already produced an answer, which is the case the pause repair
-    /// exists for.
+    /// The fixture above promotes before the stop begins, which an eligibility
+    /// read taken outside the mutation would also pass. This is the
+    /// interleaving that tells them apart, and it is built rather than timed:
+    /// the writer is occupied by a closure that performs the promotion itself
+    /// just before it returns, so the promotion is guaranteed to commit after
+    /// the stop has started and before the stop's own transaction runs. An
+    /// eligibility answer read on entry is stale by then; one taken inside the
+    /// transaction is not.
+    #[tokio::test]
+    async fn a_promotion_that_commits_while_the_stop_waits_still_saves_the_job() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        meetings_with_audio(&core, &["m1", "m2"]).await;
+        assert_eq!(begin_rerun(&core).await, 2);
+
+        let running = crate::diarize::Cancel::new();
+        *core.diarization.lock().await = Some(DiarizeJob {
+            meeting_id: "m1".to_string(),
+            cancel: running.clone(),
+            done_ms: 0,
+            total_ms: 1,
+        });
+
+        let (arrived, arrival) = tokio::sync::oneshot::channel::<()>();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let store = core.store.clone();
+        let hold = tokio::spawn(async move {
+            store
+                .write(move |connection| {
+                    arrived.send(()).expect("report");
+                    released.recv().expect("wait to be released");
+                    // Somebody asks for the running Meeting, on the writer
+                    // thread, with the stop's own closure already waiting
+                    // behind this one.
+                    crate::store::diarize_queue::enqueue(
+                        connection,
+                        "m1",
+                        crate::store::diarize_queue::Priority::Front,
+                    )
+                })
+                .await
+        });
+        arrival.await.expect("the writer is occupied");
+
+        let stopping = tokio::spawn({
+            let core = Arc::clone(&core);
+            async move { core.diarize_rerun_cancel().await }
+        });
+        // One yield is enough on this runtime to carry the spawned stop to
+        // its first pending await, which is the writer's answer — so its
+        // closure is queued behind the held one before the promotion lands.
+        tokio::task::yield_now().await;
+
+        release.send(()).expect("release the writer");
+        hold.await.expect("join").expect("held write");
+        stopping.await.expect("join").expect("stop");
+
+        assert!(
+            !running.is_cancelled(),
+            "the promotion committed before the stop's transaction, so that \
+             Meeting was somebody's wait by the time the stop decided"
+        );
+        assert!(
+            core.diarize_status()
+                .await
+                .expect("status")
+                .queued
+                .contains(&"m1".to_string()),
+            "and it is still in the line"
+        );
+        let stopped = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
+        assert_eq!(
+            (stopped.remaining, stopped.abandoned),
+            (1, 1),
+            "promotion is not completion: still owed, and not given up on"
+        );
+    }
+
+    /// A Meeting stopped before its run registers never starts.
+    ///
+    /// The worker reads the head of the queue and then calls in. A bulk stop
+    /// landing in that window used to remove the row and count the Meeting
+    /// abandoned while the run went ahead and committed new evidence after
+    /// the stop. Registration now revalidates under the same lock.
+    #[tokio::test]
+    async fn a_meeting_stopped_before_its_run_registers_does_not_run() {
+        use crate::store::diarize_queue::Priority;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        let (meeting, _succeeded) = diarizable(&core).await;
+        assert_eq!(begin_rerun(&core).await, 1);
+
+        // Enough for the checks ahead of registration to pass. Empty files:
+        // the point is that this returns before anything opens them, so a
+        // refusal here cannot be the models being absent.
+        let models = core.models_dir.clone();
+        std::fs::create_dir_all(&models).expect("models dir");
+        for name in ["diarize-segmentation.onnx", "diarize-embedding.onnx"] {
+            std::fs::write(models.join(name), []).expect("placeholder");
+        }
+        std::fs::write(core.history_dir.join("m1.wav"), []).expect("audio");
+
+        // The stop has already happened — the state the worker is in when it
+        // is holding a name it read a moment ago.
+        core.diarize_rerun_cancel().await.expect("stop");
+
+        assert_eq!(
+            core.diarize_meeting(&meeting, Priority::Back)
+                .await
+                .expect("run"),
+            DiarizeOutcome::Cancelled,
+            "the row is gone, so there is nothing to run"
+        );
+        assert_eq!(
+            core.store.read(evidence).await.expect("read"),
+            (0, 0, 0),
+            "and nothing was written after the stop"
+        );
+        assert!(
+            core.diarization.lock().await.is_none(),
+            "nor was a job claimed"
+        );
+    }
+
+    /// Stopping the backlog stops the Meeting it is walking right now.
     #[tokio::test]
     async fn a_backlog_stopped_mid_meeting_stops_that_meeting_without_writing() {
         use crate::diarize::Cancel;
@@ -4540,7 +4712,8 @@ mod tests {
         assert_eq!(begin_rerun(&core).await, 2);
 
         // The worker as it is while a run is in flight: the row is still in
-        // the queue, because `peek` does not consume.
+        // the queue, because `peek` does not consume and the run takes it out
+        // only when it commits.
         let cancel = Cancel::new();
         *core.diarization.lock().await = Some(DiarizeJob {
             meeting_id: meeting.clone(),
@@ -4549,7 +4722,7 @@ mod tests {
             total_ms: 1,
         });
 
-        core.diarize_rerun_cancel().await;
+        core.diarize_rerun_cancel().await.expect("stop");
         assert!(
             cancel.is_cancelled(),
             "the running Meeting was this backlog's bulk work"
@@ -4576,14 +4749,16 @@ mod tests {
         );
     }
 
-    /// A run that committed before the stop is walked, not given up on.
+    /// A run that committed leaves the line inside its own transaction.
     ///
-    /// The commit and the worker's removal of the queue row are two separate
-    /// writes. A cancellation landing between them finds the row still there
-    /// and would count a Meeting that was walked as one abandoned, which is
-    /// the arithmetic an Operator reads as progress.
+    /// Which is what makes a later stop unable to miscount it: there is no
+    /// window in which a walked Meeting still looks owed, so nothing has to
+    /// infer from a wall-clock stamp which run committed. Two stamps a
+    /// ten-thousandth of a second apart round to the same `julianday`, and
+    /// the clock can be adjusted under them; neither is a completion
+    /// identity.
     #[tokio::test]
-    async fn a_meeting_that_committed_before_the_stop_is_walked_not_abandoned() {
+    async fn a_committed_run_leaves_the_line_in_the_same_transaction() {
         use crate::diarize::Cancel;
         use std::sync::atomic::AtomicBool;
 
@@ -4593,6 +4768,26 @@ mod tests {
         let (meeting, succeeded) = diarizable(&core).await;
         meetings_with_audio(&core, &["m2", "m3"]).await;
         assert_eq!(begin_rerun(&core).await, 3);
+
+        // The counterexample the old discriminator failed on: a Meeting
+        // walked *before* this backlog began, whose stamp is indistinguishable
+        // from the backlog's own start.
+        core.store
+            .write(|connection| {
+                connection.execute(
+                    "UPDATE meetings SET diarized_at = '2026-09-16T17:00:00.100100-07:00'
+                      WHERE id = 'm2'",
+                    [],
+                )?;
+                connection.execute(
+                    "UPDATE diarize_rerun SET started_at = '2026-09-16T17:00:00.100200-07:00'
+                      WHERE id = 1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("stamps");
 
         let written = core
             .finish_run(
@@ -4606,17 +4801,72 @@ mod tests {
             .expect("finish");
         assert!(matches!(written, DiarizeOutcome::Wrote(n) if n > 0));
         assert!(
-            core.diarization_holds(&meeting).await.expect("holds"),
-            "the premise: committed, and the worker has not taken the row out yet"
+            !core.diarization_holds(&meeting).await.expect("holds"),
+            "the commit took its own row out; there is no gap to race"
         );
 
-        core.diarize_rerun_cancel().await;
-
-        let stopped = core.diarize_status().await.rerun.expect("a backlog");
+        core.diarize_rerun_cancel().await.expect("stop");
+        let stopped = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
         assert_eq!(
             (stopped.done, stopped.remaining, stopped.abandoned),
             (1, 0, 2),
-            "the committed Meeting counts as walked: {stopped:?}"
+            "one walked and two given up — and `m2`, whose old stamp reads as \
+             later than the backlog's start, is among the two: {stopped:?}"
+        );
+    }
+
+    /// Stopping what was never started is not a stop.
+    ///
+    /// `begin_if_the_model_changed` writes a row on first start to record
+    /// which embedding the History is in. Setting `cancelled` on that would
+    /// manufacture a stopped re-run out of metadata and put one in front of
+    /// an Operator who never asked for anything.
+    #[tokio::test]
+    async fn stopping_a_backlog_that_was_never_asked_for_changes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+
+        // No tables at all.
+        let before =
+            serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
+        let after =
+            serde_json::to_value(core.diarize_rerun_cancel().await.expect("stop")).expect("json");
+        assert_eq!(after, before, "nothing to stop, and nothing said about it");
+        assert!(after.get("rerun").is_none());
+
+        // Tables, and the identity the first start records.
+        with_rerun_tables(&core).await;
+        meetings_with_audio(&core, &["m1"]).await;
+        core.store
+            .write(|connection| {
+                crate::store::rerun::begin_if_the_model_changed(connection, "wespeaker", "2")
+            })
+            .await
+            .expect("first start");
+
+        let baseline =
+            serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
+        let stopped =
+            serde_json::to_value(core.diarize_rerun_cancel().await.expect("stop")).expect("json");
+        assert_eq!(stopped, baseline);
+        assert!(
+            stopped.get("rerun").is_none(),
+            "a recorded model is not a backlog, stopped or otherwise: {stopped}"
+        );
+        assert!(
+            !core
+                .store
+                .read(crate::store::rerun::state)
+                .await
+                .expect("state")
+                .expect("a row")
+                .cancelled,
+            "and the row it did record was left alone"
         );
     }
 

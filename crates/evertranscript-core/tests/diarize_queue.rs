@@ -60,7 +60,7 @@ async fn a_meeting_that_ends_during_a_backlog_goes_ahead_of_it() {
     let mut backlog = Vec::new();
     for _ in 0..3 {
         let id = finished_meeting(&core).await;
-        core.diarize_cancel(&id).await;
+        core.diarize_cancel(&id).await.expect("cancel");
         core.enqueue_diarization(&id, Priority::Back)
             .await
             .expect("queue bulk");
@@ -71,7 +71,7 @@ async fn a_meeting_that_ends_during_a_backlog_goes_ahead_of_it() {
     // a hand-made enqueue.
     let just_ended = finished_meeting(&core).await;
 
-    let status = core.diarize_status().await;
+    let status = core.diarize_status().await.expect("status");
     assert_eq!(
         status.queued.first(),
         Some(&just_ended),
@@ -104,7 +104,7 @@ async fn a_meeting_already_in_line_is_refused_rather_than_queued_twice() {
         "and asking again is a refusal the caller can report, not a second run"
     );
     assert_eq!(
-        core.diarize_status().await.queued,
+        core.diarize_status().await.expect("status").queued,
         std::slice::from_ref(&id)
     );
 }
@@ -124,7 +124,7 @@ async fn the_queue_survives_a_restart() {
         core.enqueue_diarization(&second, Priority::Back)
             .await
             .expect("queue");
-        let queued = core.diarize_status().await.queued;
+        let queued = core.diarize_status().await.expect("status").queued;
         assert_eq!(queued.len(), 2);
         drop(core);
         (first, queued)
@@ -132,7 +132,7 @@ async fn the_queue_survives_a_restart() {
 
     let restarted = core(&history_dir).await;
     assert_eq!(
-        restarted.diarize_status().await.queued,
+        restarted.diarize_status().await.expect("status").queued,
         owed.1,
         "the same Meetings, in the same order"
     );
@@ -151,9 +151,9 @@ async fn cancelling_a_waiting_meeting_takes_it_out_of_the_line() {
 
     let waiting = finished_meeting(&core).await;
     let other = finished_meeting(&core).await;
-    assert_eq!(core.diarize_status().await.queued.len(), 2);
+    assert_eq!(core.diarize_status().await.expect("status").queued.len(), 2);
 
-    let after = core.diarize_cancel(&waiting).await;
+    let after = core.diarize_cancel(&waiting).await.expect("cancel");
     assert_eq!(after.queued, [other], "only the cancelled one left");
 }
 
@@ -166,13 +166,17 @@ async fn a_deleted_meeting_leaves_the_line() {
 
     let id = finished_meeting(&core).await;
     assert_eq!(
-        core.diarize_status().await.queued,
+        core.diarize_status().await.expect("status").queued,
         std::slice::from_ref(&id)
     );
 
     core.delete_meeting(&id).await.expect("delete");
     assert!(
-        core.diarize_status().await.queued.is_empty(),
+        core.diarize_status()
+            .await
+            .expect("status")
+            .queued
+            .is_empty(),
         "deleting the Meeting took it out of the line"
     );
 }
@@ -200,10 +204,10 @@ async fn worker_until(
     let shutdown = tokio_util::sync::CancellationToken::new();
     let worker = tokio::spawn(Arc::clone(core).run_diarization_queue(shutdown.clone()));
     let deadline = std::time::Instant::now() + within;
-    let mut queued = core.diarize_status().await.queued;
+    let mut queued = core.diarize_status().await.expect("status").queued;
     while !settled(&queued) && std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        queued = core.diarize_status().await.queued;
+        queued = core.diarize_status().await.expect("status").queued;
     }
     // Cancelling is enough to wake it: both of the worker's waits select on
     // the shutdown token. And the join is asserted rather than discarded — a
@@ -223,7 +227,7 @@ async fn worker_until(
 /// like.
 async fn backlogged(core: &Arc<Core>) -> String {
     let id = finished_meeting(core).await;
-    core.diarize_cancel(&id).await;
+    core.diarize_cancel(&id).await.expect("cancel");
     core.enqueue_diarization(&id, Priority::Back)
         .await
         .expect("queue bulk");
@@ -317,7 +321,7 @@ async fn the_backlog_resumes_when_the_recording_ends_and_the_just_ended_meeting_
     let recorded = core.stop_meeting().await.expect("stop");
     assert!(!core.is_recording().await);
     assert_eq!(
-        core.diarize_status().await.queued,
+        core.diarize_status().await.expect("status").queued,
         [recorded.id.clone(), owed.clone()],
         "the Meeting that just ended is ahead of the backlog that waited for it"
     );

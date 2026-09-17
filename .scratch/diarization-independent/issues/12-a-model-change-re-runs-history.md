@@ -149,10 +149,12 @@ not all belong to one eligible Speaker. Nothing calls either.
    recorded its embedding both encode byte-identically to the old shape
    (ADR-0028). `diarize/rerunCancel` stops only this backlog's own bulk rows
    and, when it is one of them, the Meeting being walked; a promoted `Front`
-   Meeting and the catch-up pass are left alone. A run that committed before
-   the stop is counted walked rather than abandoned, told apart by its
-   `diarized_at` against the re-run's own start, because the commit and the
-   queue removal are two separate writes.
+   Meeting and the catch-up pass are left alone. That eligibility is decided
+   *inside* the mutation, on the writer, because a promotion can commit
+   between an answer read beforehand and the mutation that uses it. An
+   unreadable re-run is an error and reaches the Client as one — only an
+   absent schema, an absent row and the first-start baseline are successful
+   absences, and stopping any of those three is a no-op.
 
 ## Acceptance criteria
 
@@ -315,11 +317,23 @@ reintroduce the one-at-a-time question the single worker answers.
 3. ~~`diarize/status` gains an optional `rerun` block~~ — **done**, with the
    byte-identical test for both the no-tables and the first-start-baseline
    cases.
-4. ~~`diarize/rerunCancel`~~ — **done**, over `rerun::cancel` and
-   `rerun::owns_bulk_work`. One window is left open deliberately: the worker
-   can be between reading the head of the queue and registering the job, in
-   which case that one Meeting is walked after the stop. Bounded at one, and
-   closing it would need a lock held across a whole run.
+4. ~~`diarize/rerunCancel`~~ — **done**, over `rerun::cancel`. The
+   peek-to-registration window is closed too, and without a lock across
+   inference: registration and the check that the work is still queued are
+   one step under the job lock, which a stop must also take, so either the
+   job is registered and the stop finds its handle or the row is gone and the
+   run returns before claiming anything.
+
+   **A run takes its own queue row out inside the transaction that writes the
+   attribution.** That is what makes a stop unable to miscount a walked
+   Meeting as abandoned — there is no window in which one still looks owed —
+   and it replaced an attempt to tell them apart by comparing `diarized_at`
+   with the re-run's start, which cannot work: `julianday` rounds two stamps a
+   ten-thousandth of a second apart to the same value, and a wall clock can be
+   adjusted under them either way. `DiarizeOutcome::Skipped` is the outcome
+   for a run that never reached a transaction — no audio, no models, a failure
+   — and is now the only one the worker removes a row for, since removing one
+   after a commit could delete a fresh request made in between.
 5. **The trigger** — `begin_if_the_model_changed` at start, and `begin` from
    the wipe. Activation, so it waits on the model decision and on 05.
 6. **The seeding path** — consume `claims` before `reconcile::apply` and
