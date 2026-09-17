@@ -265,8 +265,12 @@ pub const DIARIZE_SEGMENTATION: ModelEntry = ModelEntry {
 /// Same `filename` as the model it replaces, on purpose: an installed copy
 /// still holding WeSpeaker's 26,535,549 bytes under that name reads as
 /// `Corrupted` on size and is fetched afresh. Its Voiceprints are 256 wide
-/// and stamped with the old identity; `resolve` refuses them by name, and
-/// the pending model-change wipe (`store::schema`) is what clears them.
+/// and stamped with the old identity. `resolve` never sees those — but the
+/// next ordinary Diarization does: `stale_exemplars` finds every row from
+/// another space, `runner::rebuild` re-embeds each from the window WeSpeaker
+/// cut, and `adopt_rebuilt` files the result under this identity (Q227).
+/// That is the lazy path ADR-0037 rejected in favour of the wipe and re-run
+/// still pending in `store::schema`; until those are registered, it runs.
 pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
     key: "redimnet2-b3-vox2-lm",
     display_name: "ReDimNet2-B3 (VoxBlink2 + VoxCeleb2, LM)",
