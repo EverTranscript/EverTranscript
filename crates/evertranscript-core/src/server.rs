@@ -1583,6 +1583,122 @@ impl Core {
     /// onto a Transcript that already exists. Nothing on this path can cost
     /// the recording — a missing model, a corrupt file, or a panicking
     /// runtime all leave the Meeting exactly as it was, unattributed.
+    /// Rebuilds one Meeting's exemplars from what it already says, before a
+    /// re-run redraws them. `None` when there was nothing to do.
+    ///
+    /// **Inert unless this Meeting is the bulk re-run's own.**
+    /// [`rerun::is_bulk_work`](crate::store::rerun::is_bulk_work) answers
+    /// `false` on every History in the field, because the re-run tables are
+    /// not in `MIGRATIONS`. That is the gate, and it is structural rather
+    /// than a flag somebody can clear: there is no configuration of a current
+    /// build in which this reads a plan, let alone writes one.
+    ///
+    /// **It runs before the Meeting is re-diarized, and the order is the
+    /// whole point.** [`reseed::plan`](crate::diarize::reseed::plan) reads
+    /// `transcript_segments.speaker_id` with the Operator's corrections on
+    /// top — the attribution the *previous* model left. Re-diarizing
+    /// overwrites that column, and after 05's wipe it overwrites it with
+    /// fresh pseudonyms, because there are no Voiceprints left to resolve
+    /// against. Run afterwards, this would find a named owner only where a
+    /// correction happened to survive, and [`commit`](crate::diarize::reseed::commit)
+    /// would refuse the rest as [`Moved`](crate::diarize::reseed::Refused::Moved)
+    /// — the run having moved the very record it revalidates against. Run
+    /// first, it relearns the named voices from what the Operator already
+    /// said, and the run that follows has real Voiceprints to match its new
+    /// clusters to. That is what makes a name survive a model change.
+    ///
+    /// **Reading and embedding are outside the write transaction; only the
+    /// replacement is inside one.** Embedding a Meeting's ranges is minutes
+    /// of model time, and holding History's single writer for it would stall
+    /// every Client. `commit` re-reads the plan on the writer and refuses if
+    /// anything moved meanwhile, which is what makes the unlocked gap safe
+    /// rather than merely fast.
+    ///
+    /// A refusal is logged and the Meeting is re-diarized anyway. It keeps
+    /// its words, its corrections and its names; what it loses is this
+    /// Meeting's contribution to recognizing those voices, which is the same
+    /// outcome as a Meeting with no Kept Audio.
+    async fn reseed_for_rerun(
+        &self,
+        meeting_id: &str,
+        embedding: &std::path::Path,
+    ) -> Result<Option<usize>> {
+        use crate::diarize;
+
+        let wanted = meeting_id.to_string();
+        let Some(plan) = self
+            .store
+            .read(move |connection| {
+                if !crate::store::rerun::is_bulk_work(connection, &wanted)? {
+                    return Ok(None);
+                }
+                diarize::reseed::plan(connection, &wanted)
+            })
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        let history_dir = self.history_dir.clone();
+        let embedding = embedding.to_path_buf();
+        let embedded = plan.clone();
+        // The model is CPU-bound C++, like the run's own.
+        let vectors = tokio::task::spawn_blocking(move || -> Result<Vec<Option<Vec<f32>>>> {
+            // A plan with no ranges still has to commit: a Speaker whose every
+            // segment was corrected away keeps no evidence here and is in
+            // `owners` precisely so its Voiceprint is recomputed without any.
+            // There is simply nothing to run a model over, and loading one to
+            // embed nothing would make that case need an ONNX file to do
+            // nothing with.
+            if embedded.ranges.is_empty() {
+                return Ok(Vec::new());
+            }
+            // The embedder alone: seeding re-embeds ranges the record already
+            // names, so there is nothing for segmentation to decide.
+            let mut embedder = diarize::live::Embedder::load(&embedding)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            diarize::reseed::embed_ranges(
+                &embedded,
+                &history_dir,
+                &mut |path, channel, start_ms, end_ms| {
+                    audio::sample::read(path, channel, start_ms, end_ms)
+                },
+                &mut |samples| embedder.embed(samples),
+            )
+        })
+        .await??;
+
+        let written = self
+            .store
+            .write(move |connection| {
+                let transaction = connection.transaction()?;
+                let outcome = diarize::reseed::commit(
+                    &transaction,
+                    &plan,
+                    &vectors,
+                    diarize::live::EMBEDDING_MODEL,
+                    diarize::live::EMBEDDING_MODEL_VERSION,
+                )?;
+                // Committed either way: a refusal wrote nothing, so this
+                // closes an empty transaction rather than discarding work.
+                transaction.commit()?;
+                Ok(outcome)
+            })
+            .await?;
+
+        match written {
+            Ok(exemplars) => Ok(Some(exemplars)),
+            Err(refused) => {
+                tracing::warn!(
+                    meeting = %meeting_id,
+                    ?refused,
+                    "could not relearn this Meeting's voices; it keeps its names but not its evidence"
+                );
+                Ok(None)
+            }
+        }
+    }
+
     pub async fn diarize_meeting(
         &self,
         meeting_id: &str,
@@ -1632,6 +1748,24 @@ impl Core {
         // whole fix.
         let slot =
             diarize::runner::Slot::claim(meeting_id).map_err(|busy| anyhow::anyhow!("{busy}"))?;
+
+        // Before the stale read below, and before the run: seeding replaces
+        // this Meeting's exemplars, so reading the stale list first would
+        // hand the rebuild rows this has already superseded. Inert unless a
+        // bulk re-run owns this Meeting, which no History in the field can
+        // say — see `reseed_for_rerun`.
+        match self.reseed_for_rerun(meeting_id, &embedding).await {
+            Ok(Some(exemplars)) => {
+                tracing::info!(meeting = %meeting_id, exemplars, "relearned a Meeting's voices for the re-run")
+            }
+            Ok(None) => {}
+            // Never fatal. The re-run's whole purpose is to recover
+            // recognition, and failing to recover it for one Meeting is not a
+            // reason to leave that Meeting unattributed as well.
+            Err(error) => {
+                tracing::warn!(meeting = %meeting_id, %error, "could not relearn this Meeting's voices")
+            }
+        }
 
         // Evidence from a previous model or front end, to be rebuilt from
         // its kept audio before this run reads seeds — otherwise every
@@ -4419,6 +4553,129 @@ mod tests {
             .write(|connection| crate::store::rerun::begin(connection, "redimnet2-b3", "1"))
             .await
             .expect("begin")
+    }
+
+    /// Gives a named Speaker a Voiceprint and one exemplar from a Meeting.
+    ///
+    /// Enough for `reseed::plan` to name them an owner: it reads
+    /// `speaker_exemplars` for the Meeting as well as its segments, so a
+    /// Speaker whose evidence lives here is one whose Voiceprint this
+    /// Meeting's re-seeding has to recompute — even with nothing left to say
+    /// about them.
+    async fn a_named_speaker_with_evidence_from(core: &Arc<Core>, meeting_id: &str) {
+        let meeting_id = meeting_id.to_string();
+        core.store
+            .write(move |connection| {
+                connection.execute(
+                    "INSERT INTO speakers (id, display_name, confirmed, voiceprint, \
+                     voiceprint_model, voiceprint_model_version, created_at) \
+                     VALUES ('alice', 'Alice', 1, X'0000803F', 'old', '1', 'now')",
+                    [],
+                )?;
+                connection.execute(
+                    "INSERT INTO speaker_exemplars \
+                     (id, speaker_id, meeting_id, embedding, model, model_version, \
+                      voiced_ms, source, created_at) \
+                     VALUES ('e1', 'alice', ?1, X'0000803F', 'old', '1', 1000, 'machine', 'now')",
+                    rusqlite::params![meeting_id],
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("a named speaker");
+    }
+
+    async fn voiceprint_of(core: &Arc<Core>, id: &str) -> Option<Vec<u8>> {
+        let id = id.to_string();
+        core.store
+            .read(move |connection| {
+                connection
+                    .query_row(
+                        "SELECT voiceprint FROM speakers WHERE id = ?1",
+                        rusqlite::params![id],
+                        |row| row.get::<_, Option<Vec<u8>>>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .await
+            .expect("voiceprint")
+    }
+
+    /// **The safety property of the whole re-seeding path.**
+    ///
+    /// Every History in the field lacks the re-run tables, so no Meeting is
+    /// ever the backlog's own and nothing is ever re-seeded. The Meeting here
+    /// has Kept Audio and a named Speaker with evidence in it — everything a
+    /// plan needs — and is still refused at the gate. The models directory is
+    /// empty, so had it got past the gate it would have failed loudly trying
+    /// to load one rather than answering `None`.
+    #[tokio::test]
+    async fn a_history_in_the_field_is_never_reseeded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        meetings_with_audio(&core, &["m1"]).await;
+        a_named_speaker_with_evidence_from(&core, "m1").await;
+
+        let seeded = core
+            .reseed_for_rerun("m1", &dir.path().join("nothing-here.onnx"))
+            .await
+            .expect("asking is not an error");
+
+        assert_eq!(seeded, None, "no backlog owns this Meeting, so nothing ran");
+        assert!(
+            voiceprint_of(&core, "alice").await.is_some(),
+            "and Alice's Voiceprint is untouched"
+        );
+    }
+
+    /// A Speaker the Meeting no longer says anything about still has to be
+    /// recomputed, and that needs no model.
+    ///
+    /// `plan` names them an owner because their exemplars come from this
+    /// Meeting, while the Meeting has no segments left to re-embed. So the
+    /// vectors are empty, `commit` replaces nothing with nothing, and the
+    /// Voiceprint built from what is left is cleared. Cleared, not deleted:
+    /// Alice is still somebody the Operator named, and a deleted Voiceprint
+    /// is how this product records being asked to forget a person.
+    #[tokio::test]
+    async fn the_reruns_own_meeting_is_relearned_without_a_model_when_it_has_nothing_to_say() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        meetings_with_audio(&core, &["m1"]).await;
+        a_named_speaker_with_evidence_from(&core, "m1").await;
+        with_rerun_tables(&core).await;
+        assert_eq!(begin_rerun(&core).await, 1, "one Meeting with audio");
+
+        let seeded = core
+            .reseed_for_rerun("m1", &dir.path().join("nothing-here.onnx"))
+            .await
+            .expect("reseed");
+
+        assert_eq!(
+            seeded,
+            Some(0),
+            "the backlog owns it, so it ran — and had no range to embed"
+        );
+        assert_eq!(
+            voiceprint_of(&core, "alice").await,
+            None,
+            "the evidence this Meeting held is gone, so the Voiceprint built \
+             from it is too"
+        );
+        let still_there = core
+            .store
+            .read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM speakers WHERE id = 'alice'",
+                        [],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .await
+            .expect("count");
+        assert_eq!(still_there, 1, "cleared, never forgotten");
     }
 
     /// A History with no backlog serializes exactly what it always did.

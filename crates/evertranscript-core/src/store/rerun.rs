@@ -287,6 +287,31 @@ pub fn begin_if_the_model_changed(
     }
 }
 
+/// Whether this Meeting is the bulk re-run's own work.
+///
+/// The gate every re-run-only step hangs off, and the reason those steps are
+/// inert in the field: the tables are not in `MIGRATIONS`, so [`installed`]
+/// is false and this answers `false` without looking further. A History that
+/// has never had a backlog cannot be told it has one.
+///
+/// Membership hangs off the queue row and cascades away with it, so this is
+/// also false for a Meeting the backlog has already walked — and true for one
+/// promoted to `Front`, which keeps its row and therefore keeps being the
+/// re-run's.
+pub fn is_bulk_work(connection: &Connection, meeting_id: &str) -> Result<bool> {
+    if !installed(connection)? {
+        return Ok(false);
+    }
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM diarize_rerun_backlog WHERE meeting_id = ?1",
+            params![meeting_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
 /// Takes one Meeting out of the line because somebody cancelled it, and
 /// settles the re-run's books in the same breath.
 ///
@@ -317,15 +342,7 @@ pub fn give_up(connection: &Connection, meeting_id: &str) -> Result<()> {
     let transaction = connection.unchecked_transaction()?;
     // Asked before the row goes, because the row going is what takes the
     // membership: it hangs off `diarize_queue` and cascades away with it.
-    let owned = installed(&transaction)?
-        && transaction
-            .query_row(
-                "SELECT 1 FROM diarize_rerun_backlog WHERE meeting_id = ?1",
-                params![meeting_id],
-                |_| Ok(()),
-            )
-            .optional()?
-            .is_some();
+    let owned = is_bulk_work(&transaction, meeting_id)?;
     let removed = transaction.execute(
         "DELETE FROM diarize_queue WHERE meeting_id = ?1",
         params![meeting_id],
@@ -503,6 +520,49 @@ mod tests {
     fn a_history_that_has_never_recorded_one_has_no_state() {
         let connection = db();
         assert_eq!(state(&connection).expect("state"), None);
+    }
+
+    /// The gate every re-run-only step hangs off, asked of the History the
+    /// product actually ships.
+    ///
+    /// `db()` installs the pending tables by hand; this one deliberately does
+    /// not, because that is the shape in the field. If this ever answers
+    /// `true`, a re-run-only path has become reachable on an installation
+    /// that never asked for one — which is the failure the unregistered
+    /// migration exists to make impossible.
+    #[test]
+    fn a_history_in_the_field_owns_no_bulk_work() {
+        let mut connection = Connection::open_in_memory().expect("open");
+        crate::store::schema::configure(&connection).expect("configure");
+        crate::store::schema::migrate(&mut connection).expect("migrate");
+        meetings(
+            &connection,
+            &[("m1", "2024-01-01T00:00:00Z", Some("a.wav"))],
+        );
+
+        assert!(
+            !is_bulk_work(&connection, "m1").expect("ask"),
+            "no re-run tables, so nothing can be the re-run's"
+        );
+    }
+
+    /// Membership hangs off the queue row, so walking a Meeting ends it.
+    #[test]
+    fn a_meeting_stops_being_the_reruns_once_its_row_is_gone() {
+        let connection = db();
+        history(&connection);
+        begin(&connection, "redimnet2-b3", "1").expect("begin");
+        let first = crate::store::diarize_queue::peek(&connection)
+            .expect("peek")
+            .expect("a meeting")
+            .0;
+
+        assert!(is_bulk_work(&connection, &first).expect("ask"));
+        crate::store::diarize_queue::finish(&connection, &first).expect("finish");
+        assert!(
+            !is_bulk_work(&connection, &first).expect("ask"),
+            "the queue row took the membership with it"
+        );
     }
 
     /// The trap this shape exists to avoid.

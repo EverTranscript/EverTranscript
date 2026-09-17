@@ -106,7 +106,7 @@ guarantee is that a run stopped before that last check writes nothing, not that
 a stop lands within a window or interrupts a commit already under way.
 
 `store::rerun` exists — `Rerun`, `state`, `begin`, `begin_if_the_model_changed`,
-`cancel`, `owns_bulk_work` — with its tables out of `MIGRATIONS`. `state` now
+`cancel`, `give_up`, `is_bulk_work` — with its tables out of `MIGRATIONS`. `state` now
 answers "no re-run" for an uninstalled schema, asked of `sqlite_master` by name
 rather than inferred from an error string, so a genuinely broken read is still
 an error; `begin` and `begin_if_the_model_changed` remain unreachable from
@@ -139,11 +139,14 @@ not all belong to one eligible Speaker. Nothing calls either.
    exemplar table carries that today. Writing `Claims::denials` into centroids
    would rebuild the withdrawn writer; so would handing `Claims` to
    `reconcile::apply` and enrolling what it assigns.
-2. The wiring. Nothing threads the read to the write, and no caller reaches
-   `rerun::begin_if_the_model_changed` at startup — which must, on its first
-   start, record the current identity and enqueue nothing, since a History
-   with no `diarize_rerun` row is every History today and absent metadata is
-   not evidence of a model change. Until that exists the re-run cannot start,
+2. ~~The wiring~~ — **done** for the seeding half (Q215). `Core::reseed_for_rerun`
+   threads `plan` → `embed_ranges` → `commit` with the transaction split where
+   the module asked for it, and `diarize_meeting` calls it. What is left of
+   this item is only the startup trigger: no caller reaches
+   `rerun::begin_if_the_model_changed` — which must, on its first start,
+   record the current identity and enqueue nothing, since a History with no
+   `diarize_rerun` row is every History today and absent metadata is not
+   evidence of a model change. Until that exists the re-run cannot start,
    resume or report, whatever the store can already express.
 3. The Registry's progress, pause and cancel affordances. Nothing in
    `clients/electron/src` reads a re-run; the existing `rerunSetup` is
@@ -160,6 +163,48 @@ not all belong to one eligible Speaker. Nothing calls either.
    unreadable re-run is an error and reaches the Client as one — only an
    absent schema, an absent row and the first-start baseline are successful
    absences, and stopping any of those three is a no-op.
+
+## Built: the caller (`Core::reseed_for_rerun`)
+
+**Re-seeding runs before the Meeting is re-diarized, and the order is forced
+rather than chosen.** `reseed::plan` reads `transcript_segments.speaker_id`
+with the newest correction on top — the attribution the *previous* model left.
+The run overwrites that column, and after 05's wipe it overwrites it with
+fresh pseudonyms, there being no Voiceprints left to resolve against. Run
+after the run, seeding would find a named owner only where a correction
+happened to survive, and `commit` would refuse the rest as `Refused::Moved`,
+the run having moved the very record the revalidation compares against. Run
+first, it relearns the named voices from what the Operator already said, and
+the run that follows has real Voiceprints to match its new clusters to. That
+is the mechanism by which a name survives a model change, and it is why the
+call sits between the slot claim and the stale-exemplar read — before that
+read as well, since seeding replaces this Meeting's exemplars and a list read
+earlier would hand the rebuild rows it has just superseded.
+
+**The gate is structural.** `rerun::is_bulk_work` is `installed() AND a row in
+diarize_rerun_backlog`, extracted from the copy `give_up` was already
+computing so the two cannot drift. The tables are not in `MIGRATIONS`, so it
+answers `false` on every History in the field and the path is unreachable
+there — pinned by `a_history_in_the_field_is_never_reseeded`, which offers a
+Meeting with Kept Audio and a named Speaker with evidence in it and asserts
+nothing ran, with an empty models directory so that getting past the gate
+would fail loudly rather than quietly.
+
+**Reading and embedding are outside the write transaction; only the
+replacement is inside one.** Embedding is minutes of model time per Meeting
+and holding History's single writer for it would stall every Client. The
+embedder is loaded only when there is a range to embed — a plan with no ranges
+still has to commit, because a Speaker whose every segment was corrected away
+is in `owners` precisely so its Voiceprint is recomputed without any.
+
+**One gap, stated rather than hidden.** The seeding commits in its own
+transaction, not the one that later writes the attribution and removes the
+queue row. A Core killed between them leaves the Meeting walked but not
+re-seeded, and the Speaker loses that Meeting's contribution — the same
+outcome as a `Moved` refusal, which the design already tolerates, but reached
+by a crash rather than by a decision. Closing it means moving `commit` into
+`finish_run`'s writer closure, which is a contained follow-up and is not
+possible while seeding has to precede the run that closure belongs to.
 
 ## Acceptance criteria
 
@@ -417,8 +462,10 @@ reintroduce the one-at-a-time question the single worker answers.
    `delete_voiceprint`, so a recomputation cannot leave a Speaker marked as
    one the Operator forgot.
 
-   What is left for activation is the caller, and the split across the write
-   transaction is the part to get right. `plan` reads, and `embed_ranges`
+   ~~What is left for activation is the caller~~ — **written** (Q215),
+   `Core::reseed_for_rerun`, reached from `diarize_meeting` behind
+   `rerun::is_bulk_work`. The split across the write transaction is the part
+   it had to get right. `plan` reads, and `embed_ranges`
    decodes audio and runs the model — minutes of work per Meeting, and both
    belong **outside** any transaction, or a re-run holds a write lock over
    History for as long as it takes to embed. Only `commit` runs inside one:
