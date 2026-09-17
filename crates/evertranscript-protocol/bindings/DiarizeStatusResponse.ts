@@ -26,4 +26,22 @@ queued: Array<string>,
  * start merely wrote down which model it uses both serialize exactly as
  * they did before this field existed (ADR-0028).
  */
-rerun?: DiarizeRerun, };
+rerun?: DiarizeRerun, 
+/**
+ * Why the last start could not check whether the embedding changed,
+ * when it could not.
+ *
+ * **Not the re-run's own failure — the question's.** A model change
+ * wipes every Voiceprint in one migration and the next start is what
+ * turns that into a re-run; if the check between them fails, the wipe
+ * has happened and the walk has not, and nothing else on this response
+ * can say so. `rerun` is absent in exactly that case, because a History
+ * carrying only the wipe's stamp has requested no backlog, so the
+ * message cannot live inside that block.
+ *
+ * Held for the session rather than in the record: the stamp is
+ * untouched by a failure, so the next start asks again and either
+ * succeeds or sets this afresh. Absent once a start has got an answer,
+ * which is every ordinary installation (ADR-0028).
+ */
+rerunError?: string, };

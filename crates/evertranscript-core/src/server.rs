@@ -172,6 +172,15 @@ pub struct Core {
     /// capture (DECISIONS Q7). Post-meeting work is the lowest-priority
     /// thing this process does.
     diarization: Mutex<Option<DiarizeJob>>,
+    /// Why the last [`Core::rerun_if_the_model_changed`] could not ask, when
+    /// it could not.
+    ///
+    /// In memory rather than in the record, because the record already holds
+    /// the fact that matters: a failed gate leaves the stamp the wipe wrote,
+    /// so the walk is still owed and the next start asks again. What is lost
+    /// on a restart is only the sentence, and a restart is what fixes the
+    /// thing the sentence is about.
+    rerun_error: Mutex<Option<String>>,
 }
 
 /// A Diarization in progress.
@@ -665,6 +674,7 @@ impl Core {
             settings_path,
             models_dir,
             diarization: Mutex::new(None),
+            rerun_error: Mutex::new(None),
         }))
     }
 
@@ -2517,6 +2527,11 @@ impl Core {
                 )
             })
             .await;
+        // Whatever it says now, it says about this attempt.
+        *self.rerun_error.lock().await = match &enqueued {
+            Ok(_) => None,
+            Err(error) => Some(error.to_string()),
+        };
         match enqueued {
             Ok(None) | Ok(Some(0)) => {}
             Ok(Some(meetings)) => {
@@ -2629,6 +2644,7 @@ impl Core {
             .await
             .unwrap_or_default();
         let rerun = self.rerun_block().await?;
+        let rerun_error = self.rerun_error.lock().await.clone();
         Ok(match self.diarization.lock().await.as_ref() {
             Some(job) => DiarizeStatusResponse {
                 state: DiarizeState::Running,
@@ -2637,6 +2653,7 @@ impl Core {
                 total_ms: job.total_ms as i64,
                 queued,
                 rerun,
+                rerun_error,
             },
             None => DiarizeStatusResponse {
                 state: if queued.is_empty() {
@@ -2653,6 +2670,7 @@ impl Core {
                 total_ms: 0,
                 queued,
                 rerun,
+                rerun_error,
             },
         })
     }
@@ -5357,6 +5375,66 @@ mod tests {
         );
     }
 
+    /// A gate that failed says so on `diarize/status`, and a later one that
+    /// worked takes it back.
+    ///
+    /// The one case where `rerun` cannot carry the message: the History holds
+    /// the wipe's stamp, has requested no backlog, and so serializes no
+    /// `rerun` block at all. An Operator whose Voiceprints have just been
+    /// cleared would otherwise see a Registry that says nothing about why.
+    #[tokio::test]
+    async fn a_gate_that_failed_is_reported_on_the_status_and_cleared_by_one_that_works() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        meetings_with_audio(&core, &["m1"]).await;
+
+        let rename = |from: &'static str, to: &'static str| {
+            let sql = format!("ALTER TABLE {from} RENAME TO {to};");
+            move |connection: &mut rusqlite::Connection| {
+                connection.execute_batch(&sql).map_err(Into::into)
+            }
+        };
+        core.store
+            .write(rename("diarize_rerun_backlog", "backlog_out_of_reach"))
+            .await
+            .expect("half-install the schema");
+        core.rerun_if_the_model_changed().await;
+
+        // `diarize_status` reads the backlog too, so repair the schema before
+        // asking: what is under test is that the message outlives the failure,
+        // not that a broken History can be queried.
+        core.store
+            .write(rename("backlog_out_of_reach", "diarize_rerun_backlog"))
+            .await
+            .expect("repair");
+
+        let failed = core.diarize_status().await.expect("status");
+        let reported = failed
+            .rerun_error
+            .expect("the gate's failure is on the status");
+        assert!(
+            reported.contains("diarize_rerun_backlog"),
+            "and says what went wrong rather than that something did: {reported}"
+        );
+        assert!(
+            failed.rerun.is_none(),
+            "which is why it cannot live in the re-run block"
+        );
+
+        core.rerun_if_the_model_changed().await;
+
+        let worked = core.diarize_status().await.expect("status");
+        assert_eq!(
+            worked.rerun_error, None,
+            "a start that got an answer leaves nothing to report"
+        );
+        assert_eq!(
+            worked.queued,
+            vec!["m1".to_string()],
+            "and it is the answer the failed one owed"
+        );
+    }
+
     /// A fresh install goes through the same migration and the same gate
     /// with nothing in it, and comes out with nothing to show.
     #[tokio::test]
@@ -5748,6 +5826,10 @@ mod tests {
         assert!(
             before.get("rerun").is_none(),
             "the upgrade's stamp is no key at all — not a null and not a zeroed block: {before}"
+        );
+        assert!(
+            before.get("rerunError").is_none(),
+            "and a gate nobody has run yet has nothing to report: {before}"
         );
 
         with_rerun_tables(&core).await;
@@ -6186,6 +6268,10 @@ mod tests {
         assert!(
             stopped.get("rerun").is_none(),
             "a recorded model is not a backlog, stopped or otherwise: {stopped}"
+        );
+        assert!(
+            stopped.get("rerunError").is_none(),
+            "and nothing failed, so nothing is said about it: {stopped}"
         );
         assert!(
             !core

@@ -264,6 +264,8 @@ const en = {
     "still queued, because it was asked for on its own. Stopping the update does not cancel that.",
   "registry.rerun.progress": "Meetings the update has dealt with",
   "registry.rerun.stop": "Stop the update",
+  "registry.rerun.startupFailed":
+    "EverTranscript could not check whether the voice model changed. Your meetings keep every word and every name; restarting EverTranscript will try again.",
   "registry.rerun.names":
     "Voices you never named are re-numbered as this goes, so one listed as Speaker 3 today may be Speaker 5 tomorrow. A name you gave stays on every word it was on — until that voice is heard again, the row shows no Voiceprint.",
   "watchlist.title": "Watchlist",
@@ -519,6 +521,8 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "registry.rerun.stillQueued": "仍在队列中，因为它是被单独请求的。停止更新不会取消它。",
     "registry.rerun.progress": "更新已了结的会议数",
     "registry.rerun.stop": "停止更新",
+    "registry.rerun.startupFailed":
+      "EverTranscript 无法确认语音模型是否已更改。你的会议仍保留每一个字和每一个名称；重新启动 EverTranscript 会再试一次。",
     "registry.rerun.names":
       "你没有命名过的声音会在这个过程中重新编号，今天显示为“讲话人 3”的，明天可能是“讲话人 5”。你给出的名称仍留在它标注过的每一个字上——在再次听到那个声音之前，该行显示为无声纹。",
     "registry.suggestions": "日历显示这些人参加了该声音出现过的会议。仅供参考——受邀并不等于发言。",

@@ -917,6 +917,7 @@ function RegistryPanel({
     sampleFor,
     rerun,
     rerunError,
+    rerunStartupError,
     stopping,
     stopRerun,
   } = useRegistry();
@@ -1033,6 +1034,16 @@ function RegistryPanel({
           drawn inside one would be an error nobody ever sees. */}
       {rerunError ? (
         <p className="mb-4 text-sm text-recording">{rerunError}</p>
+      ) : null}
+
+      {/* The Core could not tell whether the voice model changed, which on a
+          History whose Voiceprints have just been cleared is the difference
+          between "being rebuilt" and "gone until the next launch". Its own
+          line: the block above is about this window failing to ask. */}
+      {rerunStartupError ? (
+        <p className="mb-4 text-sm text-recording">
+          {t("registry.rerun.startupFailed")} {rerunStartupError}
+        </p>
       ) : null}
 
       {error ? (

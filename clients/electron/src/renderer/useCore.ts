@@ -353,6 +353,12 @@ export function useRegistry() {
   // unmounts, so nothing runs behind a screen nobody is on.
   const [rerun, setRerun] = useState<DiarizeRerun | null>(null);
   const [rerunError, setRerunError] = useState<string | null>(null);
+  // What the *Core* could not do, as against `rerunError` above, which is
+  // what this Client could not do. Kept apart because they clear on
+  // different events: a failed read is over the moment the next poll lands,
+  // while a startup gate that failed stays true until the Core is restarted,
+  // and folding them together would blank the second on the next tick.
+  const [rerunStartupError, setRerunStartupError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   // Which request each answer belongs to. A poll that left before Stop can
   // land after Stop's own answer, carrying the counts from before it — and
@@ -397,6 +403,9 @@ export function useRegistry() {
       // hides the block — there is no flag to read (ADR-0028).
       accept(status.rerun ?? null);
       setRerunError(null);
+      // Absent once a start has got an answer, which is every ordinary
+      // installation — so this follows the Core rather than latching.
+      setRerunStartupError(status.rerunError ?? null);
     } catch (cause) {
       if (mine <= applied.current) return;
       // The counts already drawn are left alone: they were true when they
@@ -445,6 +454,7 @@ export function useRegistry() {
     sampleFor,
     rerun,
     rerunError,
+    rerunStartupError,
     stopping,
     stopRerun,
   };
