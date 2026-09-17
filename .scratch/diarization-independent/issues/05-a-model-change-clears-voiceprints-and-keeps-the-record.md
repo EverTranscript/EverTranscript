@@ -84,8 +84,14 @@ against the new length rather than `MIGRATIONS.len() - 1`.
 - [x] Migrations stay idempotent and the schema version advances by one —
       unchanged, because the wipe is not in `MIGRATIONS`, which
       `the_pending_wipe_is_not_registered` asserts
-- [ ] Every migration-index assertion still names the migration it means —
-      nothing to check until the wipe is registered and the length moves
+- [x] Every migration-index assertion still names the migration it means —
+      done ahead of registration rather than after it (Q223). All fourteen
+      migrations are named constants and the three upgrade-path tests call
+      `before(THE_DIARIZATION_MARK)` and friends instead of `11`, `10` and `9`,
+      so each says which upgrade it stands in front of rather than which
+      position. `every_migration_is_distinct_so_naming_one_is_unambiguous`
+      guards the helper and pins the order. Appending the wipe would never have
+      moved a prefix; what this closes is an insertion anywhere else
 
 ## What was built
 

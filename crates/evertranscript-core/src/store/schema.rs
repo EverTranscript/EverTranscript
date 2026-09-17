@@ -8,11 +8,10 @@
 use rusqlite::Connection;
 
 /// Ordered migrations. Append only; never edit a shipped one.
-const MIGRATIONS: &[&str] = &[
-    // 1 — the record: Meetings, their Transcript segments, and the Speakers
-    // attribution will point at. Voiceprint columns exist from the start so
-    // M3 adds behavior, not a table rewrite.
-    r#"
+/// 1 — the record: Meetings, their Transcript segments, and the Speakers
+/// attribution will point at. Voiceprint columns exist from the start so
+/// M3 adds behavior, not a table rewrite.
+const THE_RECORD: &str = r#"
     CREATE TABLE meetings (
         id               TEXT PRIMARY KEY NOT NULL,
         started_at       TEXT NOT NULL,
@@ -55,12 +54,13 @@ const MIGRATIONS: &[&str] = &[
 
     CREATE INDEX transcript_segments_meeting ON transcript_segments(meeting_id, start_ms);
     CREATE INDEX meetings_started_at ON meetings(started_at DESC);
-    "#,
-    // 2 — the Mirror projection queue. Triggers mark a Meeting dirty; one
-    // worker rebuilds and acks. A write landing mid-rebuild bumps the
-    // generation again, so the ack does not clear it and the Mirror is
-    // rebuilt once more rather than silently going stale.
-    r#"
+"#;
+
+/// 2 — the Mirror projection queue. Triggers mark a Meeting dirty; one
+/// worker rebuilds and acks. A write landing mid-rebuild bumps the
+/// generation again, so the ack does not clear it and the Mirror is
+/// rebuilt once more rather than silently going stale.
+const MIRROR_QUEUE: &str = r#"
     CREATE TABLE mirror_dirty (
         meeting_id              TEXT PRIMARY KEY NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
         generation              INTEGER NOT NULL DEFAULT 1,
@@ -90,33 +90,36 @@ const MIGRATIONS: &[&str] = &[
         INSERT INTO mirror_dirty (meeting_id, generation) VALUES (NEW.meeting_id, 1)
         ON CONFLICT (meeting_id) DO UPDATE SET generation = generation + 1;
     END;
-    "#,
-    // 3 — full-text search over the same projection the Mirror renders, so
-    // what you can find is exactly what you can read.
-    r#"
+"#;
+
+/// 3 — full-text search over the same projection the Mirror renders, so
+/// what you can find is exactly what you can read.
+const TRANSCRIPT_SEARCH: &str = r#"
     CREATE VIRTUAL TABLE search_index USING fts5(
         meeting_id UNINDEXED,
         title,
         body
     );
-    "#,
-    // 4 — what a recording lost, in the record rather than only in a log.
-    // A Meeting captured with half its audio previously looked exactly like
-    // a complete one; the Operator opened one-sided notes with nothing to
-    // explain them. A JSON array of human-readable notes, empty when the
-    // recording was whole.
-    r#"
+"#;
+
+/// 4 — what a recording lost, in the record rather than only in a log.
+/// A Meeting captured with half its audio previously looked exactly like
+/// a complete one; the Operator opened one-sided notes with nothing to
+/// explain them. A JSON array of human-readable notes, empty when the
+/// recording was whole.
+const WHAT_A_RECORDING_LOST: &str = r#"
     ALTER TABLE meetings ADD COLUMN audio_notes TEXT;
-    "#,
-    // 5 — the Watchlist: what Meeting Detection watches on this machine
-    // (ADR-0024, ADR-0030). In the machine store rather than the History
-    // folder, like settings: the list describes this installation, and
-    // copying History to a new machine must not carry it.
-    //
-    // The shipped defaults are seeded here rather than defaulted in code, so
-    // that an empty table means the Operator removed everything and gets
-    // exactly that — not a silent restoration of the defaults on next start.
-    r#"
+"#;
+
+/// 5 — the Watchlist: what Meeting Detection watches on this machine
+/// (ADR-0024, ADR-0030). In the machine store rather than the History
+/// folder, like settings: the list describes this installation, and
+/// copying History to a new machine must not carry it.
+///
+/// The shipped defaults are seeded here rather than defaulted in code, so
+/// that an empty table means the Operator removed everything and gets
+/// exactly that — not a silent restoration of the defaults on next start.
+const THE_WATCHLIST: &str = r#"
     CREATE TABLE watchlist (
         id    TEXT PRIMARY KEY NOT NULL,
         name  TEXT NOT NULL,
@@ -129,33 +132,35 @@ const MIGRATIONS: &[&str] = &[
         ('com.tencent.meeting',        'VooV Meeting',    'process'),
         ('com.tencent.tencentmeeting', '腾讯会议',         'process'),
         ('browser-meetings',           'Browser Meetings','browserMeetings');
-    "#,
-    // 6 — what the calendar knew (ADR-0036). The title already rides the
-    // Meeting; these are the two facts that would otherwise be lost: which
-    // event it was, and who was invited. Attendees are *stored, not
-    // applied* — they become Speaker-naming suggestions in M3, and turning
-    // an invitation into an attribution before Diarization exists would be
-    // inventing who spoke.
-    r#"
+"#;
+
+/// 6 — what the calendar knew (ADR-0036). The title already rides the
+/// Meeting; these are the two facts that would otherwise be lost: which
+/// event it was, and who was invited. Attendees are *stored, not
+/// applied* — they become Speaker-naming suggestions in M3, and turning
+/// an invitation into an attribution before Diarization exists would be
+/// inventing who spoke.
+const WHAT_THE_CALENDAR_KNEW: &str = r#"
     ALTER TABLE meetings ADD COLUMN calendar_event_id TEXT;
     ALTER TABLE meetings ADD COLUMN calendar_attendees TEXT;
-    "#,
-    // 7 — what Diarization keeps (M3).
-    //
-    // Migration 1 gave `speakers` a single `voiceprint` BLOB and nothing
-    // ever wrote to it. One vector per Speaker cannot represent a voice
-    // across a headset, a laptop mic and a conference phone, and ADR-0008
-    // promises recognition that *improves* with every Meeting — which a
-    // single overwritten vector cannot do. So the column stays as the
-    // current best identity vector (what matching compares against) and the
-    // observations it is built from become rows.
-    //
-    // Keeping the exemplars, rather than only their average, is what makes
-    // two later operations possible at all: re-embedding from kept audio
-    // after a model upgrade (ADR-0035's stated reason for the model columns),
-    // and letting an Operator correction feed evidence back in (ADR-0009 as
-    // amended) instead of being a display-only annotation.
-    r#"
+"#;
+
+/// 7 — what Diarization keeps (M3).
+///
+/// Migration 1 gave `speakers` a single `voiceprint` BLOB and nothing
+/// ever wrote to it. One vector per Speaker cannot represent a voice
+/// across a headset, a laptop mic and a conference phone, and ADR-0008
+/// promises recognition that *improves* with every Meeting — which a
+/// single overwritten vector cannot do. So the column stays as the
+/// current best identity vector (what matching compares against) and the
+/// observations it is built from become rows.
+///
+/// Keeping the exemplars, rather than only their average, is what makes
+/// two later operations possible at all: re-embedding from kept audio
+/// after a model upgrade (ADR-0035's stated reason for the model columns),
+/// and letting an Operator correction feed evidence back in (ADR-0009 as
+/// amended) instead of being a display-only annotation.
+const WHAT_DIARIZATION_KEEPS: &str = r#"
     CREATE TABLE speaker_exemplars (
         id               TEXT PRIMARY KEY NOT NULL,
         speaker_id       TEXT NOT NULL REFERENCES speakers(id) ON DELETE CASCADE,
@@ -233,22 +238,23 @@ const MIGRATIONS: &[&str] = &[
          WHERE segment.id = NEW.segment_id
         ON CONFLICT (meeting_id) DO UPDATE SET generation = generation + 1;
     END;
-    "#,
-    // 8 — Operator Notes and the Summary (M4).
-    //
-    // **These two columns are the only mutable content in the record, and
-    // the distinction is worth stating where it lives.** ADR-0009 makes the
-    // Transcript and its attribution immutable: they are what happened, and
-    // a record that edits itself is the opposite of a legible guarantee.
-    // ADR-0018 refines that rather than contradicting it — Notes are the
-    // Operator's *own writing*, not a claim about what occurred, so they
-    // stay editable forever. The Summary is likewise derived rather than
-    // observed: it can be regenerated, and regenerating it destroys nothing.
-    //
-    // Both live on the Meeting rather than in their own tables because
-    // there is exactly one of each per Meeting and neither is ever queried
-    // independently of it.
-    r#"
+"#;
+
+/// 8 — Operator Notes and the Summary (M4).
+///
+/// **These two columns are the only mutable content in the record, and
+/// the distinction is worth stating where it lives.** ADR-0009 makes the
+/// Transcript and its attribution immutable: they are what happened, and
+/// a record that edits itself is the opposite of a legible guarantee.
+/// ADR-0018 refines that rather than contradicting it — Notes are the
+/// Operator's *own writing*, not a claim about what occurred, so they
+/// stay editable forever. The Summary is likewise derived rather than
+/// observed: it can be regenerated, and regenerating it destroys nothing.
+///
+/// Both live on the Meeting rather than in their own tables because
+/// there is exactly one of each per Meeting and neither is ever queried
+/// independently of it.
+const NOTES_AND_SUMMARY: &str = r#"
     ALTER TABLE meetings ADD COLUMN notes TEXT;
     ALTER TABLE meetings ADD COLUMN summary TEXT;
     -- Which Backend produced the Summary, and when. An Operator who chose
@@ -266,51 +272,53 @@ const MIGRATIONS: &[&str] = &[
         INSERT INTO mirror_dirty (meeting_id, generation) VALUES (NEW.id, 1)
         ON CONFLICT (meeting_id) DO UPDATE SET generation = generation + 1;
     END;
-    "#,
-    // 9 — what a Summary lost (summary-chunking-and-suggested-title/04).
-    //
-    // A Summary assembled from five chunks of six is a different thing from a
-    // complete one, and until now only the Core's log knew the difference —
-    // which the Operator cannot read. This is the audio-notes pattern applied
-    // one layer up: the record states its own incompleteness where the person
-    // holding it will see it.
-    //
-    // **Deliberately not called `summary_notes`.** Notes are the Operator's
-    // own writing (ADR-0018) and the glossary reserves the word; a
-    // machine-written column wearing it would be the vocabulary collision
-    // CONTEXT.md exists to prevent.
-    r#"
+"#;
+
+/// 9 — what a Summary lost (summary-chunking-and-suggested-title/04).
+///
+/// A Summary assembled from five chunks of six is a different thing from a
+/// complete one, and until now only the Core's log knew the difference —
+/// which the Operator cannot read. This is the audio-notes pattern applied
+/// one layer up: the record states its own incompleteness where the person
+/// holding it will see it.
+///
+/// **Deliberately not called `summary_notes`.** Notes are the Operator's
+/// own writing (ADR-0018) and the glossary reserves the word; a
+/// machine-written column wearing it would be the vocabulary collision
+/// CONTEXT.md exists to prevent.
+const WHAT_A_SUMMARY_LOST: &str = r#"
     ALTER TABLE meetings ADD COLUMN summary_gaps TEXT;
-    "#,
-    // 10 — where each voice can be heard, and the Speakers that never were.
-    //
-    // **The sample.** An exemplar has always recorded which Meeting it came
-    // from; it now records *where in it* — one channel, one stretch on the
-    // capture clock — so the Registry can play the voice back rather than
-    // only name it. Kept audio is a constant-bitrate frame stream
-    // (ADR-0032), so a stretch is a byte range and the cut costs no decode
-    // pass over the Meeting. The columns are nullable because every exemplar
-    // written before this migration has no window to give.
-    //
-    // **The prune.** Until now Diarization minted a Speaker for every
-    // cluster it found, before it knew whether the cluster owned a single
-    // transcribed word — and on the first real History this product
-    // accumulated, 378 of 503 Speakers owned none: three-second windows of
-    // echo and crosstalk, each with a Voiceprint, each a stranger in the
-    // Registry. `diarize::cluster::persist` no longer creates those. This
-    // removes the ones already created, under the narrowest predicate that
-    // names them: no segment attributed, no correction hint in either
-    // direction, no name, not the Operator. **Contradicts ADR-0009 as
-    // written ("Speaker records themselves are permanent"), and deliberately
-    // so:** that guarantee exists so nothing in the record ever dangles or
-    // rewrites, and a Speaker that nothing in the record references is not
-    // in the record — deleting it changes no Transcript, no attribution and
-    // no correction. Named Speakers are kept whatever they reference,
-    // because a name is the Operator's act. Once, here, rather than as a
-    // standing rule: a Speaker orphaned by a *Meeting* deletion is the case
-    // "Voiceprints outlive the recordings they came from" protects, and it
-    // matches this predicate too — so the rule must not run again.
-    r#"
+"#;
+
+/// 10 — where each voice can be heard, and the Speakers that never were.
+///
+/// **The sample.** An exemplar has always recorded which Meeting it came
+/// from; it now records *where in it* — one channel, one stretch on the
+/// capture clock — so the Registry can play the voice back rather than
+/// only name it. Kept audio is a constant-bitrate frame stream
+/// (ADR-0032), so a stretch is a byte range and the cut costs no decode
+/// pass over the Meeting. The columns are nullable because every exemplar
+/// written before this migration has no window to give.
+///
+/// **The prune.** Until now Diarization minted a Speaker for every
+/// cluster it found, before it knew whether the cluster owned a single
+/// transcribed word — and on the first real History this product
+/// accumulated, 378 of 503 Speakers owned none: three-second windows of
+/// echo and crosstalk, each with a Voiceprint, each a stranger in the
+/// Registry. `diarize::cluster::persist` no longer creates those. This
+/// removes the ones already created, under the narrowest predicate that
+/// names them: no segment attributed, no correction hint in either
+/// direction, no name, not the Operator. **Contradicts ADR-0009 as
+/// written ("Speaker records themselves are permanent"), and deliberately
+/// so:** that guarantee exists so nothing in the record ever dangles or
+/// rewrites, and a Speaker that nothing in the record references is not
+/// in the record — deleting it changes no Transcript, no attribution and
+/// no correction. Named Speakers are kept whatever they reference,
+/// because a name is the Operator's act. Once, here, rather than as a
+/// standing rule: a Speaker orphaned by a *Meeting* deletion is the case
+/// "Voiceprints outlive the recordings they came from" protects, and it
+/// matches this predicate too — so the rule must not run again.
+const VOICE_SAMPLES_AND_THE_PRUNE: &str = r#"
     ALTER TABLE speaker_exemplars ADD COLUMN sample_channel TEXT
         CHECK (sample_channel IN ('mic', 'system'));
     ALTER TABLE speaker_exemplars ADD COLUMN sample_start_ms INTEGER;
@@ -323,46 +331,48 @@ const MIGRATIONS: &[&str] = &[
        AND id NOT IN (SELECT speaker_id FROM attribution_hints)
        AND id NOT IN (SELECT replaced_speaker_id FROM attribution_hints
                        WHERE replaced_speaker_id IS NOT NULL);
-    "#,
-    // 11 — whether Diarization ever ran, so an interrupted one can be finished.
-    //
-    // `diarize_in_background` is detached on purpose, which means a Core that
-    // stops in those minutes takes the run with it — and a Meeting that was
-    // never diarized is indistinguishable in this schema from one where
-    // Diarization ran and recognised nobody. Without that distinction a retry
-    // either misses the first or repeats the second on every start.
-    //
-    // Backfilled from the evidence rather than guessed: a Meeting with an
-    // attributed segment was plainly diarized. One without is left NULL, so
-    // the next Core start finishes what a previous one did not — which is
-    // exactly what heals the Meetings this migration was written for.
-    r#"
+"#;
+
+/// 11 — whether Diarization ever ran, so an interrupted one can be finished.
+///
+/// `diarize_in_background` is detached on purpose, which means a Core that
+/// stops in those minutes takes the run with it — and a Meeting that was
+/// never diarized is indistinguishable in this schema from one where
+/// Diarization ran and recognised nobody. Without that distinction a retry
+/// either misses the first or repeats the second on every start.
+///
+/// Backfilled from the evidence rather than guessed: a Meeting with an
+/// attributed segment was plainly diarized. One without is left NULL, so
+/// the next Core start finishes what a previous one did not — which is
+/// exactly what heals the Meetings this migration was written for.
+const THE_DIARIZATION_MARK: &str = r#"
     ALTER TABLE meetings ADD COLUMN diarized_at TEXT;
 
     UPDATE meetings SET diarized_at = updated_at
      WHERE id IN (SELECT DISTINCT meeting_id FROM transcript_segments
                    WHERE speaker_id IS NOT NULL);
-    "#,
-    // 12 — Diarization waits its turn instead of being turned away.
-    //
-    // M3's policy was refuse-don't-queue, which was right while the only
-    // producer was a Meeting ending: a backlog competing for the machine is
-    // worse than none, and a refused Meeting can be re-run on the Operator's
-    // say-so. A model change re-runs all of History, and under that policy
-    // every Meeting that ended during the re-run would be dropped on the
-    // floor with only a log line about it.
-    //
-    // In the record rather than in memory because the queue has to outlive
-    // the process: a Core killed mid-backlog that forgot its remaining work
-    // would leave a History half-attributed, which reads exactly like
-    // diarization being unreliable.
-    //
-    // `priority` is small-number-first, so a just-ended Meeting or an
-    // Operator's request (0) goes ahead of bulk work (1) whatever the
-    // arrival order, and `enqueued_at` keeps it FIFO within a priority.
-    // ON DELETE CASCADE because a queued Meeting the Operator deletes is not
-    // work to do later.
-    r#"
+"#;
+
+/// 12 — Diarization waits its turn instead of being turned away.
+///
+/// M3's policy was refuse-don't-queue, which was right while the only
+/// producer was a Meeting ending: a backlog competing for the machine is
+/// worse than none, and a refused Meeting can be re-run on the Operator's
+/// say-so. A model change re-runs all of History, and under that policy
+/// every Meeting that ended during the re-run would be dropped on the
+/// floor with only a log line about it.
+///
+/// In the record rather than in memory because the queue has to outlive
+/// the process: a Core killed mid-backlog that forgot its remaining work
+/// would leave a History half-attributed, which reads exactly like
+/// diarization being unreliable.
+///
+/// `priority` is small-number-first, so a just-ended Meeting or an
+/// Operator's request (0) goes ahead of bulk work (1) whatever the
+/// arrival order, and `enqueued_at` keeps it FIFO within a priority.
+/// ON DELETE CASCADE because a queued Meeting the Operator deletes is not
+/// work to do later.
+const DIARIZE_QUEUE: &str = r#"
     CREATE TABLE diarize_queue (
         meeting_id   TEXT PRIMARY KEY NOT NULL
                      REFERENCES meetings(id) ON DELETE CASCADE,
@@ -371,53 +381,55 @@ const MIGRATIONS: &[&str] = &[
     ) STRICT;
 
     CREATE INDEX diarize_queue_order ON diarize_queue (priority, enqueued_at);
-    "#,
-    // 13 — a deleted Voiceprint stays deleted.
-    //
-    // Deleting a Voiceprint is this product's one biometric control, and
-    // ADR-0009 makes it a legible Operator act. After migration 12 a Speaker
-    // the Operator deliberately forgot looks identical to one the model
-    // change cleared: a name, and no vector. A re-run that relearns named
-    // Speakers from their attributed segments would bring the forgotten
-    // voice back, and the Operator would have no way to know it happened.
-    //
-    // So the act leaves a mark of its own, and only that act sets it. It is
-    // not derivable from the columns that were already there — "named, no
-    // vector" is now the ordinary state of most of the Registry.
-    //
-    // Nothing here is retroactive. A Voiceprint deleted before this shipped
-    // left no record that it was deleted rather than never taken, and
-    // marking those rows forgotten would be inventing an Operator act that
-    // may never have happened.
-    r#"
+"#;
+
+/// 13 — a deleted Voiceprint stays deleted.
+///
+/// Deleting a Voiceprint is this product's one biometric control, and
+/// ADR-0009 makes it a legible Operator act. After migration 12 a Speaker
+/// the Operator deliberately forgot looks identical to one the model
+/// change cleared: a name, and no vector. A re-run that relearns named
+/// Speakers from their attributed segments would bring the forgotten
+/// voice back, and the Operator would have no way to know it happened.
+///
+/// So the act leaves a mark of its own, and only that act sets it. It is
+/// not derivable from the columns that were already there — "named, no
+/// vector" is now the ordinary state of most of the Registry.
+///
+/// Nothing here is retroactive. A Voiceprint deleted before this shipped
+/// left no record that it was deleted rather than never taken, and
+/// marking those rows forgotten would be inventing an Operator act that
+/// may never have happened.
+const A_DELETED_VOICEPRINT_STAYS_DELETED: &str = r#"
     ALTER TABLE speakers ADD COLUMN forgotten INTEGER NOT NULL DEFAULT 0
         CHECK (forgotten IN (0, 1));
-    "#,
-    // 14 — one Operator, and the fact that decides them without an act.
-    //
-    // `mic_isolated` is what the capture layer concluded about this Meeting:
-    // the far end could not have reached the microphone, because headphones
-    // were the only playing output and the microphone was never swapped.
-    // ADR-0029 as amended makes that the first of the three rules that name
-    // "You", and it is a fact about the recording, so it is recorded with the
-    // recording rather than re-derived later from audio that no longer says.
-    //
-    // Nullable on purpose, with three states rather than two: 1 is isolated,
-    // 0 is looked at and not isolated, and NULL is a Meeting recorded before
-    // this shipped or one whose probe failed. Only 1 grants the rule, so the
-    // other two behave alike today — but a re-run that walks all of History
-    // (ticket 12) needs to tell "no" from "never asked", and a NOT NULL
-    // DEFAULT 0 would have thrown that away on every Meeting already on disk.
-    //
-    // The index is the other half. The flag never had a uniqueness
-    // constraint, the lookup took the first row it found, and the diarize
-    // path set the flag without clearing any other — so deleting the
-    // Operator's Voiceprint and re-running one Meeting put the flag on a
-    // freshly minted row while the lookup still returned the old one, and
-    // the Registry showed two "You". Any History that already has two is
-    // reduced to one first, keeping the row with a Voiceprint because that
-    // is the one recognition has been using; ties go to the oldest.
-    r#"
+"#;
+
+/// 14 — one Operator, and the fact that decides them without an act.
+///
+/// `mic_isolated` is what the capture layer concluded about this Meeting:
+/// the far end could not have reached the microphone, because headphones
+/// were the only playing output and the microphone was never swapped.
+/// ADR-0029 as amended makes that the first of the three rules that name
+/// "You", and it is a fact about the recording, so it is recorded with the
+/// recording rather than re-derived later from audio that no longer says.
+///
+/// Nullable on purpose, with three states rather than two: 1 is isolated,
+/// 0 is looked at and not isolated, and NULL is a Meeting recorded before
+/// this shipped or one whose probe failed. Only 1 grants the rule, so the
+/// other two behave alike today — but a re-run that walks all of History
+/// (ticket 12) needs to tell "no" from "never asked", and a NOT NULL
+/// DEFAULT 0 would have thrown that away on every Meeting already on disk.
+///
+/// The index is the other half. The flag never had a uniqueness
+/// constraint, the lookup took the first row it found, and the diarize
+/// path set the flag without clearing any other — so deleting the
+/// Operator's Voiceprint and re-running one Meeting put the flag on a
+/// freshly minted row while the lookup still returned the old one, and
+/// the Registry showed two "You". Any History that already has two is
+/// reduced to one first, keeping the row with a Voiceprint because that
+/// is the one recognition has been using; ties go to the oldest.
+const ONE_OPERATOR: &str = r#"
     ALTER TABLE meetings ADD COLUMN mic_isolated INTEGER
         CHECK (mic_isolated IN (0, 1));
 
@@ -429,7 +441,33 @@ const MIGRATIONS: &[&str] = &[
 
     CREATE UNIQUE INDEX speakers_one_operator
         ON speakers (is_operator) WHERE is_operator = 1;
-    "#,
+"#;
+
+/// Every migration this History has, in the order they apply.
+///
+/// `user_version` counts how many of these have run, so **the order is the
+/// schema's identity**: inserting one ahead of another tells every History
+/// in the field that a migration it has never seen is already applied. New
+/// ones are appended, and the number in each doc comment is its position
+/// here.
+///
+/// Named rather than written out in place so a test can say *which* upgrade
+/// it is standing in front of — see [`before`].
+const MIGRATIONS: &[&str] = &[
+    THE_RECORD,
+    MIRROR_QUEUE,
+    TRANSCRIPT_SEARCH,
+    WHAT_A_RECORDING_LOST,
+    THE_WATCHLIST,
+    WHAT_THE_CALENDAR_KNEW,
+    WHAT_DIARIZATION_KEEPS,
+    NOTES_AND_SUMMARY,
+    WHAT_A_SUMMARY_LOST,
+    VOICE_SAMPLES_AND_THE_PRUNE,
+    THE_DIARIZATION_MARK,
+    DIARIZE_QUEUE,
+    A_DELETED_VOICEPRINT_STAYS_DELETED,
+    ONE_OPERATOR,
 ];
 
 /// The wipe a model change owes, **written and deliberately not registered**.
@@ -578,6 +616,62 @@ pub fn configure(connection: &Connection) -> rusqlite::Result<()> {
 mod tests {
     use super::*;
 
+    /// How many migrations run before this one — the schema exactly as it
+    /// stood the instant before that upgrade applied.
+    ///
+    /// Written as bare numbers, the three tests below were correct only by
+    /// coincidence of the current order. Each one puts a database into the
+    /// state preceding one particular migration and asserts what happens when
+    /// it runs, and `MIGRATIONS[..10]` says a position rather than an upgrade:
+    /// insert anything ahead of it and the test still passes while silently
+    /// being about a different migration, which is the failure a test cannot
+    /// report because it no longer knows what it was for.
+    ///
+    /// Appending — which is all registering the pending wipe would do — never
+    /// moved them. That is why this is a prefactor rather than a bug fix: it
+    /// costs nothing now and removes the trap before anyone goes near the
+    /// order.
+    fn before(migration: &str) -> usize {
+        let mut found = MIGRATIONS
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| **candidate == migration);
+        let (index, _) = found.next().expect("a migration that is in MIGRATIONS");
+        // Two identical bodies would make the answer arbitrary, and would be a
+        // bug in its own right: the second could never apply to a History that
+        // had the first.
+        assert!(
+            found.next().is_none(),
+            "two migrations with the same body: the index would be a guess"
+        );
+        index
+    }
+
+    /// `before` can only answer if no two migrations are the same text.
+    ///
+    /// It is the assumption the three upgrade-path tests now rest on, and a
+    /// duplicate would be a defect in its own right — the second copy could
+    /// never apply to a History that already had the first, so it would sit in
+    /// the list doing nothing while still advancing `user_version`.
+    #[test]
+    fn every_migration_is_distinct_so_naming_one_is_unambiguous() {
+        let mut seen = std::collections::BTreeSet::new();
+        for migration in MIGRATIONS {
+            assert!(
+                seen.insert(*migration),
+                "two migrations share a body; `before` would be a guess"
+            );
+        }
+        assert_eq!(seen.len(), MIGRATIONS.len());
+        // And each name resolves to its own position, in the order the doc
+        // comments number them.
+        assert_eq!(before(THE_RECORD), 0);
+        assert_eq!(before(VOICE_SAMPLES_AND_THE_PRUNE), 9);
+        assert_eq!(before(THE_DIARIZATION_MARK), 10);
+        assert_eq!(before(DIARIZE_QUEUE), 11);
+        assert_eq!(before(ONE_OPERATOR), MIGRATIONS.len() - 1);
+    }
+
     #[test]
     fn migrations_apply_and_are_idempotent() {
         let mut connection = Connection::open_in_memory().expect("open");
@@ -594,8 +688,9 @@ mod tests {
     #[test]
     fn a_database_already_carrying_the_diarization_mark_still_gets_the_queue() {
         // The real upgrade path for anyone who ran the build that shipped
-        // migration 11. Two branches appended migrations after the same base
-        // and both wanted position 11; `diarized_at` kept it because it was
+        // `THE_DIARIZATION_MARK`. Two branches appended migrations after the
+        // same base and both wanted position 11; `diarized_at` kept it
+        // because it was
         // already pushed, and the queue moved to 12 (DECISIONS Q134).
         //
         // Had the order gone the other way, a database sitting at
@@ -604,7 +699,7 @@ mod tests {
         // from here, as a table that does not exist.
         let mut connection = Connection::open_in_memory().expect("open");
         configure(&connection).expect("configure");
-        let shipped = 11;
+        let shipped = before(DIARIZE_QUEUE);
         for migration in &MIGRATIONS[..shipped] {
             connection.execute_batch(migration).expect("migrate");
         }
@@ -648,7 +743,7 @@ mod tests {
         // Meetings that prompted it had zero (DECISIONS Q125).
         let mut connection = Connection::open_in_memory().expect("open");
         configure(&connection).expect("configure");
-        let before_mark = 10;
+        let before_mark = before(THE_DIARIZATION_MARK);
         for migration in &MIGRATIONS[..before_mark] {
             connection.execute_batch(migration).expect("migrate");
         }
@@ -685,14 +780,15 @@ mod tests {
 
     #[test]
     fn the_prune_removes_only_speakers_nothing_references() {
-        // Migration 10 runs once over a History that already holds the
-        // Speakers the old policy minted. Everything the record points at
-        // has to survive it: an attributed voice, a corrected one, a named
-        // one, the Operator. Only the row nobody references goes.
+        // `VOICE_SAMPLES_AND_THE_PRUNE` runs once over a History that
+        // already holds the Speakers the old policy minted. Everything the
+        // record points at has to survive it: an attributed voice, a
+        // corrected one, a named one, the Operator. Only the row nobody
+        // references goes.
         let mut connection = Connection::open_in_memory().expect("open");
         configure(&connection).expect("configure");
         // Up to the migration before the prune, then seed, then prune.
-        let before_prune = 9;
+        let before_prune = before(VOICE_SAMPLES_AND_THE_PRUNE);
         for migration in &MIGRATIONS[..before_prune] {
             connection.execute_batch(migration).expect("migrate");
         }
