@@ -116,6 +116,26 @@ pub struct VoiceprintId {
     /// only the weights: a version 1 and a version 2 vector of the same
     /// audio agree at cosine 0.36 and must never be compared.
     pub version: &'static str,
+    /// What the graph eats. Part of the identity rather than a loader
+    /// argument because a front end mismatch does not fail — it returns a
+    /// plausible vector of the wrong thing (DECISIONS Q115), so the one
+    /// place that names the model is the one place that names its input.
+    pub frontend: Frontend,
+}
+
+/// How an embedding graph takes its audio.
+///
+/// Two of the candidates measured for this product differ here and nowhere
+/// visible: WeSpeaker wants Kaldi filterbank features computed on the Rust
+/// side, ReDimNet2 wants raw 16 kHz samples and carries its own mel. The
+/// bake-off that first chose between them ran both through one front end,
+/// which is the cautionary tale `VoiceprintId::frontend` exists for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Frontend {
+    /// Kaldi fbank computed here, fed as `input_features`.
+    Fbank,
+    /// Raw 16 kHz waveform, fed as `waveform`; the graph owns the mel.
+    Waveform,
 }
 
 /// One required artifact.
@@ -229,30 +249,45 @@ pub const DIARIZE_SEGMENTATION: ModelEntry = ModelEntry {
     voiceprint: None,
 };
 
-/// Speaker embedding: the vector a Voiceprint is made of.
+/// The embedding that makes a Voiceprint: ReDimNet2-B3, trained on
+/// VoxBlink2 + VoxCeleb2 with large-margin fine-tuning (PalabraAI/redimnet2
+/// v1.0.0, MIT). Adopted 2026-09-17 on the measured record (DECISIONS Q140,
+/// Q143): 26.01% against WeSpeaker's 29.13% DER on AMI dev, 24.62% against
+/// 28.64% held-out, all of the held-out gap confusion.
 ///
-/// `input_features [B, T, 80]` — the 80-mel filterbank `diarize::fbank`
-/// computes — and `last_hidden_state [B, 256]`.
+/// The graph takes raw 16 kHz waveform and owns its mel front end, so the
+/// entry says [`Frontend::Waveform`] and `live` feeds it samples; WeSpeaker
+/// wanted Kaldi fbank computed here. The file is our own export —
+/// `scripts/export-redimnet2.py`, checked at cosine 1.0 against PyTorch —
+/// published unchanged to a Hugging Face org this product controls, the
+/// same host as every other Provisioned Model (ADR-0034).
+///
+/// Same `filename` as the model it replaces, on purpose: an installed copy
+/// still holding WeSpeaker's 26,535,549 bytes under that name reads as
+/// `Corrupted` on size and is fetched afresh. Its Voiceprints are 256 wide
+/// and stamped with the old identity; `resolve` refuses them by name, and
+/// the pending model-change wipe (`store::schema`) is what clears them.
 pub const DIARIZE_EMBEDDING: ModelEntry = ModelEntry {
-    key: "wespeaker-voxceleb-resnet34-lm",
-    display_name: "WeSpeaker VoxCeleb ResNet34-LM",
+    key: "redimnet2-b3-vox2-lm",
+    display_name: "ReDimNet2-B3 (VoxBlink2 + VoxCeleb2, LM)",
     filename: "diarize-embedding.onnx",
-    remote_path: "onnx-community/wespeaker-voxceleb-resnet34-LM/resolve/main/onnx/model.onnx",
+    remote_path: "soulmachine/evertranscript-redimnet2-b3-vox2-lm/resolve/main/redimnet2-b3-vox2-lm.onnx",
     integrity: Integrity {
-        size_bytes: 26_535_549,
-        sha256: Some("3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb"),
+        size_bytes: 18_045_013,
+        sha256: Some("dcecdce7d52bbd4739b24d0874359ec564d43f4b3a392f0104f505593b566d41"),
         crc32: None,
     },
     purpose: ModelPurpose::Diarization,
     required: true,
     provenance: Provenance {
-        license: "Apache-2.0",
-        source: "https://huggingface.co/onnx-community/wespeaker-voxceleb-resnet34-LM",
+        license: "MIT",
+        source: "https://huggingface.co/soulmachine/evertranscript-redimnet2-b3-vox2-lm",
     },
     driving: None,
     voiceprint: Some(VoiceprintId {
-        model: "wespeaker-voxceleb-resnet34-LM",
-        version: "2",
+        model: "redimnet2-b3",
+        version: "1",
+        frontend: Frontend::Waveform,
     }),
 };
 
@@ -371,8 +406,9 @@ mod tests {
         let stored = DIARIZE_EMBEDDING.voiceprint();
         assert_eq!(
             (stored.model, stored.version),
-            ("wespeaker-voxceleb-resnet34-LM", "2"),
-            "this is what is written on every Voiceprint in every installed History"
+            ("redimnet2-b3", "1"),
+            "this is what is written on every Voiceprint from now on; \
+             the earlier WeSpeaker stamp is what the model-change wipe clears"
         );
         assert_ne!(
             DIARIZE_EMBEDDING.key, stored.model,

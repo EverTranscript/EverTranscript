@@ -156,32 +156,18 @@ fn open(path: &Path) -> Result<Session, DiarizeError> {
 pub struct Embedder {
     session: Session,
     mel: MelBank,
-    frontend: Frontend,
     identity: VoiceprintId,
 }
 
-/// Where the model's filterbank lives.
-///
-/// Two embeddings in this product's history want different things at their
-/// input, and the difference is not a detail of either: WeSpeaker is handed
-/// Kaldi features this crate computes, and ReDimNet2 is handed the waveform
-/// and computes its own inside the graph. Keeping both selectable is what
-/// lets the two be compared on one pipeline — the only way to attribute a
-/// difference to the model rather than to everything else that moved with
-/// it, which Q115 is the cautionary tale for: the bake-off that chose
-/// between them ran every candidate through a front end that was wrong for
-/// one of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Frontend {
-    /// Kaldi fbank computed here, fed as `input_features`.
-    Fbank,
-    /// Raw 16 kHz waveform, fed as `waveform`; the graph owns the mel.
-    Waveform,
-}
+/// Where the model's filterbank lives — on the registry entry now, beside
+/// the identity it belongs to, so the one place that names the model is the
+/// one place that names its input. Re-exported here because this is where
+/// every caller already looks for it.
+pub use crate::models::registry::Frontend;
 
 impl Embedder {
     pub fn load(path: &Path) -> Result<Self, DiarizeError> {
-        Self::load_with(path, Frontend::Fbank, EMBEDDING_IDENTITY)
+        Self::load_with(path, EMBEDDING_IDENTITY)
     }
 
     /// As [`load`](Self::load), for a harness holding a different model.
@@ -190,16 +176,14 @@ impl Embedder {
     /// was loaded. It used to be the constant, so every vector the A/B
     /// harness produced from ReDimNet2 was labelled WeSpeaker — harmless
     /// while the harness threw its store away, and a silent corruption the
-    /// moment any other model shipped.
-    pub fn load_with(
-        path: &Path,
-        frontend: Frontend,
-        identity: VoiceprintId,
-    ) -> Result<Self, DiarizeError> {
+    /// moment any other model shipped. The front end rides on the identity
+    /// for the same reason: a model fed the other one's input returns a
+    /// plausible vector of the wrong thing, and a caller that could name
+    /// the model and the input separately could name them wrongly.
+    pub fn load_with(path: &Path, identity: VoiceprintId) -> Result<Self, DiarizeError> {
         Ok(Self {
             session: open(path)?,
             mel: MelBank::new(),
-            frontend,
             identity,
         })
     }
@@ -210,13 +194,19 @@ impl Embedder {
     }
 
     pub fn frontend(&self) -> Frontend {
-        self.frontend
+        self.identity.frontend
     }
 
     /// Embeds a stretch of raw audio, for a model that carries its own mel.
     /// `None` when there is too little of it to run the model on.
+    ///
+    /// The floor is the same [`MIN_EMBED_FRAMES`] the fbank path applies,
+    /// spelled in samples: nine frames of `FRAME_LENGTH` at `FRAME_SHIFT`
+    /// span `FRAME_LENGTH + 8 * FRAME_SHIFT` samples, not `9 * FRAME_SHIFT`.
+    /// The two paths must refuse the same audio, or a stretch is a voice
+    /// under one model and a cough under the other.
     pub fn embed_samples(&mut self, samples: &[f32]) -> Result<Option<Vec<f32>>, DiarizeError> {
-        if samples.len() < MIN_EMBED_FRAMES * FRAME_SHIFT {
+        if samples.len() < FRAME_LENGTH + (MIN_EMBED_FRAMES - 1) * FRAME_SHIFT {
             return Ok(None);
         }
         let input =
@@ -259,11 +249,24 @@ impl Embedder {
         Ok(Some(vector))
     }
 
-    /// Embeds a stretch of audio whole: one voice, on its own.
+    /// Embeds a stretch of audio whole: one voice, on its own, in whatever
+    /// form this model takes it.
+    ///
+    /// This is the entry every caller outside the live pass uses — the
+    /// bounded re-seed, the exemplar rebuild — so the front end is chosen
+    /// here and nowhere upstream. It used to compute fbank unconditionally,
+    /// which was right for the one model that shipped and an `ort` input
+    /// error for the other; `observe` never tripped it because it dispatches
+    /// on the front end itself.
     pub fn embed(&mut self, samples: &[f32]) -> Result<Option<Vec<f32>>, DiarizeError> {
-        let features = self.features(samples);
-        let rows: Vec<&[f32]> = features.iter().map(Vec::as_slice).collect();
-        self.embed_frames(&rows)
+        match self.frontend() {
+            Frontend::Waveform => self.embed_samples(samples),
+            Frontend::Fbank => {
+                let features = self.features(samples);
+                let rows: Vec<&[f32]> = features.iter().map(Vec::as_slice).collect();
+                self.embed_frames(&rows)
+            }
+        }
     }
 }
 
@@ -363,7 +366,7 @@ impl LiveDiarizer {
     /// Loads both models. Failure here is [`DiarizeError::Unavailable`] at
     /// the call site, never a lost Meeting.
     pub fn load(segmentation: &Path, embedding: &Path) -> Result<Self, DiarizeError> {
-        Self::load_with(segmentation, embedding, Frontend::Fbank, EMBEDDING_IDENTITY)
+        Self::load_with(segmentation, embedding, EMBEDDING_IDENTITY)
     }
 
     /// How far the window advances, in milliseconds.
@@ -376,19 +379,19 @@ impl LiveDiarizer {
         self
     }
 
-    /// As [`load`](Self::load), choosing which front end the embedding wants
-    /// and what the vectors it produces are labelled with. The measurement
-    /// harness is the caller; production takes the defaults.
+    /// As [`load`](Self::load), choosing which model the embedding is —
+    /// what its vectors are labelled with and, with that, which front end
+    /// it wants. The measurement harness is the caller; production takes
+    /// the default.
     pub fn load_with(
         segmentation: &Path,
         embedding: &Path,
-        frontend: Frontend,
         identity: VoiceprintId,
     ) -> Result<Self, DiarizeError> {
         Ok(Self {
             step: SEGMENT_STEP,
             segmentation: open(segmentation)?,
-            embedder: Embedder::load_with(embedding, frontend, identity)?,
+            embedder: Embedder::load_with(embedding, identity)?,
         })
     }
 
@@ -1145,8 +1148,9 @@ mod tests {
     #[test]
     fn the_stamp_names_the_model_that_actually_ran() {
         let other = VoiceprintId {
-            model: "redimnet2-b3",
-            version: "1",
+            model: "wespeaker-voxceleb-resnet34-LM",
+            version: "2",
+            frontend: Frontend::Fbank,
         };
         let observed = Observed {
             embedding: other,
@@ -1157,7 +1161,7 @@ mod tests {
         let one = stamped.values().next().expect("one observation");
         assert_eq!(
             (one.model.as_str(), one.model_version.as_str()),
-            ("redimnet2-b3", "1")
+            ("wespeaker-voxceleb-resnet34-LM", "2")
         );
         assert_ne!(one.model, EMBEDDING_MODEL);
     }
@@ -1172,8 +1176,9 @@ mod tests {
     fn the_assembled_stamp_names_the_model_that_actually_ran() {
         let observed = Observed {
             embedding: VoiceprintId {
-                model: "redimnet2-b3",
-                version: "1",
+                model: "wespeaker-voxceleb-resnet34-LM",
+                version: "2",
+                frontend: Frontend::Fbank,
             },
             observations: vec![observation(
                 0,
@@ -1189,7 +1194,7 @@ mod tests {
         let embedding = assembled.embeddings.values().next().expect("one voice");
         assert_eq!(
             (embedding.model.as_str(), embedding.model_version.as_str()),
-            ("redimnet2-b3", "1")
+            ("wespeaker-voxceleb-resnet34-LM", "2")
         );
         assert_ne!(embedding.model, EMBEDDING_MODEL);
     }
@@ -1199,7 +1204,7 @@ mod tests {
     fn production_stamps_what_the_registry_says_it_stores() {
         assert_eq!(
             (EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION),
-            ("wespeaker-voxceleb-resnet34-LM", "2")
+            ("redimnet2-b3", "1")
         );
         assert_eq!(
             EMBEDDING_IDENTITY,
@@ -1709,7 +1714,7 @@ mod tests {
             .embed(&speech)
             .expect("embeds")
             .expect("a vector");
-        assert_eq!(vector.len(), 256, "the embedding model's stated width");
+        assert_eq!(vector.len(), 192, "the embedding model's stated width");
         let norm: f32 = vector.iter().map(|v| v * v).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 1e-3, "L2-normalized, got {norm}");
 

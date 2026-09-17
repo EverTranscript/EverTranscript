@@ -120,44 +120,49 @@ fn corpus() -> Option<Vec<Meeting>> {
 /// every candidate through one front end, and it was the wrong one for the
 /// model it rejected, so the comparison measured our feature extraction.
 ///
-///   EVERTRANSCRIPT_EMBEDDING=wespeaker   (default) diarize-embedding.onnx
-///   EVERTRANSCRIPT_EMBEDDING=redimnet2             diarize-embedding-redimnet2.onnx
-fn embedding_under_test() -> (VoiceprintId, PathBuf, diarize::live::Frontend) {
+///   EVERTRANSCRIPT_EMBEDDING=redimnet2   (default) diarize-embedding.onnx
+///   EVERTRANSCRIPT_EMBEDDING=wespeaker             diarize-embedding-wespeaker.onnx
+///
+/// The default is what production ships (ADR-0037 as adopted 2026-09-17);
+/// WeSpeaker stays measurable under its own name and file so the record's
+/// comparisons can be re-run.
+fn embedding_under_test() -> (VoiceprintId, PathBuf) {
     embedding_named(&embedding_name())
 }
 
 /// Which embedding the ordinary single-model runs use.
 fn embedding_name() -> String {
-    std::env::var("EVERTRANSCRIPT_EMBEDDING").unwrap_or_else(|_| "wespeaker".into())
+    std::env::var("EVERTRANSCRIPT_EMBEDDING").unwrap_or_else(|_| "redimnet2".into())
 }
 
-/// One named embedding: what its vectors are stamped as, which file runs it,
-/// and which front end it wants.
+/// One named embedding: what its vectors are stamped as — which carries the
+/// front end it wants — and which file runs it.
 ///
 /// Split out of [`embedding_under_test`] because the split-model grid needs
 /// two of them alive in one process, and both must come from this one table.
 /// A second table would be free to disagree about which front end a model
 /// takes, and a front end mismatch does not fail — it returns a plausible
 /// vector of the wrong thing.
-fn embedding_named(name: &str) -> (VoiceprintId, PathBuf, diarize::live::Frontend) {
+fn embedding_named(name: &str) -> (VoiceprintId, PathBuf) {
     match name {
-        "redimnet2" => (
-            VoiceprintId {
-                model: "redimnet2-b3",
-                version: "1",
-            },
-            "diarize-embedding-redimnet2.onnx".into(),
-            diarize::live::Frontend::Waveform,
-        ),
         // The identity production stamps, so the replay's gallery lookup
         // and the vectors it stores are in one space rather than two that
         // happen to be the same width.
-        "wespeaker" => (
+        "redimnet2" => (
             diarize::live::EMBEDDING_IDENTITY,
             "diarize-embedding.onnx".into(),
-            diarize::live::Frontend::Fbank,
         ),
-        other => panic!("EVERTRANSCRIPT_EMBEDDING={other}: expected wespeaker or redimnet2"),
+        // The model production shipped until 2026-09-17, under the stamp
+        // its Voiceprints carry in every History from before the change.
+        "wespeaker" => (
+            VoiceprintId {
+                model: "wespeaker-voxceleb-resnet34-LM",
+                version: "2",
+                frontend: diarize::live::Frontend::Fbank,
+            },
+            "diarize-embedding-wespeaker.onnx".into(),
+        ),
+        other => panic!("EVERTRANSCRIPT_EMBEDDING={other}: expected redimnet2 or wespeaker"),
     }
 }
 
@@ -218,11 +223,10 @@ fn model_directory() -> PathBuf {
 struct Which {
     id: VoiceprintId,
     path: PathBuf,
-    frontend: diarize::live::Frontend,
 }
 
 fn which(name: &str) -> Which {
-    let (id, file, frontend) = embedding_named(name);
+    let (id, file) = embedding_named(name);
     let path = model_directory().join(&file);
     assert!(
         path.exists(),
@@ -231,7 +235,7 @@ fn which(name: &str) -> Which {
          report a perfect score on an empty hypothesis.",
         path.display()
     );
-    Which { id, path, frontend }
+    Which { id, path }
 }
 
 fn models() -> (PathBuf, Which) {
@@ -521,7 +525,7 @@ fn provenance(meeting: &Meeting, segmentation: &Path, embedding: &Which) -> Stri
         embedding.id.model,
         embedding.id.version,
         digest(&embedding.path),
-        embedding.frontend,
+        embedding.id.frontend,
         step_under_test(),
     )
 }
@@ -653,14 +657,10 @@ fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Which) -> In
     let samples = read_wav(&meeting.audio);
     let audio_seconds = samples.len() as f64 / diarize::fbank::SAMPLE_RATE as f64;
 
-    let mut diarizer = diarize::live::LiveDiarizer::load_with(
-        segmentation,
-        &embedding.path,
-        embedding.frontend,
-        embedding.id,
-    )
-    .expect("load models")
-    .with_step(step_under_test());
+    let mut diarizer =
+        diarize::live::LiveDiarizer::load_with(segmentation, &embedding.path, embedding.id)
+            .expect("load models")
+            .with_step(step_under_test());
 
     // Wall clock per meeting, because a ceiling is one of the things being
     // fixed: clustering was cubic, and 70 s at 1,259 windows projected to a
@@ -2507,9 +2507,9 @@ fn audio_that_changed_under_the_same_name_invalidates_the_snapshot() {
         id: VoiceprintId {
             model: "wespeaker",
             version: "1",
+            frontend: diarize::live::Frontend::Fbank,
         },
         path: model.clone(),
-        frontend: diarize::live::Frontend::Fbank,
     };
 
     std::fs::write(&audio, b"the audio as it was").expect("write");
@@ -2637,6 +2637,7 @@ fn two_passes() -> (diarize::live::Observed, diarize::live::Observed) {
         embedding: VoiceprintId {
             model: "redimnet2-b3",
             version: "1",
+            frontend: diarize::live::Frontend::Waveform,
         },
         observations: vec![
             voice(2, 1, 0, 11_000, vec![0.0, 0.0, 1.0]),
@@ -2744,6 +2745,7 @@ fn unequal_support() -> (diarize::live::Observed, diarize::live::Observed) {
         embedding: VoiceprintId {
             model: "redimnet2-b3",
             version: "1",
+            frontend: diarize::live::Frontend::Waveform,
         },
         observations: vec![
             // Covers window 0 only, and offers a window the partition has
