@@ -185,13 +185,29 @@ pub struct DiarizeJob {
 
 /// What the blocking half of a run handed back: the diarizer's own answer,
 /// and the Voiceprints it re-embedded on the way past (Q115).
-type RunResult = std::result::Result<
-    (
-        std::result::Result<crate::diarize::Diarization, crate::diarize::DiarizeError>,
-        Vec<(String, Option<Vec<f32>>)>,
-    ),
-    anyhow::Error,
->;
+type RunResult = std::result::Result<Ran, anyhow::Error>;
+
+/// What one inference pass produced, before anything is written.
+struct Ran {
+    result: std::result::Result<crate::diarize::Diarization, crate::diarize::DiarizeError>,
+    rebuilt: Vec<(String, Option<Vec<f32>>)>,
+    /// Bounded evidence for a bulk re-run, prepared with the same embedder
+    /// the run itself used. `None` for every ordinary run.
+    ///
+    /// `Err` is a preparation that failed — a recording that could not be
+    /// read, a model that would not run. **Not folded into `None`**: nothing
+    /// to relearn and could-not-relearn have to reach the writer as different
+    /// answers, or a Meeting whose audio was briefly unreadable is walked,
+    /// counted done, and quietly loses the voices it was queued to recover.
+    prepared: Option<std::result::Result<Prepared, String>>,
+}
+
+/// One Meeting's re-seeding, computed outside any transaction.
+struct Prepared {
+    plan: crate::diarize::reseed::Plan,
+    /// Parallel to `plan.ranges`.
+    vectors: Vec<Option<Vec<f32>>>,
+}
 
 /// What a Diarization run did, as the queue worker has to read it.
 ///
@@ -219,6 +235,31 @@ pub enum DiarizeOutcome {
     /// anything. `diarize/cancel` takes the queue row out itself, so this
     /// answer leaves the row alone rather than deleting what is already gone.
     Cancelled,
+    /// A bulk re-run could not relearn this Meeting's voices — the evidence
+    /// would not embed, or the record moved under it while the model ran —
+    /// and the transaction was dropped rather than committed. **Nothing was
+    /// written, and the Meeting is still owed**, so the row stays.
+    ///
+    /// Apart from `Skipped` because the next pass can succeed where this one
+    /// did not, and apart from `Paused` because nobody is recording: reported
+    /// as a pause it would tell an Operator the machine is waiting for a call
+    /// that is not happening.
+    Owed,
+}
+
+/// Passes a Meeting still owed gets before it is given up on.
+const RESEED_ATTEMPTS: u8 = 2;
+
+/// What the attribution transaction did.
+///
+/// Three answers, not two: a stop found waiting and a re-seeding whose plan
+/// no longer matches the record both write nothing, and the queue has to tell
+/// them apart. A stop has already taken the row out; a Meeting still owed
+/// keeps it.
+enum Committed {
+    Wrote(usize),
+    Stopped,
+    Owed,
 }
 
 /// Whether background Diarization has to stand down right now.
@@ -1583,122 +1624,6 @@ impl Core {
     /// onto a Transcript that already exists. Nothing on this path can cost
     /// the recording — a missing model, a corrupt file, or a panicking
     /// runtime all leave the Meeting exactly as it was, unattributed.
-    /// Rebuilds one Meeting's exemplars from what it already says, before a
-    /// re-run redraws them. `None` when there was nothing to do.
-    ///
-    /// **Inert unless this Meeting is the bulk re-run's own.**
-    /// [`rerun::is_bulk_work`](crate::store::rerun::is_bulk_work) answers
-    /// `false` on every History in the field, because the re-run tables are
-    /// not in `MIGRATIONS`. That is the gate, and it is structural rather
-    /// than a flag somebody can clear: there is no configuration of a current
-    /// build in which this reads a plan, let alone writes one.
-    ///
-    /// **It runs before the Meeting is re-diarized, and the order is the
-    /// whole point.** [`reseed::plan`](crate::diarize::reseed::plan) reads
-    /// `transcript_segments.speaker_id` with the Operator's corrections on
-    /// top — the attribution the *previous* model left. Re-diarizing
-    /// overwrites that column, and after 05's wipe it overwrites it with
-    /// fresh pseudonyms, because there are no Voiceprints left to resolve
-    /// against. Run afterwards, this would find a named owner only where a
-    /// correction happened to survive, and [`commit`](crate::diarize::reseed::commit)
-    /// would refuse the rest as [`Moved`](crate::diarize::reseed::Refused::Moved)
-    /// — the run having moved the very record it revalidates against. Run
-    /// first, it relearns the named voices from what the Operator already
-    /// said, and the run that follows has real Voiceprints to match its new
-    /// clusters to. That is what makes a name survive a model change.
-    ///
-    /// **Reading and embedding are outside the write transaction; only the
-    /// replacement is inside one.** Embedding a Meeting's ranges is minutes
-    /// of model time, and holding History's single writer for it would stall
-    /// every Client. `commit` re-reads the plan on the writer and refuses if
-    /// anything moved meanwhile, which is what makes the unlocked gap safe
-    /// rather than merely fast.
-    ///
-    /// A refusal is logged and the Meeting is re-diarized anyway. It keeps
-    /// its words, its corrections and its names; what it loses is this
-    /// Meeting's contribution to recognizing those voices, which is the same
-    /// outcome as a Meeting with no Kept Audio.
-    async fn reseed_for_rerun(
-        &self,
-        meeting_id: &str,
-        embedding: &std::path::Path,
-    ) -> Result<Option<usize>> {
-        use crate::diarize;
-
-        let wanted = meeting_id.to_string();
-        let Some(plan) = self
-            .store
-            .read(move |connection| {
-                if !crate::store::rerun::is_bulk_work(connection, &wanted)? {
-                    return Ok(None);
-                }
-                diarize::reseed::plan(connection, &wanted)
-            })
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        let history_dir = self.history_dir.clone();
-        let embedding = embedding.to_path_buf();
-        let embedded = plan.clone();
-        // The model is CPU-bound C++, like the run's own.
-        let vectors = tokio::task::spawn_blocking(move || -> Result<Vec<Option<Vec<f32>>>> {
-            // A plan with no ranges still has to commit: a Speaker whose every
-            // segment was corrected away keeps no evidence here and is in
-            // `owners` precisely so its Voiceprint is recomputed without any.
-            // There is simply nothing to run a model over, and loading one to
-            // embed nothing would make that case need an ONNX file to do
-            // nothing with.
-            if embedded.ranges.is_empty() {
-                return Ok(Vec::new());
-            }
-            // The embedder alone: seeding re-embeds ranges the record already
-            // names, so there is nothing for segmentation to decide.
-            let mut embedder = diarize::live::Embedder::load(&embedding)
-                .map_err(|error| anyhow::anyhow!("{error}"))?;
-            diarize::reseed::embed_ranges(
-                &embedded,
-                &history_dir,
-                &mut |path, channel, start_ms, end_ms| {
-                    audio::sample::read(path, channel, start_ms, end_ms)
-                },
-                &mut |samples| embedder.embed(samples),
-            )
-        })
-        .await??;
-
-        let written = self
-            .store
-            .write(move |connection| {
-                let transaction = connection.transaction()?;
-                let outcome = diarize::reseed::commit(
-                    &transaction,
-                    &plan,
-                    &vectors,
-                    diarize::live::EMBEDDING_MODEL,
-                    diarize::live::EMBEDDING_MODEL_VERSION,
-                )?;
-                // Committed either way: a refusal wrote nothing, so this
-                // closes an empty transaction rather than discarding work.
-                transaction.commit()?;
-                Ok(outcome)
-            })
-            .await?;
-
-        match written {
-            Ok(exemplars) => Ok(Some(exemplars)),
-            Err(refused) => {
-                tracing::warn!(
-                    meeting = %meeting_id,
-                    ?refused,
-                    "could not relearn this Meeting's voices; it keeps its names but not its evidence"
-                );
-                Ok(None)
-            }
-        }
-    }
-
     pub async fn diarize_meeting(
         &self,
         meeting_id: &str,
@@ -1749,23 +1674,25 @@ impl Core {
         let slot =
             diarize::runner::Slot::claim(meeting_id).map_err(|busy| anyhow::anyhow!("{busy}"))?;
 
-        // Before the stale read below, and before the run: seeding replaces
-        // this Meeting's exemplars, so reading the stale list first would
-        // hand the rebuild rows this has already superseded. Inert unless a
-        // bulk re-run owns this Meeting, which no History in the field can
-        // say — see `reseed_for_rerun`.
-        match self.reseed_for_rerun(meeting_id, &embedding).await {
-            Ok(Some(exemplars)) => {
-                tracing::info!(meeting = %meeting_id, exemplars, "relearned a Meeting's voices for the re-run")
-            }
-            Ok(None) => {}
-            // Never fatal. The re-run's whole purpose is to recover
-            // recognition, and failing to recover it for one Meeting is not a
-            // reason to leave that Meeting unattributed as well.
-            Err(error) => {
-                tracing::warn!(meeting = %meeting_id, %error, "could not relearn this Meeting's voices")
-            }
-        }
+        // What this Meeting already says about its named voices, read before
+        // the run and embedded during it. Only a bulk re-run's own Meeting
+        // has one: `is_bulk_work` is false on every History in the field,
+        // because the re-run tables are not in `MIGRATIONS`.
+        //
+        // Read here rather than on the writer because `plan` is a read and
+        // the embedding that follows is minutes of model time; the copy the
+        // writer trusts is the one `reseed::commit` re-reads inside the
+        // transaction, against which this one is only a proposal.
+        let wanted = meeting_id.to_string();
+        let plan = self
+            .store
+            .read(move |connection| {
+                if !crate::store::rerun::is_bulk_work(connection, &wanted)? {
+                    return Ok(None);
+                }
+                diarize::reseed::plan(connection, &wanted)
+            })
+            .await?;
 
         // Evidence from a previous model or front end, to be rebuilt from
         // its kept audio before this run reads seeds — otherwise every
@@ -1844,7 +1771,11 @@ impl Core {
             // that began while this run was waiting for its slot is noticed
             // here rather than after them.
             if stand_down_for_recording(stands_down.as_ref(), &stop_in_run, &stood_down_in_run) {
-                return Ok((Err(diarize::DiarizeError::Cancelled), Vec::new()));
+                return Ok(Ran {
+                    result: Err(diarize::DiarizeError::Cancelled),
+                    rebuilt: Vec::new(),
+                    prepared: None,
+                });
             }
             let mut decoded = diarize::runner::decode(&audio_path)?;
             // The far end comes back through the speakers into the
@@ -1860,10 +1791,32 @@ impl Core {
             let mut diarizer = diarize::live::LiveDiarizer::load(&segmentation, &embedding)
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
             if stand_down_for_recording(stands_down.as_ref(), &stop_in_run, &stood_down_in_run) {
-                return Ok((Err(diarize::DiarizeError::Cancelled), Vec::new()));
+                return Ok(Ran {
+                    result: Err(diarize::DiarizeError::Cancelled),
+                    rebuilt: Vec::new(),
+                    prepared: None,
+                });
             }
             let rebuilt = diarize::runner::rebuild(&stale, &history_dir, &mut |samples| {
                 diarizer.embedder().embed(samples)
+            });
+
+            // The same embedder the run is about to use, so the bounded
+            // vectors and this run's clusters are in one space and the
+            // resolve below can compare them. Before the pass rather than
+            // after it, because the pass is the long part and a stop during
+            // it should not have this still to do.
+            let prepared = plan.map(|plan| {
+                diarize::reseed::embed_ranges(
+                    &plan,
+                    &history_dir,
+                    &mut |path, channel, start_ms, end_ms| {
+                        audio::sample::read(path, channel, start_ms, end_ms)
+                    },
+                    &mut |samples| diarizer.embedder().embed(samples),
+                )
+                .map(|vectors| Prepared { plan, vectors })
+                .map_err(|error| error.to_string())
             });
 
             let mut last_percent = u64::MAX;
@@ -1894,7 +1847,11 @@ impl Core {
                 },
                 &cancel,
             );
-            Ok((result, rebuilt))
+            Ok(Ran {
+                result,
+                rebuilt,
+                prepared,
+            })
         })
         .await;
         // Not `?`. A `JoinError` is the task panicking outside `run_guarded`'s
@@ -1968,13 +1925,22 @@ impl Core {
             }
         };
 
-        let (diarization, rebuilt) = match outcome {
+        let (diarization, rebuilt, prepared) = match outcome {
             // Not checked here: the only check that means anything is the one
             // inside the writer closure below, and a second one on this side of
             // the queue would just be an earlier answer to the same question.
-            Ok((Ok(diarization), rebuilt)) => (diarization, rebuilt),
-            Ok((Err(diarize::DiarizeError::Cancelled), _)) => return Ok(stopped()),
-            Ok((Err(error), _)) => {
+            Ok(Ran {
+                result: Ok(diarization),
+                rebuilt,
+                prepared,
+            }) => (diarization, rebuilt, prepared),
+            Ok(Ran {
+                result: Err(diarize::DiarizeError::Cancelled),
+                ..
+            }) => return Ok(stopped()),
+            Ok(Ran {
+                result: Err(error), ..
+            }) => {
                 tracing::warn!(%error, "diarization did not run; the Meeting is unattributed");
                 return Ok(DiarizeOutcome::Skipped);
             }
@@ -1982,6 +1948,23 @@ impl Core {
                 tracing::warn!(%error, "diarization failed; the Meeting is unattributed");
                 return Ok(DiarizeOutcome::Skipped);
             }
+        };
+
+        // A re-seeding that could not be prepared is not a Meeting that
+        // cannot be diarized. Skipping here would take it out of the line and
+        // count it walked, which is the one thing a failure must not buy: the
+        // backlog exists to recover these voices, and reporting success for a
+        // Meeting whose evidence was never rebuilt loses them silently.
+        let prepared = match prepared {
+            Some(Err(error)) => {
+                tracing::warn!(
+                    %error,
+                    "could not prepare this Meeting's voices for the re-run; it stays owed"
+                );
+                return Ok(DiarizeOutcome::Owed);
+            }
+            Some(Ok(prepared)) => Some(prepared),
+            None => None,
         };
 
         let meeting_id = meeting_id.to_string();
@@ -2003,7 +1986,7 @@ impl Core {
                     &stood_down_at_commit,
                 );
                 if stop_at_commit.is_cancelled() {
-                    return Ok(None);
+                    return Ok(Committed::Stopped);
                 }
                 // One transaction: a re-run withdraws the previous run's
                 // evidence before it writes its own, and a Core that died
@@ -2037,6 +2020,65 @@ impl Core {
                 // flag — otherwise it sits among every other seed and
                 // matches anyway, and the gate is decorative (ADR-0029 as
                 // amended).
+                // The re-run's own half, and every part of it is inside this
+                // transaction on purpose: the bounded evidence, the
+                // attribution it supports, and the queue row all commit or
+                // none of them do. A failure below therefore cannot leave a
+                // Meeting half-relearned, and a stop cannot leave evidence
+                // behind for a walk that was never counted.
+                let rebuilt_evidence = match prepared {
+                    None => diarize::cluster::Rebuilt::default(),
+                    Some(prepared) => {
+                        // Membership is asked again here, on the writer. A
+                        // bulk stop can land between the plan being read and
+                        // this closure reaching the front of the writer's
+                        // queue, and re-seeding a Meeting the backlog has
+                        // given up on would write evidence for a walk nobody
+                        // is counting.
+                        if !crate::store::rerun::is_bulk_work(&transaction, &meeting_id)? {
+                            return Ok(Committed::Owed);
+                        }
+                        // Before `apply` below, which replaces exactly what
+                        // this reads: the previous model's attribution with
+                        // the Operator's corrections on top.
+                        let claims = diarize::cluster::claims(&transaction, &reconciliation)?;
+                        let written = diarize::reseed::commit(
+                            &transaction,
+                            &prepared.plan,
+                            &prepared.vectors,
+                            diarize::live::EMBEDDING_MODEL,
+                            diarize::live::EMBEDDING_MODEL_VERSION,
+                        )?;
+                        match written {
+                            Ok(exemplars) => {
+                                tracing::info!(
+                                    exemplars,
+                                    "relearned a Meeting's voices for the re-run"
+                                );
+                                diarize::cluster::Rebuilt {
+                                    claimed: claims.claimed,
+                                    reseeded: prepared.plan.owners.clone(),
+                                }
+                            }
+                            // The record moved while the model was running —
+                            // a correction, a rename, a forgetting. The
+                            // vectors describe a world that no longer exists,
+                            // and a fresh plan is the answer rather than
+                            // writing them anyway or walking the Meeting
+                            // without them. Nothing is committed, so the
+                            // attribution this run computed goes too: it
+                            // would otherwise be the half that landed.
+                            Err(refused) => {
+                                tracing::info!(
+                                    ?refused,
+                                    "the record moved while this Meeting was being relearned; it stays owed"
+                                );
+                                return Ok(Committed::Owed);
+                            }
+                        }
+                    }
+                };
+
                 let gate = diarize::operator::match_gate_met(&diarization);
                 let known = diarize::operator::known_operator(
                     &transaction,
@@ -2052,6 +2094,7 @@ impl Core {
                     &diarization.embeddings,
                     &reconciliation.voices(),
                     withheld.as_deref(),
+                    &rebuilt_evidence,
                 )?;
 
                 let facts = diarize::operator::MeetingFacts {
@@ -2106,14 +2149,18 @@ impl Core {
                     swept,
                     "diarization reconciled"
                 );
-                Ok(Some(written))
+                Ok(Committed::Wrote(written))
             })
             .await?;
 
-        // `None` is the writer having found a stop waiting for it. Nothing was
-        // written, so the Meeting's state is what it was before this run.
-        let Some(written) = written else {
-            return Ok(stopped());
+        let written = match written {
+            Committed::Wrote(written) => written,
+            // The writer found a stop waiting for it. Nothing was written, so
+            // the Meeting's state is what it was before this run.
+            Committed::Stopped => return Ok(stopped()),
+            // The transaction was dropped rather than committed, so this run
+            // wrote nothing at all and the Meeting is owed a fresh pass.
+            Committed::Owed => return Ok(DiarizeOutcome::Owed),
         };
 
         self.mirror_wake.notify_one();
@@ -2218,6 +2265,11 @@ impl Core {
         self: std::sync::Arc<Self>,
         shutdown: tokio_util::sync::CancellationToken,
     ) {
+        // How many passes a Meeting still owed gets before it is treated as
+        // unprocessable. Local to the worker because the worker is the only
+        // thing that loops: a direct request gets the answer and decides for
+        // itself.
+        let mut owed: std::collections::BTreeMap<String, u8> = std::collections::BTreeMap::new();
         loop {
             let next = self
                 .store
@@ -2266,7 +2318,38 @@ impl Core {
                 DiarizeOutcome::Paused => {
                     tracing::debug!(meeting = %meeting_id, "a recording has the machine; the backlog waits")
                 }
+                DiarizeOutcome::Owed => {}
             }
+
+            // A Meeting still owed keeps its place at the head of the queue,
+            // so without a bound this loop would re-read it, re-infer and
+            // fail the same way for ever. `Moved` is answered by a fresh plan
+            // and almost always succeeds on the next pass — the correction
+            // that moved it has landed by then — so one retry is what this
+            // buys, and it costs one inference pass rather than an unbounded
+            // number. Beyond that the Meeting is treated as the unprocessable
+            // work it is behaving like, and leaves the line having written
+            // nothing: its words, corrections and names all stand, and what
+            // it loses is this Meeting's contribution to recognizing its
+            // voices, exactly as a Meeting with no Kept Audio does.
+            let outcome = if outcome == DiarizeOutcome::Owed {
+                let attempts = owed.entry(meeting_id.clone()).or_insert(0);
+                *attempts += 1;
+                if *attempts >= RESEED_ATTEMPTS {
+                    tracing::warn!(
+                        meeting = %meeting_id,
+                        attempts = *attempts,
+                        "could not relearn this Meeting's voices; giving up on it"
+                    );
+                    owed.remove(&meeting_id);
+                    DiarizeOutcome::Skipped
+                } else {
+                    outcome
+                }
+            } else {
+                owed.remove(&meeting_id);
+                outcome
+            };
 
             if leaves_the_line_afterwards(outcome) {
                 let done = meeting_id.clone();
@@ -4243,7 +4326,7 @@ mod tests {
     /// Enough for the completion half to have something real to write, so that
     /// "nothing was written" is a property of the stop rather than of an empty
     /// Meeting.
-    async fn diarizable(core: &Arc<Core>) -> (String, impl Fn() -> RunResult) {
+    async fn diarizable(core: &Arc<Core>) -> (String, impl Fn(Option<Prepared>) -> RunResult) {
         use crate::diarize::Diarization;
         use crate::diarize::Embedding;
         use crate::diarize::Turn;
@@ -4273,9 +4356,9 @@ mod tests {
         // Speaker and the control would write nothing for a reason that has
         // nothing to do with any stop.
         let turns = vec![Turn::new(AudioChannel::Mic, 0, 12_000, 0)];
-        let succeeded = move || -> RunResult {
-            Ok((
-                Ok(Diarization {
+        let succeeded = move |prepared: Option<Prepared>| -> RunResult {
+            Ok(Ran {
+                result: Ok(Diarization {
                     turns: turns.clone(),
                     embeddings: [(
                         turns[0].cluster,
@@ -4289,8 +4372,9 @@ mod tests {
                     .into_iter()
                     .collect(),
                 }),
-                Vec::new(),
-            ))
+                rebuilt: Vec::new(),
+                prepared: prepared.map(Ok),
+            })
         };
         (meeting, succeeded)
     }
@@ -4346,7 +4430,7 @@ mod tests {
         let latched = Arc::new(AtomicBool::new(true));
         core.recording.store(false, SeqCst);
         assert_eq!(
-            core.finish_run(&meeting, succeeded(), &stop, &latched, None)
+            core.finish_run(&meeting, succeeded(None), &stop, &latched, None)
                 .await
                 .expect("finish"),
             DiarizeOutcome::Paused,
@@ -4367,7 +4451,7 @@ mod tests {
         assert_eq!(
             core.finish_run(
                 &meeting,
-                succeeded(),
+                succeeded(None),
                 &unset,
                 &unlatched,
                 Some(Arc::clone(&core.recording)),
@@ -4394,7 +4478,7 @@ mod tests {
         assert_eq!(
             core.finish_run(
                 &meeting,
-                succeeded(),
+                succeeded(None),
                 &cancelled,
                 &Arc::new(AtomicBool::new(false)),
                 Some(Arc::clone(&core.recording)),
@@ -4415,7 +4499,7 @@ mod tests {
         let outcome = core
             .finish_run(
                 &meeting,
-                succeeded(),
+                succeeded(None),
                 &Cancel::new(),
                 &Arc::new(AtomicBool::new(false)),
                 Some(Arc::clone(&core.recording)),
@@ -4477,7 +4561,7 @@ mod tests {
         let latched = Arc::new(AtomicBool::new(false));
         let mut completing = Box::pin(core.finish_run(
             &meeting,
-            succeeded(),
+            succeeded(None),
             &stop,
             &latched,
             Some(Arc::clone(&core.recording)),
@@ -4555,127 +4639,413 @@ mod tests {
             .expect("begin")
     }
 
-    /// Gives a named Speaker a Voiceprint and one exemplar from a Meeting.
+    use crate::diarize::Cancel;
+    use rusqlite::OptionalExtension;
+    use std::sync::atomic::AtomicBool;
+
+    /// The whole-cluster vector the run produces. Deliberately unlike any
+    /// bounded vector below, so that a substitution is visible rather than
+    /// having to be argued about.
+    const WHOLE_CLUSTER: [f32; 2] = [0.5, 0.866];
+    /// What the ranges attributed to Alice embed to.
+    const ALICE_BOUNDED: [f32; 2] = [0.0, 1.0];
+    /// And Bob's, pointing the other way so a resolve cannot confuse them.
+    const BOB_BOUNDED: [f32; 2] = [-1.0, 0.0];
+
+    /// A Meeting the bulk re-run owns, with named Speakers attributed in it
+    /// by the previous model, and the plan the worker would have read before
+    /// inference.
     ///
-    /// Enough for `reseed::plan` to name them an owner: it reads
-    /// `speaker_exemplars` for the Meeting as well as its segments, so a
-    /// Speaker whose evidence lives here is one whose Voiceprint this
-    /// Meeting's re-seeding has to recompute — even with nothing left to say
-    /// about them.
-    async fn a_named_speaker_with_evidence_from(core: &Arc<Core>, meeting_id: &str) {
-        let meeting_id = meeting_id.to_string();
+    /// `mixed` puts a second named Speaker's segment in the same cluster, so
+    /// `claims` finds no unanimous owner. That is the case the ranges have to
+    /// survive on their own: a named Speaker's own audio is still theirs when
+    /// the cluster around it comes out holding somebody else too.
+    async fn reseedable(core: &Arc<Core>, mixed: bool) -> (String, crate::diarize::reseed::Plan) {
         core.store
             .write(move |connection| {
                 connection.execute(
-                    "INSERT INTO speakers (id, display_name, confirmed, voiceprint, \
-                     voiceprint_model, voiceprint_model_version, created_at) \
-                     VALUES ('alice', 'Alice', 1, X'0000803F', 'old', '1', 'now')",
+                    "INSERT INTO meetings (id, started_at, created_at, updated_at, audio_path)
+                     VALUES ('m1', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                             '2026-01-01T00:00:00Z', 'm1.wav')",
+                    [],
+                )?;
+                for (id, name) in [("alice", "Alice"), ("bob", "Bob")] {
+                    connection.execute(
+                        "INSERT INTO speakers (id, display_name, confirmed, voiceprint,
+                         voiceprint_model, voiceprint_model_version, created_at)
+                         VALUES (?1, ?2, 1, X'0000803F', 'old', '1', 'now')",
+                        rusqlite::params![id, name],
+                    )?;
+                }
+                // The previous model's evidence, in its own space. Re-seeding
+                // replaces exactly this.
+                connection.execute(
+                    "INSERT INTO speaker_exemplars
+                     (id, speaker_id, meeting_id, embedding, model, model_version,
+                      voiced_ms, source, created_at)
+                     VALUES ('old1', 'alice', 'm1', X'0000803F', 'old', '1', 1000,
+                             'machine', 'now')",
                     [],
                 )?;
                 connection.execute(
-                    "INSERT INTO speaker_exemplars \
-                     (id, speaker_id, meeting_id, embedding, model, model_version, \
-                      voiced_ms, source, created_at) \
-                     VALUES ('e1', 'alice', ?1, X'0000803F', 'old', '1', 1000, 'machine', 'now')",
-                    rusqlite::params![meeting_id],
+                    "INSERT INTO transcript_segments (id, meeting_id, sequence, channel,
+                     start_ms, end_ms, text, speaker_id)
+                     VALUES ('s1', 'm1', 0, 'mic', 0, 11000, 'hello', 'alice')",
+                    [],
                 )?;
+                if mixed {
+                    connection.execute(
+                        "INSERT INTO transcript_segments (id, meeting_id, sequence, channel,
+                         start_ms, end_ms, text, speaker_id)
+                         VALUES ('s2', 'm1', 1, 'mic', 11000, 12000, 'hi', 'bob')",
+                        [],
+                    )?;
+                }
                 Ok(())
             })
             .await
-            .expect("a named speaker");
+            .expect("history");
+        with_rerun_tables(core).await;
+        assert_eq!(begin_rerun(core).await, 1, "the backlog owns this Meeting");
+
+        let plan = core
+            .store
+            .read(|connection| crate::diarize::reseed::plan(connection, "m1"))
+            .await
+            .expect("plan")
+            .expect("kept audio");
+        ("m1".to_string(), plan)
     }
 
-    async fn voiceprint_of(core: &Arc<Core>, id: &str) -> Option<Vec<u8>> {
-        let id = id.to_string();
+    /// The vectors the model would have produced for that plan, in order.
+    fn bounded_for(plan: &crate::diarize::reseed::Plan) -> Vec<Option<Vec<f32>>> {
+        plan.ranges
+            .iter()
+            .map(|range| {
+                Some(match range.speaker_id.as_str() {
+                    "alice" => ALICE_BOUNDED.to_vec(),
+                    _ => BOB_BOUNDED.to_vec(),
+                })
+            })
+            .collect()
+    }
+
+    /// A run over that Meeting whose one cluster carries `WHOLE_CLUSTER`.
+    fn run_over(plan: Option<crate::diarize::reseed::Plan>, vector: [f32; 2]) -> RunResult {
+        use crate::diarize::Diarization;
+        use crate::diarize::Embedding;
+        use crate::diarize::Turn;
+        use evertranscript_protocol::AudioChannel;
+
+        let turns = vec![Turn::new(AudioChannel::Mic, 0, 12_000, 0)];
+        let prepared = plan.map(|plan| {
+            let vectors = bounded_for(&plan);
+            Ok(Prepared { plan, vectors })
+        });
+        Ok(Ran {
+            result: Ok(Diarization {
+                turns: turns.clone(),
+                embeddings: [(
+                    turns[0].cluster,
+                    Embedding::new(
+                        vector.to_vec(),
+                        crate::diarize::live::EMBEDDING_MODEL,
+                        crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                        12_000,
+                    ),
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            rebuilt: Vec::new(),
+            prepared,
+        })
+    }
+
+    /// Every exemplar a Speaker holds for this Meeting, as vectors.
+    async fn exemplars_of(core: &Arc<Core>, speaker_id: &str) -> Vec<Vec<f32>> {
+        let speaker_id = speaker_id.to_string();
+        core.store
+            .read(move |connection| {
+                Ok(crate::store::speakers::exemplars(connection, &speaker_id)?
+                    .into_iter()
+                    .map(|exemplar| exemplar.vector)
+                    .collect())
+            })
+            .await
+            .expect("exemplars")
+    }
+
+    /// Whether any Speaker anywhere holds the whole-cluster vector.
+    async fn anyone_holds_the_cluster_vector(core: &Arc<Core>) -> bool {
+        core.store
+            .read(|connection| {
+                let mut statement =
+                    connection.prepare("SELECT embedding FROM speaker_exemplars")?;
+                let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+                let mut found = false;
+                for row in rows {
+                    let bytes = row?;
+                    let vector: Vec<f32> = bytes
+                        .chunks_exact(4)
+                        .map(|four| f32::from_le_bytes([four[0], four[1], four[2], four[3]]))
+                        .collect();
+                    if vector
+                        .iter()
+                        .zip(WHOLE_CLUSTER.iter())
+                        .all(|(a, b)| (a - b).abs() < 1e-6)
+                        && vector.len() == WHOLE_CLUSTER.len()
+                    {
+                        found = true;
+                    }
+                }
+                Ok(found)
+            })
+            .await
+            .expect("scan")
+    }
+
+    async fn attributed_to(core: &Arc<Core>, segment_id: &str) -> Option<String> {
+        let segment_id = segment_id.to_string();
         core.store
             .read(move |connection| {
                 connection
                     .query_row(
-                        "SELECT voiceprint FROM speakers WHERE id = ?1",
-                        rusqlite::params![id],
-                        |row| row.get::<_, Option<Vec<u8>>>(0),
+                        "SELECT speaker_id FROM transcript_segments WHERE id = ?1",
+                        rusqlite::params![segment_id],
+                        |row| row.get::<_, Option<String>>(0),
                     )
                     .map_err(Into::into)
             })
             .await
-            .expect("voiceprint")
+            .expect("attribution")
     }
 
-    /// **The safety property of the whole re-seeding path.**
-    ///
-    /// Every History in the field lacks the re-run tables, so no Meeting is
-    /// ever the backlog's own and nothing is ever re-seeded. The Meeting here
-    /// has Kept Audio and a named Speaker with evidence in it — everything a
-    /// plan needs — and is still refused at the gate. The models directory is
-    /// empty, so had it got past the gate it would have failed loudly trying
-    /// to load one rather than answering `None`.
-    #[tokio::test]
-    async fn a_history_in_the_field_is_never_reseeded() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        meetings_with_audio(&core, &["m1"]).await;
-        a_named_speaker_with_evidence_from(&core, "m1").await;
-
-        let seeded = core
-            .reseed_for_rerun("m1", &dir.path().join("nothing-here.onnx"))
+    async fn still_queued(core: &Arc<Core>, meeting_id: &str) -> bool {
+        let meeting_id = meeting_id.to_string();
+        core.store
+            .read(move |connection| {
+                Ok(connection
+                    .query_row(
+                        "SELECT 1 FROM diarize_queue WHERE meeting_id = ?1",
+                        rusqlite::params![meeting_id],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some())
+            })
             .await
-            .expect("asking is not an error");
-
-        assert_eq!(seeded, None, "no backlog owns this Meeting, so nothing ran");
-        assert!(
-            voiceprint_of(&core, "alice").await.is_some(),
-            "and Alice's Voiceprint is untouched"
-        );
+            .expect("queue")
     }
 
-    /// A Speaker the Meeting no longer says anything about still has to be
-    /// recomputed, and that needs no model.
+    /// **Bounded evidence has to survive the step that installs centroids.**
     ///
-    /// `plan` names them an owner because their exemplars come from this
-    /// Meeting, while the Meeting has no segments left to re-embed. So the
-    /// vectors are empty, `commit` replaces nothing with nothing, and the
-    /// Voiceprint built from what is left is cleared. Cleared, not deleted:
-    /// Alice is still somebody the Operator named, and a deleted Voiceprint
-    /// is how this product records being asked to forget a person.
+    /// `persist_with` deletes this Meeting's machine exemplars for every
+    /// Speaker it resolves and files the whole cluster's vector instead. That
+    /// vector is built over every grouped observation, so it carries audio no
+    /// transcript segment covers — and filing it under a name the Operator
+    /// trusts is exactly what re-seeding exists to avoid. Here the cluster is
+    /// mixed, so `claims` abstains and only the ranges protect Alice.
     #[tokio::test]
-    async fn the_reruns_own_meeting_is_relearned_without_a_model_when_it_has_nothing_to_say() {
+    async fn rebuilt_ranges_survive_the_run_that_would_have_replaced_them() {
         let dir = tempfile::tempdir().expect("tempdir");
         let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        meetings_with_audio(&core, &["m1"]).await;
-        a_named_speaker_with_evidence_from(&core, "m1").await;
-        with_rerun_tables(&core).await;
-        assert_eq!(begin_rerun(&core).await, 1, "one Meeting with audio");
+        let (meeting, plan) = reseedable(&core, true).await;
+        assert_eq!(plan.ranges.len(), 2, "one range each for Alice and Bob");
 
-        let seeded = core
-            .reseed_for_rerun("m1", &dir.path().join("nothing-here.onnx"))
-            .await
-            .expect("reseed");
-
-        assert_eq!(
-            seeded,
-            Some(0),
-            "the backlog owns it, so it ran — and had no range to embed"
-        );
-        assert_eq!(
-            voiceprint_of(&core, "alice").await,
+        core.finish_run(
+            &meeting,
+            run_over(Some(plan), WHOLE_CLUSTER),
+            &Cancel::new(),
+            &Arc::new(AtomicBool::new(false)),
             None,
-            "the evidence this Meeting held is gone, so the Voiceprint built \
-             from it is too"
+        )
+        .await
+        .expect("finish");
+
+        assert_eq!(
+            exemplars_of(&core, "alice").await,
+            vec![ALICE_BOUNDED.to_vec()],
+            "Alice keeps the vector cut from her own ranges, and only that"
         );
-        let still_there = core
+        assert!(
+            !anyone_holds_the_cluster_vector(&core).await,
+            "and the whole-cluster vector was filed under nobody"
+        );
+    }
+
+    /// A claim settles who the words belong to. It settles nothing about the
+    /// vector.
+    ///
+    /// The cluster here resolves nowhere near Alice — without the claim this
+    /// run would mint a pseudonym and enrol the whole-cluster vector under
+    /// it, and Alice would lose the words she already owned.
+    #[tokio::test]
+    async fn an_unanimous_claim_attributes_without_enrolling_the_cluster() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, plan) = reseedable(&core, false).await;
+
+        core.finish_run(
+            &meeting,
+            // Orthogonal to Alice's rebuilt Voiceprint, so nothing about this
+            // attribution can have come from the resolve.
+            run_over(Some(plan), [1.0, 0.0]),
+            &Cancel::new(),
+            &Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await
+        .expect("finish");
+
+        assert_eq!(
+            attributed_to(&core, "s1").await.as_deref(),
+            Some("alice"),
+            "the Operator's standing word decided this, not the vectors"
+        );
+        assert_eq!(
+            exemplars_of(&core, "alice").await,
+            vec![ALICE_BOUNDED.to_vec()],
+            "and the cluster she was given did not join her evidence"
+        );
+        let speakers: i64 = core
             .store
             .read(|connection| {
                 connection
-                    .query_row(
-                        "SELECT COUNT(*) FROM speakers WHERE id = 'alice'",
-                        [],
-                        |r| r.get::<_, i64>(0),
-                    )
+                    .query_row("SELECT count(*) FROM speakers", [], |row| row.get(0))
                     .map_err(Into::into)
             })
             .await
             .expect("count");
-        assert_eq!(still_there, 1, "cleared, never forgotten");
+        assert_eq!(
+            speakers, 2,
+            "and no pseudonym was minted for a claimed voice"
+        );
+    }
+
+    /// A correction landing while the model ran leaves the vectors describing
+    /// a world that has moved. The Meeting is owed a fresh pass, not walked.
+    #[tokio::test]
+    async fn a_correction_during_inference_keeps_the_meeting_owed_and_writes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, plan) = reseedable(&core, false).await;
+
+        // The Operator moves the segment while inference is running.
+        core.store
+            .write(|connection| {
+                connection.execute(
+                    "UPDATE transcript_segments SET speaker_id = 'bob' WHERE id = 's1'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("correction");
+
+        let outcome = core
+            .finish_run(
+                &meeting,
+                run_over(Some(plan), WHOLE_CLUSTER),
+                &Cancel::new(),
+                &Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .await
+            .expect("finish");
+
+        assert_eq!(
+            outcome,
+            DiarizeOutcome::Owed,
+            "still owed — not walked, and not a recording pause"
+        );
+        assert!(
+            still_queued(&core, &meeting).await,
+            "so the queue row is still there for the next pass"
+        );
+        assert_eq!(
+            core.store.read(evidence).await.expect("read"),
+            (1, 2, 0),
+            "and nothing was attributed or marked diarized by this run"
+        );
+        assert_eq!(
+            exemplars_of(&core, "alice").await.len(),
+            1,
+            "Alice still holds exactly the previous model's exemplar"
+        );
+    }
+
+    /// Everything the re-run writes is in the attribution transaction, so a
+    /// failure anywhere after it takes the re-seeding with it.
+    ///
+    /// The trigger makes `reconcile::apply` fail, which is the last write
+    /// before the commit — after `reseed::commit` has already put Alice's
+    /// rebuilt evidence in. Rolled back, she is left with what she had.
+    #[tokio::test]
+    async fn a_failure_after_reseeding_leaves_no_rebuilt_evidence_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, plan) = reseedable(&core, false).await;
+        core.store
+            .write(|connection| {
+                connection.execute_batch(
+                    "CREATE TRIGGER boom BEFORE UPDATE ON transcript_segments \
+                     BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("trigger");
+
+        let outcome = core
+            .finish_run(
+                &meeting,
+                run_over(Some(plan), WHOLE_CLUSTER),
+                &Cancel::new(),
+                &Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .await;
+
+        assert!(outcome.is_err(), "the transaction failed: {outcome:?}");
+        assert_eq!(
+            exemplars_of(&core, "alice").await,
+            vec![vec![1.0_f32]],
+            "and Alice holds the previous model's exemplar, not a rebuilt one"
+        );
+        assert!(
+            still_queued(&core, &meeting).await,
+            "with the Meeting still in the line"
+        );
+    }
+
+    /// A stop found waiting on the writer must leave the re-seeding undone
+    /// too, not only the attribution.
+    #[tokio::test]
+    async fn a_stop_before_the_transaction_leaves_no_rebuilt_evidence_behind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, plan) = reseedable(&core, false).await;
+
+        let stop = Cancel::new();
+        stop.cancel();
+        let outcome = core
+            .finish_run(
+                &meeting,
+                run_over(Some(plan), WHOLE_CLUSTER),
+                &stop,
+                &Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .await
+            .expect("finish");
+
+        assert_eq!(outcome, DiarizeOutcome::Cancelled);
+        assert_eq!(
+            exemplars_of(&core, "alice").await,
+            vec![vec![1.0_f32]],
+            "the previous model's exemplar, untouched"
+        );
     }
 
     /// A History with no backlog serializes exactly what it always did.
@@ -5008,7 +5378,7 @@ mod tests {
         assert_eq!(
             core.finish_run(
                 &meeting,
-                succeeded(),
+                succeeded(None),
                 &cancel,
                 &Arc::new(AtomicBool::new(false)),
                 None,
@@ -5067,7 +5437,7 @@ mod tests {
         let written = core
             .finish_run(
                 &meeting,
-                succeeded(),
+                succeeded(None),
                 &Cancel::new(),
                 &Arc::new(AtomicBool::new(false)),
                 None,
@@ -5295,7 +5665,7 @@ mod tests {
 
         core.finish_run(
             &meeting,
-            succeeded(),
+            succeeded(None),
             &Cancel::new(),
             &Arc::new(AtomicBool::new(false)),
             None,
@@ -5453,7 +5823,7 @@ mod tests {
         let outcome = core
             .finish_run(
                 &meeting,
-                succeeded(),
+                succeeded(None),
                 &Cancel::new(),
                 &Arc::new(AtomicBool::new(false)),
                 None,

@@ -1023,9 +1023,14 @@ fn matcher_grid() -> Vec<(f32, f32)> {
 /// violation if clustering merged it. Where it names the **same** person
 /// twice — segmentation split one voice into two local tracks of one window —
 /// the constraint forbids a merge that ought to happen, and that is counted
-/// separately as `forbidden_rejoins`. A constraint is only worth its
-/// violations if it is not paying more for them here, so reporting the first
-/// without the second would flatter it.
+/// separately as `forbidden_rejoins`. Reporting the first without the second
+/// would flatter the constraint.
+///
+/// Both counts are descriptive, and neither is a tally of decisions. A
+/// forbidden rejoin is counted whether or not the unconstrained run merged
+/// the pair, so most were never a merge to lose; merging is transitive over a
+/// cluster, so pairs are not independent; and a dominant label is a majority
+/// over a span that may itself be mixed. Do not divide one by the other.
 fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64, u64) {
     let provisional = diarize::live::provisional_of(&one.observed);
     let forbidden = diarize::live::cannot_link_of(&one.observed);
@@ -1211,7 +1216,8 @@ fn report(measured: &[Measured], with_oracle: bool) -> (Der, Der) {
     let merged: u64 = measured.iter().map(|one| one.cannot_link.0).sum();
     let pairs: u64 = measured.iter().map(|one| one.cannot_link.1).sum();
     println!(
-        "same-window    {:>6.2}%   {merged} of {pairs} pairs heard talking at once were merged anyway",
+        "same-window    {:>6.2}%   {merged} of {pairs} pairs of distinct local tracks from one \
+         source window were merged anyway",
         if pairs == 0 {
             0.0
         } else {
@@ -1302,8 +1308,8 @@ fn report(measured: &[Measured], with_oracle: bool) -> (Der, Der) {
             .collect();
         let oracle_pairs = cross_meeting_pairs(&oracle_voices);
         println!(
-            "\noracle voices  {} voices from perfect clustering — the ceiling any \
-             threshold aims at",
+            "\noracle voices  {} voices from perfect clustering, one per person per \
+             WHOLE meeting — a ceiling, not this product's recognition answer",
             oracle_candidates.len()
         );
         match score::equal_error_rate(&oracle_pairs) {
@@ -1750,6 +1756,7 @@ fn replay(
             &diarization.embeddings,
             &reconciliation.voices(),
             None,
+            &diarize::cluster::Rebuilt::default(),
             floor,
             margin,
         )
@@ -2339,8 +2346,10 @@ fn the_constrained_path_is_the_one_the_replay_gets() {
 /// its own, and geometry would file it under the first and invent a pair out
 /// of two tracks that were never heard together.
 ///
-/// Reading the recorded window is what makes the denominator mean "pairs
-/// segmentation says were talking at once". This pins that it does, in both
+/// Reading the recorded window is what makes the denominator mean "pairs of
+/// distinct local tracks segmentation emitted from one source window" — which
+/// is what it emitted, not a claim that the two were speaking at the same
+/// instant. This pins that it does, in both
 /// clustering modes, because a violation rate scored against the wrong
 /// clusterer is no better than one counted over the wrong pairs.
 #[test]

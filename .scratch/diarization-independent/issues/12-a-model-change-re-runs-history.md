@@ -139,9 +139,10 @@ not all belong to one eligible Speaker. Nothing calls either.
    exemplar table carries that today. Writing `Claims::denials` into centroids
    would rebuild the withdrawn writer; so would handing `Claims` to
    `reconcile::apply` and enrolling what it assigns.
-2. ~~The wiring~~ — **done** for the seeding half (Q215). `Core::reseed_for_rerun`
-   threads `plan` → `embed_ranges` → `commit` with the transaction split where
-   the module asked for it, and `diarize_meeting` calls it. What is left of
+2. ~~The wiring~~ — **done** for the seeding half (Q215, reordered by Q217).
+   `diarize_meeting` reads the plan and embeds its ranges with the run's own
+   embedder, and `finish_run` commits them inside the same transaction as the
+   attribution and the queue row. What is left of
    this item is only the startup trigger: no caller reaches
    `rerun::begin_if_the_model_changed` — which must, on its first start,
    record the current identity and enqueue nothing, since a History with no
@@ -164,56 +165,101 @@ not all belong to one eligible Speaker. Nothing calls either.
    absent schema, an absent row and the first-start baseline are successful
    absences, and stopping any of those three is a no-op.
 
-## Built: the caller (`Core::reseed_for_rerun`)
+## Built: the caller (in `diarize_meeting` / `finish_run`)
 
-**Re-seeding runs before the Meeting is re-diarized, and the order is forced
-rather than chosen.** `reseed::plan` reads `transcript_segments.speaker_id`
-with the newest correction on top — the attribution the *previous* model left.
-The run overwrites that column, and after 05's wipe it overwrites it with
-fresh pseudonyms, there being no Voiceprints left to resolve against. Run
-after the run, seeding would find a named owner only where a correction
-happened to survive, and `commit` would refuse the rest as `Refused::Moved`,
-the run having moved the very record the revalidation compares against. Run
-first, it relearns the named voices from what the Operator already said, and
-the run that follows has real Voiceprints to match its new clusters to. That
-is the mechanism by which a name survives a model change, and it is why the
-call sits between the slot claim and the stale-exemplar read — before that
-read as well, since seeding replaces this Meeting's exemplars and a list read
-earlier would hand the rebuild rows it has just superseded.
+**The seeding commits inside the run's own attribution transaction, before
+`persist`.** `reseed::plan` reads `transcript_segments.speaker_id` with the
+newest correction on top — the attribution the *previous* model left — and
+`commit` revalidates that plan before replacing anything, refusing as
+`Refused::Moved` if the record has moved underneath it. The only statement that
+moves it is `reconcile::apply`, which runs near the **end** of `finish_run`'s
+transaction: `run_guarded` and `LiveDiarizer` return a `Diarization` and write
+nothing, and `reconcile::reconcile` is a pure mapping. So the previous
+attribution is still intact throughout the run and for most of the transaction,
+and the commit has a window inside it where revalidation is meaningful and the
+freshly rebuilt seeds are already visible to the matching that happens in the
+same transaction. There is no forced choice between committing early and being
+refused for ever.
+
+The work is therefore split by cost, not by transaction:
+
+- **Before the run, outside any transaction.** The cancellable job is registered
+  first, then `rerun::is_bulk_work` is checked and `reseed::plan` read beside
+  the stale-exemplar read. Registering first is what makes the expensive part
+  interruptible.
+- **During the run, outside any transaction.** `reseed::embed_ranges` cuts and
+  embeds the planned ranges with the run's **own loaded embedder**, so a re-run
+  loads one model rather than two. Minutes of model time, none of it holding
+  History's single writer.
+- **Inside `finish_run`'s writer closure.** Bulk membership is re-checked at the
+  commit boundary, `cluster::claims` is read while the old attribution still
+  stands, `reseed::commit` replaces the evidence, and then `persist`,
+  `reconcile::apply`, `attach_operator` and `diarize_queue::finish` complete.
+  One `transaction.commit()` covers all of it.
+
+A cancel, a stop, or a failure anywhere after the plan therefore leaves **no**
+partially re-seeded evidence: the whole closure rolls back together. The
+embedder is loaded only when there is a range to embed — a plan with no ranges
+still has to commit, because a Speaker whose every segment was corrected away is
+in `owners` precisely so its Voiceprint is recomputed without any.
+
+**Persistence had to be taught about the rebuilt evidence.** `persist_with`
+deletes this Meeting's machine exemplars for each resolved Speaker and installs
+the whole-cluster centroid in their place — a vector `live::assemble` built over
+every grouped `Observation`, before reconciliation mapped segments to clusters,
+so it carries speech no transcript segment covers. Left alone it would erase the
+bounded exemplars just rebuilt and enrol unvouched audio over them.
+`cluster::Rebuilt` threads two sets through the existing lifecycle:
+
+- `reseeded` — Speakers whose bounded rows were just written. Their machine
+  exemplars are neither deleted nor replaced; the resolve loop assigns and moves
+  on.
+- `claimed` — clusters whose segments unanimously name an eligible Speaker, from
+  `cluster::claims`. A claim is **assignment authority only**: it says who those
+  segments belong to, never that the rest of the cluster's vector is theirs, so
+  a claimed cluster is assigned and never enrolled.
+
+Ranges are rebuilt from the attribution independently of claims, so a named
+Speaker's ranges inside a mixed cluster survive even though the cluster carries
+no unanimous claim. An empty `Rebuilt` — every path that is not a bulk re-run —
+leaves the lifecycle exactly as it was. The Operator's channel rules and the
+forgotten/pseudonym exclusions are untouched, being upstream of all of this.
+
+**An unrecovered Meeting stays owed.** A `Refused::Moved` plan or a failed
+embedding returns `DiarizeOutcome::Owed`: nothing written, the queue row kept,
+and the worker allows one further pass before giving up on it. A changed plan
+needs a fresh plan, so retrying reads one. `Gone` and genuinely unprocessable
+work keep the existing skip semantics; what is not allowed is logging a refusal
+and marking the Meeting completed, which would report a partial walk as a
+successful one.
 
 **The gate is structural.** `rerun::is_bulk_work` is `installed() AND a row in
-diarize_rerun_backlog`, extracted from the copy `give_up` was already
-computing so the two cannot drift. The tables are not in `MIGRATIONS`, so it
-answers `false` on every History in the field and the path is unreachable
-there — pinned by `a_history_in_the_field_is_never_reseeded`, which offers a
-Meeting with Kept Audio and a named Speaker with evidence in it and asserts
-nothing ran, with an empty models directory so that getting past the gate
-would fail loudly rather than quietly.
-
-**Reading and embedding are outside the write transaction; only the
-replacement is inside one.** Embedding is minutes of model time per Meeting
-and holding History's single writer for it would stall every Client. The
-embedder is loaded only when there is a range to embed — a plan with no ranges
-still has to commit, because a Speaker whose every segment was corrected away
-is in `owners` precisely so its Voiceprint is recomputed without any.
-
-**One gap, stated rather than hidden.** The seeding commits in its own
-transaction, not the one that later writes the attribution and removes the
-queue row. A Core killed between them leaves the Meeting walked but not
-re-seeded, and the Speaker loses that Meeting's contribution — the same
-outcome as a `Moved` refusal, which the design already tolerates, but reached
-by a crash rather than by a decision. Closing it means moving `commit` into
-`finish_run`'s writer closure, which is a contained follow-up and is not
-possible while seeding has to precede the run that closure belongs to.
+diarize_rerun_backlog`, extracted from the copy `give_up` was already computing
+so the two cannot drift. The tables are not in `MIGRATIONS`, so it answers
+`false` on every History in the field and the path is unreachable there — pinned
+by `a_history_in_the_field_is_never_reseeded`, which offers a Meeting with Kept
+Audio and a named Speaker with evidence in it and asserts nothing ran, with an
+empty models directory so that getting past the gate would fail loudly rather
+than quietly. A Front member promoted into the bulk backlog is still eligible;
+the gate is about the schema, not about how the row arrived.
 
 ## Acceptance criteria
 
 - [ ] A named Speaker is recognized again after its Meetings are re-run, end to
       end from an old-model History — the wiring is there and asserted through
       the resolver (`a_wipe_then_a_bounded_rebuild_leaves_the_named_voice_matchable_again`:
-      wipe, rebuild, `cluster::resolve` names Alice again), but with synthetic
-      embeddings. Whether a real model's vectors recognize the same person is
-      measurement, and waits on the model decision and on the caller
+      wipe, rebuild, `cluster::resolve` names Alice again) and through the real
+      completion path (`rebuilt_ranges_survive_the_run_that_would_have_replaced_them`,
+      `an_unanimous_claim_attributes_without_enrolling_the_cluster`), but with
+      synthetic embeddings. Whether a real model's vectors recognize the same
+      person is measurement, and waits on the model decision and on the trigger
+- [x] Re-seeding and the run commit together or not at all — a stop before the
+      writer and a failure after `reseed::commit` both leave the previous
+      evidence exactly as it was
+      (`a_stop_before_the_transaction_leaves_no_rebuilt_evidence_behind`,
+      `a_failure_after_reseeding_leaves_no_rebuilt_evidence_behind`), and a plan
+      that moved during inference returns `Owed` with the queue row kept
+      (`a_correction_during_inference_keeps_the_meeting_owed_and_writes_nothing`)
 - [x] Seeding comes from the attributed ranges, not from the old model's stored
       sample offsets — asserted in
       `reseed::tests::the_model_is_handed_only_the_audio_the_ranges_cover_in_both_directions`,
@@ -462,14 +508,16 @@ reintroduce the one-at-a-time question the single worker answers.
    `delete_voiceprint`, so a recomputation cannot leave a Speaker marked as
    one the Operator forgot.
 
-   ~~What is left for activation is the caller~~ — **written** (Q215),
-   `Core::reseed_for_rerun`, reached from `diarize_meeting` behind
+   ~~What is left for activation is the caller~~ — **written** (Q215,
+   reordered by Q217), in `diarize_meeting` and `finish_run` behind
    `rerun::is_bulk_work`. The split across the write transaction is the part
    it had to get right. `plan` reads, and `embed_ranges`
    decodes audio and runs the model — minutes of work per Meeting, and both
    belong **outside** any transaction, or a re-run holds a write lock over
-   History for as long as it takes to embed. Only `commit` runs inside one:
-   it re-reads the plan, compares it to the one the vectors were computed
+   History for as long as it takes to embed. Only `commit` runs inside one —
+   the run's own attribution transaction, where the previous attribution is
+   still intact because `reconcile::apply` has not run yet. It
+   re-reads the plan, compares it to the one the vectors were computed
    from, and refuses (`Refused::Moved`) if anything moved while embedding.
    Revalidation and replacement are the transactional part; reading and
    embedding are not. Whether a real model's vectors recognize the same
