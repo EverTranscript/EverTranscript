@@ -2685,4 +2685,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user delegated the three held items with, verbatim: *"do 1,2,3"*. The shape was the advisor's preference and is the one the evidence supports: `Core::rerun_block` returns `None` unless `Rerun::requested()`, which is false at the wipe's `total` 0, so the failure case is precisely the case with no block to hang a field on. Pinned by `a_gate_that_failed_is_reported_on_the_status_and_cleared_by_one_that_works` — half-install the schema, run the gate, repair, assert the message is on the status and names the missing table, assert `rerun` is `None` beside it, then run a gate that works and assert the field is gone and the walk is queued. The two byte-for-byte contract tests now assert `rerunError` is absent as well as `rerun`. Bindings regenerated through `ts-rs` and synced by the client's own `protocol:sync`; 230 strings, all locales complete.
 **Outcome:** applied
 **Supersedes:** Q229 — which escalated this and is now answered; its finding about the surface stands as the reason for the shape.
-**Ref:** (pending)
+**Ref:** 8369b62
