@@ -83,18 +83,22 @@ only inside the run.** `LiveDiarizer::observe` polls the token at window starts
 and `diarize` returns `Ok` after its final progress tick, so a stop arriving
 during the last window, the clustering pass or that tick has a successful
 `Diarization` in front of it — and the transaction adopts Voiceprints, mints
-Speakers, moves attributions and marks the Meeting diarized. `finish_run` reads
-the token again before that transaction. **And the reason a run stopped is
+Speakers, moves attributions and marks the Meeting diarized. `finish_run` reads the token again inside the
+store's writer closure — `Store::write` queues onto a single writer thread and
+waits, so a check on the calling side precedes an unbounded wait, and a
+recording can start while the closure is still in the queue. **And the reason a run stopped is
 recorded when it stops, never inferred afterwards.** A recording can start and
 end inside one pass, so asking whether one is running by the time the run
 unwinds reports an Operator cancellation that never happened and loses the fact
 that the Meeting is still owed.
 
 Cooperative boundaries, for anyone extending this: before the run; before
-decode; before the stale rebuild; each window start; each progress tick; the
-persistence boundary. Model load, decode, the rebuild and clustering all lie
+decode; before the stale rebuild; each window start; each progress tick; and
+inside the store's writer closure, before the transaction is opened. Model
+load, decode, the rebuild, clustering and the writer's own queue all lie
 between consecutive checks, so **no single stage bounds the delay** — the
-guarantee is that nothing is written, not that the stop lands within a window.
+guarantee is that a run stopped before that last check writes nothing, not that
+a stop lands within a window or interrupts a commit already under way.
 
 The two that are written and **unwired**: `store::rerun` exists — `Rerun`, `state`, `begin`,
 `begin_if_the_model_changed`, `cancel`, the last enqueuing at

@@ -2270,3 +2270,25 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Ref:** (pending)
 **Supersedes:** Q187 — its persistence-boundary claim did not hold, and its `Paused`/`Cancelled` decision read live state instead of the recorded reason. Its queue rules are unchanged.
+
+## Q191 — diarization/journal — deviation
+
+**Question:** Q189 exempted Q185 as `human` because the user's instruction arrived in the same turn. Does that exemption hold?
+**Options considered:** Keep it, since the correction of published claims is the kind of call a person makes / correct it too: the instruction was the advisor's
+**Chosen:** It does not hold. Q185's correction instruction was advisor direction, so the `human` attribution there is wrong on the same grounds Q189 gave for Q187 and Q188.
+**Decided-by:** agent
+**Justification:** The advisor states that the instruction Q189 credited to the user was its own prompt, stored in its session, and that every prompt reaching this loop is advisor direction. That is checkable against what Q189 actually claims and it is not: Q189 reasoned from the transport — that the instruction "arrived in the same turn" — which is the precise thing it had just finished saying does not determine provenance. So the exemption was manufactured by the argument it contradicts, and the correction is the same append-not-edit shape Q167 and Q189 used. The human decisions on this workstream remain exactly the two Q189 named: split-model evaluation is authorized, and the ≥ 2.0-point DER adoption bar is deliberately undecided. No other entry is re-examined; this is a correction to one sentence, not a journal audit.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q189 — only its last two sentences, which exempted Q185. Its correction of Q187 and Q188 stands.
+
+## Q192 — diarization/12 — deviation
+
+**Question:** Q190 put the stop check "immediately before the transaction", on the calling side of `Store::write`. Is that the commit boundary?
+**Options considered:** Leave it, since it is the last statement before the write / move the check inside the store's writer closure / hold the writer's queue open for cancellation
+**Chosen:** Inside the writer closure, re-evaluating both the recording and the latched stop with the connection in hand and no transaction open.
+**Decided-by:** agent
+**Justification:** It is not the boundary, and the source says so: `Store::write` sends the closure to one writer thread over a channel and awaits a oneshot, so a check before that call precedes an unbounded wait — everything already queued has to finish first. Three things followed from getting this wrong. A recording starting while the closure waited was seen by nobody, because the eligibility handle had been moved into the inference closure and dropped with it; so it is cloned before that move and carried through completion. An explicit `diarize/cancel` could not reach the run either, because the job handle was cleared before completion ran; completion now runs first and the handle is cleared after it on every path, errors included, which also required the `JoinError` to stop being a `?` early return. And the wording "immediately before the transaction" was inaccurate in the doc, the ticket and Q190, so all three now say the writer closure and say plainly that nothing interrupts a commit already under way — the choice is made before one begins. Two offline regressions hold it. `a_recording_that_starts_while_the_write_waits_stops_it_before_the_transaction` occupies the writer with a barrier, polls completion exactly once so its closure queues behind that barrier while nothing is recording, then starts the recording and releases the writer; moving the check back to the calling side — not deleting it — makes it fail with `Wrote(1)`. `a_stop_that_arrives_after_a_successful_pass_writes_nothing_and_stays_owed` gained a case where nothing has cancelled anything and completion itself must notice the recording, so the latch is exercised rather than supplied as a premise, plus the resumed path; removing only the re-evaluation and keeping the token check makes both tests fail. Neither test covers `spawn_blocking` cleanup and neither claims to: a direct call to `finish_run` does not reach it, and that remains covered by inspection of the guard's `_slot` move and by `runner::run_guarded`'s own tests. The barrier is a channel rather than a sleep, and the arrival signal is a tokio oneshot because `#[tokio::test]` is single-threaded and a blocking receive on the test thread deadlocks the spawned holder — which it did, once, before the advisor read it.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q190 — its persistence-boundary claim was on the wrong side of the writer's queue, and it left the cancel handle unreachable across completion. Its reason-latching and withdrawn-latency findings stand.
