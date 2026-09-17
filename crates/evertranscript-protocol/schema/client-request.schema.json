@@ -633,6 +633,23 @@
       ]
     },
     {
+      "description": "Asks for a bulk re-run of History outright, whatever embedding this\nHistory last recorded.\n\nThe active counterpart to the startup gate, which asks only when the\nrecorded identity differs from the build's and therefore cannot be\nasked twice: once a backlog has been walked, the current model is\nwhat is written down and the gate correctly notices nothing. That is\nright for a gate, and it left a deliberate re-derivation — a repair\nto what relearning does with the attributions it reads, a Voiceprint\nwipe — with no way in.\n\nNot `diarize/run` over each Meeting in turn: that is the ordinary\nper-Meeting path, and the re-seeding a Voiceprint needs is read only\nfor Meetings the backlog owns, so a Meeting re-diarized that way\nearns nothing back.\n\nAsking twice is safe. A re-run already under way finds its own\nMeetings queued and keeps the ownership it had, so a second ask\nneither doubles the work nor orphans the backlog.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "diarize/rerunRequest"
+        },
+        "params": {
+          "$ref": "#/$defs/DiarizeRerunRequestParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Stops the bulk re-run, keeping every Meeting it already walked.\n\nOnly the re-run's own Meetings, and only those still waiting their\nturn as bulk work: a Meeting somebody promoted because they are\nwaiting for it is no longer this job's to cancel, and the catch-up\npass for Meetings that were never diarized is not this job's work at\nall.",
       "type": "object",
       "properties": {
@@ -734,6 +751,9 @@
       ]
     },
     "DiarizeRerunCancelParams": {
+      "type": "object"
+    },
+    "DiarizeRerunRequestParams": {
       "type": "object"
     },
     "DiarizeStatusParams": {

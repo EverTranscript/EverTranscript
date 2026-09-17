@@ -392,6 +392,29 @@ client_request_definitions! {
         params: DiarizeCancelParams,
         response: DiarizeStatusResponse,
     },
+    /// Asks for a bulk re-run of History outright, whatever embedding this
+    /// History last recorded.
+    ///
+    /// The active counterpart to the startup gate, which asks only when the
+    /// recorded identity differs from the build's and therefore cannot be
+    /// asked twice: once a backlog has been walked, the current model is
+    /// what is written down and the gate correctly notices nothing. That is
+    /// right for a gate, and it left a deliberate re-derivation — a repair
+    /// to what relearning does with the attributions it reads, a Voiceprint
+    /// wipe — with no way in.
+    ///
+    /// Not `diarize/run` over each Meeting in turn: that is the ordinary
+    /// per-Meeting path, and the re-seeding a Voiceprint needs is read only
+    /// for Meetings the backlog owns, so a Meeting re-diarized that way
+    /// earns nothing back.
+    ///
+    /// Asking twice is safe. A re-run already under way finds its own
+    /// Meetings queued and keeps the ownership it had, so a second ask
+    /// neither doubles the work nor orphans the backlog.
+    DiarizeRerunRequest => "diarize/rerunRequest" {
+        params: DiarizeRerunRequestParams,
+        response: DiarizeStatusResponse,
+    },
     /// Stops the bulk re-run, keeping every Meeting it already walked.
     ///
     /// Only the re-run's own Meetings, and only those still waiting their
@@ -1589,6 +1612,11 @@ pub struct DiarizeRerun {
 pub struct DiarizeCancelParams {
     pub meeting_id: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiarizeRerunRequestParams {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

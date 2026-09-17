@@ -2709,6 +2709,53 @@ impl Core {
         }))
     }
 
+    /// Asks for a bulk re-run of History outright.
+    ///
+    /// The active form of [`Self::rerun_if_the_model_changed`], which is
+    /// passive by design: it asks only when the identity this History
+    /// records differs from the build's, so a History whose backlog has
+    /// already been walked records the current model and is answered
+    /// `None`. Correct for a gate called at every start, and it leaves no
+    /// way to ask for a re-derivation that is deliberate rather than the
+    /// consequence of an upgrade. [`crate::store::rerun::begin`] does not
+    /// consult the stored identity at all, which is what makes this
+    /// possible without hand-editing the stamp the gate reads.
+    ///
+    /// The identity recorded is this build's, the same pair the gate uses,
+    /// so a re-run asked for here leaves History stamped exactly as an
+    /// upgrade to this model would have left it.
+    ///
+    /// **A failure is returned rather than logged.** The gate swallows one
+    /// and carries on, because a Core that refuses to boot over a stamp it
+    /// cannot read is an unusable product. Here somebody asked and is
+    /// waiting for the answer, so they get it.
+    pub async fn diarize_rerun_request(&self) -> Result<DiarizeStatusResponse> {
+        let enqueued = self
+            .store
+            .write(|connection| {
+                crate::store::rerun::begin(
+                    connection,
+                    crate::diarize::live::EMBEDDING_MODEL,
+                    crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                )
+            })
+            .await?;
+        if enqueued > 0 {
+            info!(
+                meetings = enqueued,
+                model = crate::diarize::live::EMBEDDING_MODEL,
+                "a re-run was asked for; walking History to earn its Voiceprints back"
+            );
+            // The worker may already be waiting on an empty queue.
+            self.diarize_wake.notify_one();
+        }
+        // Whatever the last gate attempt said it could not start, this
+        // walk is now the one it was talking about. Leaving the error set
+        // would report a re-run as owed while it runs.
+        *self.rerun_error.lock().await = None;
+        self.diarize_status().await
+    }
+
     /// Stops the bulk re-run, keeping every Meeting it already walked.
     ///
     /// Not routed through [`Core::diarize_cancel`]: that one takes a Meeting
@@ -4239,6 +4286,10 @@ impl Server {
 
             ClientRequest::DiarizeCancel(params) => Ok(serde_json::to_value(
                 self.core.diarize_cancel(&params.meeting_id).await?,
+            )?),
+
+            ClientRequest::DiarizeRerunRequest(_) => Ok(serde_json::to_value(
+                self.core.diarize_rerun_request().await?,
             )?),
 
             ClientRequest::DiarizeRerunCancel(_) => Ok(serde_json::to_value(
@@ -6228,6 +6279,101 @@ mod tests {
             (1, 0, 2),
             "one walked and two given up — and `m2`, whose old stamp reads as \
              later than the backlog's start, is among the two: {stopped:?}"
+        );
+    }
+
+    /// The gate cannot ask twice. This can.
+    ///
+    /// `begin_if_the_model_changed` records the build's identity on a
+    /// History that has none and asks for nothing, so from the second start
+    /// onwards it correctly notices nothing — which left a deliberate
+    /// re-derivation with no entry point at all until `diarize/rerunRequest`
+    /// (Q240).
+    #[tokio::test]
+    async fn a_re_run_can_be_asked_for_after_the_gate_has_nothing_left_to_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+
+        let gate = || async {
+            core.store
+                .write(|connection| {
+                    crate::store::rerun::begin_if_the_model_changed(
+                        connection,
+                        crate::diarize::live::EMBEDDING_MODEL,
+                        crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                    )
+                })
+                .await
+                .expect("gate")
+        };
+        // Neither start produces a backlog, for the two different reasons
+        // that between them leave the gate with nothing left to say: absent
+        // metadata is not evidence of a model change, and once recorded the
+        // identity matches.
+        assert_eq!(
+            gate().await,
+            None,
+            "an un-stamped History records itself and asks for nothing"
+        );
+        assert_eq!(
+            gate().await,
+            None,
+            "and the recorded model matches this build"
+        );
+        assert!(
+            core.diarize_status().await.expect("status").rerun.is_none(),
+            "a recorded model is not a backlog"
+        );
+
+        let status = core.diarize_rerun_request().await.expect("ask");
+        let rerun = status.rerun.as_ref().expect("the ask produced a backlog");
+        assert_eq!(rerun.total, 3, "every audio-bearing Meeting: {rerun:?}");
+        assert_eq!(rerun.remaining, 3, "and none of them walked yet");
+        assert_eq!(rerun.done, 0);
+        assert!(!rerun.cancelled, "asked for, not stopped");
+        assert!(
+            status.rerun_error.is_none(),
+            "nothing failed, so nothing is said about it: {status:?}"
+        );
+        assert_eq!(
+            core.diarize_status().await.expect("status").queued.len(),
+            3,
+            "and the Meetings are actually in line"
+        );
+    }
+
+    /// Asking twice is not asking for twice the work.
+    ///
+    /// `begin` reconciles the ownership it finds rather than rebuilding it,
+    /// so the second ask re-walks the same Meetings in the same order
+    /// instead of leaving half of them queued and ownerless.
+    #[tokio::test]
+    async fn asking_for_a_re_run_twice_does_not_double_the_backlog() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        meetings_with_audio(&core, &["m1", "m2"]).await;
+
+        let first = core
+            .diarize_rerun_request()
+            .await
+            .expect("ask")
+            .rerun
+            .expect("a backlog");
+        let again = core
+            .diarize_rerun_request()
+            .await
+            .expect("ask again")
+            .rerun
+            .expect("still a backlog");
+        assert_eq!(again.total, first.total, "not doubled: {again:?}");
+        assert_eq!(again.remaining, first.remaining);
+        assert_eq!(
+            core.diarize_status().await.expect("status").queued.len(),
+            2,
+            "and nothing was queued twice"
         );
     }
 
