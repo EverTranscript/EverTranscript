@@ -2528,11 +2528,23 @@ impl Core {
                 // The worker may already be waiting on an empty queue.
                 self.diarize_wake.notify_one();
             }
-            // Never fatal. A History that cannot be asked about its model is
-            // one where every other read is about to fail too, and refusing to
-            // boot over it would turn a re-run nobody asked for into an
-            // unusable product.
-            Err(error) => warn!(%error, "could not check whether the embedding changed"),
+            // Never fatal, and never lost: the stamp is what would have been
+            // overwritten, and nothing overwrites it but `begin`'s own commit
+            // (Q228). A failure here therefore leaves the History exactly as
+            // the wipe left it — WeSpeaker recorded against the current
+            // model — so the next start reads the same model change and walks
+            // the same History. What it costs is this session: a wiped
+            // History whose Voiceprints have not been earned back yet, which
+            // is degraded recognition until the Core is next started, not a
+            // walk that will never happen. Refusing to boot over it would
+            // turn that into an unusable product, and a History that cannot
+            // be asked about its model is one where every other read is about
+            // to fail too.
+            Err(error) => warn!(
+                %error,
+                "could not check whether the embedding changed; \
+                 History keeps what it owes and the next start asks again"
+            ),
         }
     }
 
@@ -5269,6 +5281,79 @@ mod tests {
                 crate::diarize::live::EMBEDDING_MODEL_VERSION
             ),
             "and the stamp is now the current model's, so the next start resumes"
+        );
+    }
+
+    /// A gate that fails leaves the walk owed, and the next start takes it.
+    ///
+    /// This is what makes swallowing the error into a `warn!` recoverable
+    /// rather than lost, so it is asserted rather than argued: nothing
+    /// overwrites the stamp but `begin`'s own commit, so a failure anywhere
+    /// in the gate leaves the History as the wipe left it and the next start
+    /// reads the same model change. The failure is arranged as the one
+    /// `installed`'s doc already names — a half-installed schema, where the
+    /// table it asks about is there and the other is not — so the gate gets
+    /// past the guard and fails inside `begin`.
+    #[tokio::test]
+    async fn a_gate_that_fails_at_startup_is_retried_by_the_next_start() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+
+        let rename = |from: &'static str, to: &'static str| {
+            let sql = format!("ALTER TABLE {from} RENAME TO {to};");
+            move |connection: &mut rusqlite::Connection| {
+                connection.execute_batch(&sql).map_err(Into::into)
+            }
+        };
+        core.store
+            .write(rename("diarize_rerun_backlog", "backlog_out_of_reach"))
+            .await
+            .expect("half-install the schema");
+
+        // Boots. The `warn!` is the whole of what an Operator gets today.
+        core.rerun_if_the_model_changed().await;
+
+        // Read from the queue rather than through `diarize_status`, which
+        // fails here for the same reason the gate did — a half-installed
+        // schema is an error everywhere that reads it, which is the answer
+        // `installed`'s doc asks for.
+        assert!(
+            core.store
+                .read(crate::store::diarize_queue::list)
+                .await
+                .expect("queue")
+                .is_empty(),
+            "the walk did not start"
+        );
+        let stamp: (String, String) = core
+            .store
+            .read(|connection| {
+                Ok(connection.query_row(
+                    "SELECT model, model_version FROM diarize_rerun WHERE id = 1",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .await
+            .expect("the stamp");
+        assert_eq!(
+            (stamp.0.as_str(), stamp.1.as_str()),
+            ("wespeaker-voxceleb-resnet34-LM", "2"),
+            "still the space the wipe emptied, so the walk is still owed"
+        );
+
+        core.store
+            .write(rename("backlog_out_of_reach", "diarize_rerun_backlog"))
+            .await
+            .expect("whatever was wrong is no longer wrong");
+
+        core.rerun_if_the_model_changed().await;
+
+        assert_eq!(
+            core.diarize_status().await.expect("status").queued,
+            vec!["m1".to_string(), "m2".to_string(), "m3".to_string()],
+            "the next start walked the History the failed one owed"
         );
     }
 
