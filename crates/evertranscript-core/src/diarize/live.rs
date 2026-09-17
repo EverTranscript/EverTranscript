@@ -715,22 +715,46 @@ pub fn assemble(observed: &Observed, canonical: &BTreeMap<Cluster, Cluster>) -> 
         }
     }
 
-    // And how many of them put each voice there.
+    // And how many of them put each voice there. **Windows, not
+    // observations.** One window can hold two local tracks that clustering
+    // later maps to the same voice, and where their runs overlap that one
+    // window would otherwise vote twice for the same instant. Three windows
+    // covering a cell, the other two silent, and a single window's two
+    // tracks would carry it two-to-three — a majority assembled out of one
+    // opinion. Each window gets one vote per voice per cell; `credited`
+    // remembers which window last put this voice in this cell.
     let mut held: BTreeMap<(usize, Cluster), Vec<u16>> = BTreeMap::new();
-    for observation in &observed.observations {
+    let mut credited: BTreeMap<(usize, Cluster), Vec<usize>> = BTreeMap::new();
+    // By window, so one window's tracks are adjacent and the guard below
+    // only ever has to remember the last one.
+    let mut voting: Vec<&Observation> = observed.observations.iter().collect();
+    voting.sort_by_key(|observation| observation.window);
+    for observation in voting {
         let voice = canonical
             .get(&observation.cluster)
             .copied()
             .unwrap_or(observation.cluster);
         let cells = width[slot(observation.channel)];
-        let counts = held
-            .entry((slot(observation.channel), voice))
-            .or_insert_with(|| vec![0_u16; cells]);
+        let key = (slot(observation.channel), voice);
+        let counts = held.entry(key).or_insert_with(|| vec![0_u16; cells]);
+        let credited = credited
+            .entry(key)
+            .or_insert_with(|| vec![usize::MAX; cells]);
         for (start, end) in &observation.runs {
             for cell in cells_of(*start, *end, cells) {
-                counts[cell] += 1;
+                if credited[cell] != observation.window {
+                    credited[cell] = observation.window;
+                    counts[cell] += 1;
+                }
             }
         }
+    }
+
+    for observation in &observed.observations {
+        let voice = canonical
+            .get(&observation.cluster)
+            .copied()
+            .unwrap_or(observation.cluster);
         // Where to play a voice back from is a different question from
         // where it held the floor, and it keeps the union: a stretch this
         // voice had to itself is worth hearing whatever the neighbouring
@@ -902,9 +926,10 @@ pub fn provisional_of(observed: &Observed) -> BTreeMap<Cluster, Embedding> {
 /// splits one person into two local tracks and this refuses to put them
 /// back together.
 ///
-/// Same channel only. The two channels are separate recordings with their
-/// own windows, and one person can be on both, so simultaneity across them
-/// says nothing.
+/// Same channel only, which follows from grouping by window: a window
+/// belongs to one channel. The two channels are separate recordings with
+/// their own windows, and one person can be on both, so simultaneity across
+/// them says nothing.
 ///
 /// Two local tracks are a *hypothesis* that two people are talking, not a
 /// proof of it. Segmentation can split one person in two, and this then
@@ -914,68 +939,46 @@ pub fn provisional_of(observed: &Observed) -> BTreeMap<Cluster, Embedding> {
 /// Harness-only, like [`provisional_of`]. Returns both directions of every
 /// pair, because [`super::cluster::agglomerate_constrained`] checks one.
 pub fn cannot_link_of(observed: &Observed) -> BTreeMap<Cluster, BTreeSet<Cluster>> {
-    // Validate the windows that were actually produced, not the constants
-    // they were produced from. [`LiveDiarizer::with_step`] and
-    // `EVERTRANSCRIPT_SEGMENT_STEP_MS` both set the step at run time, so
-    // `SEGMENT_STEP == SEGMENT_WINDOW` can hold while these windows overlap
-    // — and under overlap "the window an observation came from" is not a
-    // question with one answer, so every constraint built from it would be
-    // picked arbitrarily from the windows that happened to match.
-    for channel in CHANNELS {
-        let mut spans: Vec<(u64, u64)> = observed
-            .windows
-            .iter()
-            .filter(|(at, _, _)| *at == channel)
-            .map(|&(_, from, to)| (from, to))
-            .collect();
-        spans.sort_unstable();
-        for pair in spans.windows(2) {
-            assert!(
-                pair[0].1 <= pair[1].0,
-                "cannot-link needs windows that tile, and {channel:?} has \
-                 {:?} overlapping {:?}. A sliding step needs the constraint \
-                 rebuilt against every window covering an observation, which \
-                 this does not do.",
-                pair[0],
-                pair[1]
-            );
-        }
-    }
-
-    let mut together: BTreeMap<(usize, u64), Vec<Cluster>> = BTreeMap::new();
+    // Grouped by the window each observation **records**, not by the window
+    // its first run happens to land in. Under a sliding step an instant sits
+    // in several windows, so geometry cannot name the one that produced an
+    // observation — it would pick whichever matched first. The observation
+    // has said all along: `window` and `local` are written by `observe` at
+    // the moment the vectors are cut. Overlap in the audio does not make the
+    // source ambiguous, so a sliding step needs no special case here.
+    let mut together: BTreeMap<usize, Vec<(u8, Cluster)>> = BTreeMap::new();
     for observation in &observed.observations {
-        // Nothing to place and nothing to constrain: it pairs with no one
-        // either way, so this is an absence of provenance rather than
-        // provenance being dropped.
-        let Some(&(start, _)) = observation.runs.first() else {
-            continue;
-        };
-        let mut covering = observed
-            .windows
-            .iter()
-            .filter(|&&(at, from, to)| at == observation.channel && start >= from && start < to);
-        let Some(&(_, from, _)) = covering.next() else {
+        let Some(&(channel, _, _)) = observed.windows.get(observation.window) else {
             panic!(
-                "observation at {start} ms on {:?} came from no window; its \
-                 provenance cannot be trusted to say who it may not be",
-                observation.channel
+                "observation claims window {} of {}; its provenance cannot be \
+                 trusted to say who it may not be",
+                observation.window,
+                observed.windows.len()
             );
         };
-        assert!(
-            covering.next().is_none(),
-            "observation at {start} ms on {:?} sits in more than one window",
-            observation.channel
+        assert_eq!(
+            channel, observation.channel,
+            "observation on {:?} claims window {}, which ran on {channel:?}. \
+             The two channels are separate recordings with their own windows, \
+             so a pair drawn across them would constrain nothing real.",
+            observation.channel, observation.window
         );
         together
-            .entry((slot(observation.channel), from))
+            .entry(observation.window)
             .or_default()
-            .push(observation.cluster);
+            .push((observation.local, observation.cluster));
     }
 
     let mut forbidden: BTreeMap<Cluster, BTreeSet<Cluster>> = BTreeMap::new();
-    for clusters in together.values() {
-        for (index, left) in clusters.iter().enumerate() {
-            for right in &clusters[index + 1..] {
+    for tracks in together.values() {
+        for (index, (left_local, left)) in tracks.iter().enumerate() {
+            for (right_local, right) in &tracks[index + 1..] {
+                // One local track is one hypothesised person. Two rows of
+                // the same track are not two people, and nothing about the
+                // segmentation says they may not be the same voice.
+                if left_local == right_local {
+                    continue;
+                }
                 forbidden.entry(*left).or_default().insert(*right);
                 forbidden.entry(*right).or_default().insert(*left);
             }
@@ -1014,7 +1017,30 @@ mod tests {
     /// One 10 s chunk's frame geometry, as the segmentation model has it.
     const SAMPLES_PER_FRAME: f64 = SEGMENT_WINDOW as f64 / 589.0;
 
+    /// The only local track of its window.
+    ///
+    /// Provenance is named rather than guessed at. It used to be stamped
+    /// `window: cluster`, which made every fixture's window index a
+    /// coincidence of its cluster number: the three repeated cluster-0
+    /// observations below all claimed window 0, and the tiled cannot-link
+    /// fixture put its two same-window tracks in different windows. Both
+    /// now say which window they came from, because the code under test
+    /// reads that field.
     fn observation(
+        window: usize,
+        channel: AudioChannel,
+        cluster: u32,
+        runs: &[(u64, u64)],
+        clean: &[(u64, u64)],
+    ) -> Observation {
+        track(window, 0, channel, cluster, runs, clean)
+    }
+
+    /// One named local track of a window, for the fixtures where two tracks
+    /// of the *same* window are the point.
+    fn track(
+        window: usize,
+        local: u8,
         channel: AudioChannel,
         cluster: u32,
         runs: &[(u64, u64)],
@@ -1023,52 +1049,87 @@ mod tests {
         Observation {
             channel,
             cluster: Cluster(cluster),
-            // The fixtures are one local speaker per window, which is what
-            // the tests below are about; the alignment fields are carried,
-            // not exercised.
-            window: cluster as usize,
-            local: 0,
+            window,
+            local,
             vector: vec![1.0, 0.0],
             runs: runs.to_vec(),
             clean_runs: clean.to_vec(),
         }
     }
 
-    /// The guard has to read the windows, not the constants behind them.
+    /// Overlapping windows are ordinary now, because provenance is recorded.
     ///
-    /// `with_step` and `EVERTRANSCRIPT_SEGMENT_STEP_MS` set the step at run
-    /// time, so windows can overlap while `SEGMENT_STEP` still equals
-    /// `SEGMENT_WINDOW` — which is exactly what the first version of this
-    /// guard asserted and exactly what it would have waved through. The
-    /// first assertion here is the point: the defaults still agree, and the
-    /// windows still overlap.
+    /// This used to refuse them: with windows that tile, "the window an
+    /// observation came from" could be answered by asking which window
+    /// contains its first run, and under a sliding step that question has
+    /// several answers, so the guard refused rather than pick one. But the
+    /// observation records the window `observe` cut it from, so there was
+    /// never a need to infer it — and the refusal is what kept the
+    /// diagnostic from being computable at the very steps it was wanted for.
+    ///
+    /// The case that makes the difference: this observation is from the
+    /// *later* window, and its first run also falls inside the earlier one.
+    /// Asking geometry returns window 0, the earliest match, which is the
+    /// wrong source and would pair it with the wrong tracks.
     #[test]
-    #[should_panic(expected = "windows that tile")]
-    fn overlapping_windows_are_refused_even_while_the_constants_agree() {
+    fn a_run_inside_an_earlier_window_is_still_the_window_it_came_from() {
         assert_eq!(
             SEGMENT_STEP, SEGMENT_WINDOW,
             "the defaults are unchanged; only these windows overlap"
         );
         let overlapped = Observed {
             embedding: EMBEDDING_IDENTITY,
-            observations: vec![observation(AudioChannel::Mic, 0, &[(1_000, 2_000)], &[])],
+            observations: vec![
+                // Both from window 1, though 6000 ms sits in window 0 too.
+                track(1, 0, AudioChannel::Mic, 0, &[(6_000, 7_000)], &[]),
+                track(1, 1, AudioChannel::Mic, 1, &[(6_000, 7_000)], &[]),
+                // And one genuinely from window 0, which geometry would
+                // have lumped in with them.
+                track(0, 0, AudioChannel::Mic, 2, &[(1_000, 2_000)], &[]),
+            ],
             windows: vec![
                 (AudioChannel::Mic, 0, 10_000),
                 (AudioChannel::Mic, 5_000, 15_000),
             ],
         };
-        let _ = cannot_link_of(&overlapped);
+
+        let forbidden = cannot_link_of(&overlapped);
+        assert_eq!(forbidden[&Cluster(0)], BTreeSet::from([Cluster(1)]));
+        assert_eq!(forbidden[&Cluster(1)], BTreeSet::from([Cluster(0)]));
+        assert!(
+            !forbidden.contains_key(&Cluster(2)),
+            "the only track of window 0, so it is forbidden nothing — and \
+             inferring its window from geometry would have forbidden it both"
+        );
+    }
+
+    /// Two rows of one local track are one track.
+    ///
+    /// Segmentation separating two people is what a constraint is entitled
+    /// to read; the same track appearing twice says nothing, and forbidding
+    /// it to itself would refuse a merge nothing ruled out.
+    #[test]
+    fn one_local_track_is_not_forbidden_to_itself() {
+        let doubled = Observed {
+            embedding: EMBEDDING_IDENTITY,
+            observations: vec![
+                track(0, 0, AudioChannel::Mic, 0, &[(1_000, 2_000)], &[]),
+                track(0, 0, AudioChannel::Mic, 1, &[(3_000, 4_000)], &[]),
+            ],
+            windows: vec![(AudioChannel::Mic, 0, 10_000)],
+        };
+        assert!(cannot_link_of(&doubled).is_empty());
     }
 
     /// Silently skipping it would quietly build fewer constraints than the
     /// run believes it has, which is the failure this whole guard exists to
     /// make impossible.
     #[test]
-    #[should_panic(expected = "came from no window")]
-    fn an_observation_outside_every_window_is_refused_rather_than_skipped() {
+    #[should_panic(expected = "claims window 4")]
+    fn an_observation_naming_a_window_that_does_not_exist_is_refused() {
         let stray = Observed {
             embedding: EMBEDDING_IDENTITY,
-            observations: vec![observation(AudioChannel::Mic, 0, &[(50_000, 51_000)], &[])],
+            observations: vec![observation(4, AudioChannel::Mic, 0, &[(1_000, 2_000)], &[])],
             windows: vec![(AudioChannel::Mic, 0, 10_000)],
         };
         let _ = cannot_link_of(&stray);
@@ -1089,7 +1150,7 @@ mod tests {
         };
         let observed = Observed {
             embedding: other,
-            observations: vec![observation(AudioChannel::Mic, 0, &[(0, 1_000)], &[])],
+            observations: vec![observation(0, AudioChannel::Mic, 0, &[(0, 1_000)], &[])],
             windows: vec![(AudioChannel::Mic, 0, 10_000)],
         };
         let stamped = provisional_of(&observed);
@@ -1115,6 +1176,7 @@ mod tests {
                 version: "1",
             },
             observations: vec![observation(
+                0,
                 AudioChannel::Mic,
                 0,
                 &[(0, 2_000)],
@@ -1150,13 +1212,13 @@ mod tests {
         let tiled = Observed {
             embedding: EMBEDDING_IDENTITY,
             observations: vec![
-                observation(AudioChannel::Mic, 0, &[(1_000, 2_000)], &[]),
-                observation(AudioChannel::Mic, 1, &[(1_500, 2_500)], &[]),
-                observation(AudioChannel::Mic, 2, &[(11_000, 12_000)], &[]),
+                track(0, 0, AudioChannel::Mic, 0, &[(1_000, 2_000)], &[]),
+                track(0, 1, AudioChannel::Mic, 1, &[(1_500, 2_500)], &[]),
+                observation(1, AudioChannel::Mic, 2, &[(11_000, 12_000)], &[]),
                 // Same instant, other channel: separate recordings with
                 // their own windows, and one person can be on both, so
                 // simultaneity across them says nothing.
-                observation(AudioChannel::System, 3, &[(1_200, 2_200)], &[]),
+                observation(2, AudioChannel::System, 3, &[(1_200, 2_200)], &[]),
             ],
             windows: vec![
                 (AudioChannel::Mic, 0, 10_000),
@@ -1218,10 +1280,10 @@ mod tests {
         let observed = Observed {
             embedding: EMBEDDING_IDENTITY,
             observations: vec![
-                observation(AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
-                observation(AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
-                observation(AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
-                observation(AudioChannel::Mic, 1, &[(1_000, 2_000)], &[]),
+                observation(0, AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
+                observation(1, AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
+                observation(2, AudioChannel::Mic, 0, &[(0, 3_000)], &[(0, 3_000)]),
+                track(0, 1, AudioChannel::Mic, 1, &[(1_000, 2_000)], &[]),
             ],
             windows: vec![(AudioChannel::Mic, 0, 3_000); 3],
         };
@@ -1235,6 +1297,94 @@ mod tests {
         assert_eq!(result.turns[0].cluster, Cluster(0));
     }
 
+    /// One window cannot outvote the two that disagreed with it.
+    ///
+    /// Segmentation splits a voice into two local tracks inside a single
+    /// window more or less constantly, and clustering then puts them back
+    /// together — at which point a vote that counted *observations* heard
+    /// that window say the same thing twice. Three windows cover this
+    /// second, two of them found nobody, and the third found this voice on
+    /// two overlapping tracks: two votes against three voters is a majority
+    /// assembled out of one opinion. The window votes once.
+    #[test]
+    fn two_local_tracks_of_one_window_are_one_vote() {
+        let observed = Observed {
+            embedding: EMBEDDING_IDENTITY,
+            observations: vec![
+                track(0, 0, AudioChannel::Mic, 0, &[(1_000, 2_000)], &[]),
+                track(0, 1, AudioChannel::Mic, 1, &[(1_000, 2_000)], &[]),
+            ],
+            windows: vec![(AudioChannel::Mic, 0, 3_000); 3],
+        };
+        // Clustering decided the two tracks are the same person.
+        let canonical = [(Cluster(0), Cluster(0)), (Cluster(1), Cluster(0))]
+            .into_iter()
+            .collect();
+        let result = assemble(&observed, &canonical);
+        assert!(
+            result.turns.is_empty(),
+            "one window of three is not a majority, however many tracks it \
+             split the voice across: {:?}",
+            result.turns
+        );
+    }
+
+    /// And a window is still one vote when its tracks are not adjacent.
+    ///
+    /// The guard remembers only the window that last credited a cell, which
+    /// is enough because the votes are sorted by window first. Take the sort
+    /// away and an order like window 0, window 1, window 0 slips a second
+    /// vote past it — so this fixture is deliberately in that order, and the
+    /// two tracks of window 0 straddle a track of window 1. Two windows of
+    /// five, not three.
+    #[test]
+    fn a_window_whose_tracks_are_not_adjacent_still_votes_once() {
+        let observed = Observed {
+            embedding: EMBEDDING_IDENTITY,
+            observations: vec![
+                track(0, 0, AudioChannel::Mic, 0, &[(1_000, 2_000)], &[]),
+                track(1, 0, AudioChannel::Mic, 1, &[(1_000, 2_000)], &[]),
+                track(0, 1, AudioChannel::Mic, 2, &[(1_000, 2_000)], &[]),
+            ],
+            windows: vec![(AudioChannel::Mic, 0, 3_000); 5],
+        };
+        let canonical = [
+            (Cluster(0), Cluster(0)),
+            (Cluster(1), Cluster(0)),
+            (Cluster(2), Cluster(0)),
+        ]
+        .into_iter()
+        .collect();
+        assert!(
+            assemble(&observed, &canonical).turns.is_empty(),
+            "two of five windows is not a majority"
+        );
+    }
+
+    /// The control that keeps the fix from being "count nothing".
+    ///
+    /// Same shape, same clustering, same three voters — but the two tracks
+    /// come from *different* windows, so two of three really did put this
+    /// voice here and the instant is carried.
+    #[test]
+    fn two_windows_that_agree_still_carry_the_instant() {
+        let observed = Observed {
+            embedding: EMBEDDING_IDENTITY,
+            observations: vec![
+                track(0, 0, AudioChannel::Mic, 0, &[(1_000, 2_000)], &[]),
+                track(1, 0, AudioChannel::Mic, 1, &[(1_000, 2_000)], &[]),
+            ],
+            windows: vec![(AudioChannel::Mic, 0, 3_000); 3],
+        };
+        let canonical = [(Cluster(0), Cluster(0)), (Cluster(1), Cluster(0))]
+            .into_iter()
+            .collect();
+        let result = assemble(&observed, &canonical);
+        assert_eq!(result.turns.len(), 1, "{:?}", result.turns);
+        assert_eq!(result.turns[0].cluster, Cluster(0));
+        assert_eq!(result.turns[0].duration_ms(), 1_000);
+    }
+
     #[test]
     fn half_the_windows_are_enough() {
         // Two of four is a majority for this purpose: a boundary the model
@@ -1243,8 +1393,8 @@ mod tests {
         let observed = Observed {
             embedding: EMBEDDING_IDENTITY,
             observations: vec![
-                observation(AudioChannel::Mic, 0, &[(0, 1_000)], &[]),
-                observation(AudioChannel::Mic, 0, &[(0, 1_000)], &[]),
+                observation(0, AudioChannel::Mic, 0, &[(0, 1_000)], &[]),
+                observation(1, AudioChannel::Mic, 0, &[(0, 1_000)], &[]),
             ],
             windows: vec![(AudioChannel::Mic, 0, 1_000); 4],
         };
@@ -1369,8 +1519,15 @@ mod tests {
     #[test]
     fn overlapped_speech_is_a_turn_for_each_voice() {
         let observations = vec![
-            observation(AudioChannel::Mic, 0, &[(0, 5_000)], &[(0, 3_000)]),
-            observation(AudioChannel::Mic, 1, &[(3_000, 8_000)], &[(5_000, 8_000)]),
+            track(0, 0, AudioChannel::Mic, 0, &[(0, 5_000)], &[(0, 3_000)]),
+            track(
+                0,
+                1,
+                AudioChannel::Mic,
+                1,
+                &[(3_000, 8_000)],
+                &[(5_000, 8_000)],
+            ),
         ];
         let result = assemble(&observed(observations), &BTreeMap::new());
         assert_eq!(result.turns.len(), 2);
@@ -1389,6 +1546,7 @@ mod tests {
         // no speaker at all. It is a turn now; whether it also earns a
         // Speaker is `persist`'s question, not this one's.
         let observations = vec![observation(
+            0,
             AudioChannel::System,
             0,
             &[(1_000, 1_200)],
@@ -1405,11 +1563,21 @@ mod tests {
 
     #[test]
     fn two_local_speakers_of_one_voice_are_one_turn() {
-        // The same person in two consecutive chunks — local speaker 1,
-        // then local speaker 0 — clustered together.
+        // The same person on two local tracks of one window, clustered
+        // together. Their runs do not overlap, so the vote counts the
+        // window once either way and `merge_adjacent` is what joins them.
         let observations = vec![
-            observation(AudioChannel::Mic, 0, &[(7_000, 10_000)], &[(7_000, 10_000)]),
-            observation(
+            track(
+                0,
+                0,
+                AudioChannel::Mic,
+                0,
+                &[(7_000, 10_000)],
+                &[(7_000, 10_000)],
+            ),
+            track(
+                0,
+                1,
                 AudioChannel::Mic,
                 1,
                 &[(10_000, 12_000)],
@@ -1438,6 +1606,7 @@ mod tests {
     #[test]
     fn the_sample_is_taken_from_where_the_voice_is_alone() {
         let observations = vec![observation(
+            0,
             AudioChannel::Mic,
             0,
             &[(0, 10_000)],

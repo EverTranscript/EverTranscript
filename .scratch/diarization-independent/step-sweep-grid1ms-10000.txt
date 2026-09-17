@@ -1,6 +1,6 @@
-# Rescored 2026-09-16 with the corrected vote and same-window diagnostic (Q211). Merge threshold 0.6 (MERGE_THRESHOLD, sweep unset). WeSpeaker. No re-inference: the cached observations were reused.
+# Quantization probe: GRID_MS=1 over the cached 10s observations. Reproduces the pre-Step-A numbers exactly.
 
-    Finished `release` profile [optimized] target(s) in 0.43s
+    Finished `release` profile [optimized] target(s) in 0.47s
      Running tests/diarization_accuracy.rs (target/release/deps/diarization_accuracy-94c4bb5fc6cbc050)
 
 running 1 test
@@ -15,14 +15,14 @@ TS3004b       observed   38.4s for 2246.1s of audio  (0.02x)
 TS3004d       observed   40.8s for 2750.8s of audio  (0.01x)
 ES2011a       DER   27.9%  (missed   9.6  false alarm   5.3  confusion  13.0)  oracle   19.6%
 IB4002        DER   53.6%  (missed  12.5  false alarm  10.9  confusion  30.3)  oracle   30.5%
-IB4003        DER   19.3%  (missed   6.1  false alarm   4.1  confusion   9.1)  oracle   14.9%
+IB4003        DER   19.3%  (missed   6.1  false alarm   4.1  confusion   9.1)  oracle   15.1%
 IS1008a       DER   13.5%  (missed   4.8  false alarm   4.8  confusion   4.0)  oracle   10.4%
-TS3004b       DER   21.4%  (missed   5.6  false alarm   5.2  confusion  10.7)  oracle   15.8%
-TS3004d       DER   38.4%  (missed   8.5  false alarm   7.8  confusion  22.0)  oracle   24.5%
+TS3004b       DER   21.4%  (missed   5.6  false alarm   5.2  confusion  10.7)  oracle   15.9%
+TS3004d       DER   38.4%  (missed   8.5  false alarm   7.8  confusion  22.0)  oracle   24.6%
 
 6 meetings
-DER             29.85%   missed 7.78  false alarm 6.42  confusion 15.65
-oracle floor    19.82%   what perfect clustering would still cost
+DER             29.86%   missed 7.79  false alarm 6.42  confusion 15.65
+oracle floor    19.88%   what perfect clustering would still cost
 same-window      0.47%   4 of 858 pairs heard talking at once were merged anyway
 cross-meeting  EER 34.92% at 0.102   177210 trials
 at MATCH_FLOOR 0.62:   0.0% of different colleagues would be accepted as the same person
@@ -36,5 +36,5 @@ oracle voices  24 voices from perfect clustering — the ceiling any threshold a
 wall clock     176.9s of inference for 10960.2s of audio  (0.02x real time), 1 threshold(s) scored from it
 test the_pipeline_scores_what_the_record_says_it_scores ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 2.66s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 6.35s
 

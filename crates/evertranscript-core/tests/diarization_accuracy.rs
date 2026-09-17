@@ -1023,37 +1023,38 @@ fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64) {
         diarize::cluster::agglomerate_with(&provisional, threshold)
     };
 
-    // Observation indices grouped by the window they were heard in, each
-    // carrying who the reference says it actually is.
-    let mut per_window: BTreeMap<usize, Vec<(diarize::Cluster, String)>> = BTreeMap::new();
+    // Grouped by the window each observation **records**. Searching the
+    // window list for one that geometrically contains the first run is only
+    // right while windows tile: under a sliding step several contain it and
+    // `position` returns the earliest, which is generally not the window
+    // that produced the vectors. The rate this reports is a claim about
+    // what segmentation separated, so it has to be keyed on what
+    // segmentation actually did.
+    let mut per_window: BTreeMap<usize, Vec<(u8, diarize::Cluster, String)>> = BTreeMap::new();
     for observation in &one.observed.observations {
-        let Some((start, _)) = observation.runs.first() else {
-            continue;
-        };
-        let Some(window) = one
-            .observed
-            .windows
-            .iter()
-            .position(|&(channel, from, to)| {
-                channel == observation.channel && *start >= from && *start < to
-            })
-        else {
-            continue;
-        };
+        let (channel, _, _) = one.observed.windows[observation.window];
+        assert_eq!(
+            channel, observation.channel,
+            "observation on {:?} claims window {}, which ran on {channel:?}",
+            observation.channel, observation.window
+        );
         // No owner in the reference means the pair says nothing either way.
         if let Some(who) = dominant_speaker(&observation.runs, &one.reference) {
-            per_window
-                .entry(window)
-                .or_default()
-                .push((observation.cluster, who));
+            per_window.entry(observation.window).or_default().push((
+                observation.local,
+                observation.cluster,
+                who,
+            ));
         }
     }
 
     let (mut merged, mut pairs) = (0u64, 0u64);
     for held in per_window.values() {
-        for (i, (left, left_who)) in held.iter().enumerate() {
-            for (right, right_who) in &held[i + 1..] {
-                if left_who == right_who {
+        for (i, (left_local, left, left_who)) in held.iter().enumerate() {
+            for (right_local, right, right_who) in &held[i + 1..] {
+                // Distinct local tracks of that one window, which is what
+                // "segmentation said these are two people" means.
+                if left_local == right_local || left_who == right_who {
                     continue;
                 }
                 pairs += 1;

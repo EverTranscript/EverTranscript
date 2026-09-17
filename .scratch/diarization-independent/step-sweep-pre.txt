@@ -1,3 +1,5 @@
+# SUPERSEDED for the same-window diagnostic only: this is the pre-Step-A build, which has no such diagnostic. DER and oracle floor stand.
+
     Finished `release` profile [optimized] target(s) in 0.43s
      Running tests/diarization_accuracy.rs (target/release/deps/diarization_accuracy-94c4bb5fc6cbc050)
 
