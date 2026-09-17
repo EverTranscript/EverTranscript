@@ -2664,4 +2664,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user's instruction, verbatim: *"register the migrations"* — given after Q226 ("register the migrations later") and Q227's recommendation to register soon. The seed and the `Some(0)` handling are the agent's, confirmed with the advisor as design A over a fabricated identity or a second migration; the identity seeded is the one `the_stored_identity_is_not_the_download_key` pinned until the swap and every fielded vector carries. This is the data-loss floor the brief held on the user's word, and the user released it.
 **Outcome:** applied
 **Supersedes:** Q217, Q221 — where each says the tables are not in `MIGRATIONS` and the paths are unreachable in the field; everything else in both stands.
-**Ref:** (pending)
+**Ref:** 2a30c79
