@@ -332,7 +332,7 @@ struct Measured {
     /// `agglomerate` has no cannot-link constraint to say so. Ticket 03
     /// flagged it and no fixture can catch it, because fixture vectors are
     /// orthogonal and never come close enough to merge.
-    cannot_link: (u64, u64),
+    cannot_link: (u64, u64, u64),
 }
 
 /// The reference speaker holding most of these milliseconds, if any is.
@@ -1009,62 +1009,69 @@ fn matcher_grid() -> Vec<(f32, f32)> {
     grid
 }
 
-fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64) {
+/// How often clustering merged two voices that segmentation had separated.
+///
+/// **The pairs come from [`diarize::live::cannot_link_of`], not from a second
+/// grouping written here.** They were built twice, and the copy in this file
+/// drifted: it looked the source window up by geometry while the other read
+/// the recorded one, so under a slide the two disagreed about which
+/// observations were even comparable. One of them is the constraint the
+/// clusterer is given, which makes it the one this has to score against.
+///
+/// `cannot_link_of` returns both directions, so each pair is taken once.
+/// Where the reference names two *different* known people, the pair is a
+/// violation if clustering merged it. Where it names the **same** person
+/// twice — segmentation split one voice into two local tracks of one window —
+/// the constraint forbids a merge that ought to happen, and that is counted
+/// separately as `forbidden_rejoins`. A constraint is only worth its
+/// violations if it is not paying more for them here, so reporting the first
+/// without the second would flatter it.
+fn same_window_merges(one: &Inferred, threshold: f32) -> (u64, u64, u64) {
     let provisional = diarize::live::provisional_of(&one.observed);
+    let forbidden = diarize::live::cannot_link_of(&one.observed);
     // Scored against whichever clusterer actually ran, or a constrained
     // sweep would report the unconstrained violation rate.
     let canonical = if cannot_link_enabled() {
-        diarize::cluster::agglomerate_constrained(
-            &provisional,
-            threshold,
-            &diarize::live::cannot_link_of(&one.observed),
-        )
+        diarize::cluster::agglomerate_constrained(&provisional, threshold, &forbidden)
     } else {
         diarize::cluster::agglomerate_with(&provisional, threshold)
     };
 
-    // Grouped by the window each observation **records**. Searching the
-    // window list for one that geometrically contains the first run is only
-    // right while windows tile: under a sliding step several contain it and
-    // `position` returns the earliest, which is generally not the window
-    // that produced the vectors. The rate this reports is a claim about
-    // what segmentation separated, so it has to be keyed on what
-    // segmentation actually did.
-    let mut per_window: BTreeMap<usize, Vec<(u8, diarize::Cluster, String)>> = BTreeMap::new();
-    for observation in &one.observed.observations {
-        let (channel, _, _) = one.observed.windows[observation.window];
-        assert_eq!(
-            channel, observation.channel,
-            "observation on {:?} claims window {}, which ran on {channel:?}",
-            observation.channel, observation.window
-        );
-        // No owner in the reference means the pair says nothing either way.
-        if let Some(who) = dominant_speaker(&observation.runs, &one.reference) {
-            per_window.entry(observation.window).or_default().push((
-                observation.local,
+    // Who the reference says each provisional cluster is. A lookup, not a
+    // vote: `observe` numbers a cluster per observation, so there is exactly
+    // one observation behind each.
+    let who: BTreeMap<diarize::Cluster, String> = one
+        .observed
+        .observations
+        .iter()
+        .filter_map(|observation| {
+            Some((
                 observation.cluster,
-                who,
-            ));
-        }
-    }
+                dominant_speaker(&observation.runs, &one.reference)?,
+            ))
+        })
+        .collect();
 
-    let (mut merged, mut pairs) = (0u64, 0u64);
-    for held in per_window.values() {
-        for (i, (left_local, left, left_who)) in held.iter().enumerate() {
-            for (right_local, right, right_who) in &held[i + 1..] {
-                // Distinct local tracks of that one window, which is what
-                // "segmentation said these are two people" means.
-                if left_local == right_local || left_who == right_who {
-                    continue;
-                }
-                pairs += 1;
-                if canonical.get(left) == canonical.get(right) {
-                    merged += 1;
-                }
+    let (mut merged, mut pairs, mut rejoins) = (0u64, 0u64, 0u64);
+    for (left, rights) in &forbidden {
+        for right in rights {
+            if right <= left {
+                continue;
+            }
+            let (Some(left_who), Some(right_who)) = (who.get(left), who.get(right)) else {
+                continue;
+            };
+            if left_who == right_who {
+                rejoins += 1;
+                continue;
+            }
+            pairs += 1;
+            if canonical.get(left) == canonical.get(right) {
+                merged += 1;
             }
         }
     }
-    (merged, pairs)
+    (merged, pairs, rejoins)
 }
 
 fn score_at(one: &Inferred, threshold: f32, with_windows: bool) -> Measured {
@@ -1211,6 +1218,32 @@ fn report(measured: &[Measured], with_oracle: bool) -> (Der, Der) {
             merged as f64 / pairs as f64 * 100.0
         }
     );
+    // What the constraint costs to buy that rate: same-window pairs the
+    // reference says are one person, which it forbids rejoining.
+    let rejoins: u64 = measured.iter().map(|one| one.cannot_link.2).sum();
+    println!(
+        "forbidden      {:>6.2}%   {rejoins} of {} same-window pairs are one person split in two",
+        if pairs + rejoins == 0 {
+            0.0
+        } else {
+            rejoins as f64 / (pairs + rejoins) as f64 * 100.0
+        },
+        pairs + rejoins
+    );
+    // **Fragmentation-confounded. Not for ranking configurations.**
+    //
+    // These two are computed over every provisional voice the run produced,
+    // and how many of those there are is itself a function of the
+    // configuration: a smaller step, a different merge threshold or a
+    // constraint all change the count and the size of what each voice was
+    // built from. A configuration that shatters one person into six
+    // fragments is scored on six easy near-duplicate pairs. So these move
+    // with fragmentation as much as with recognition, and two configurations
+    // cannot be ordered by them — which was done once (Q210) and withdrawn
+    // (Q211). The oracle block below is the one that answers the recognition
+    // question, because its voices are one per person per meeting whatever
+    // the clustering did.
+    println!("-- all-pairs, fragmentation-confounded; do not rank configurations on these --");
     match score::equal_error_rate(&trials) {
         Some((rate, threshold)) => println!(
             "cross-meeting  EER {:>5.2}% at {threshold:.3}   {} trials",
@@ -1250,6 +1283,7 @@ fn report(measured: &[Measured], with_oracle: bool) -> (Der, Der) {
         ),
         None => println!("nearest voice  not askable: one meeting's voices have nobody to meet"),
     }
+    println!("-- end fragmentation-confounded block --");
 
     if with_oracle {
         // The ceiling. One centroid per person per meeting, built from the
@@ -2293,6 +2327,93 @@ fn the_constrained_path_is_the_one_the_replay_gets() {
         held.embeddings.len(),
         2,
         "constrained, one window's two local speakers stay two voices"
+    );
+}
+
+/// The same-window diagnostic counts pairs by the window that *produced* them.
+///
+/// It used to find the window by geometry — the first one containing a run's
+/// first instant — which is right only while windows tile. Under a slide an
+/// instant sits in several, and the earliest match is generally not the
+/// source: here the third track's run lies inside the first window as well as
+/// its own, and geometry would file it under the first and invent a pair out
+/// of two tracks that were never heard together.
+///
+/// Reading the recorded window is what makes the denominator mean "pairs
+/// segmentation says were talking at once". This pins that it does, in both
+/// clustering modes, because a violation rate scored against the wrong
+/// clusterer is no better than one counted over the wrong pairs.
+#[test]
+fn the_same_window_diagnostic_counts_the_window_an_observation_came_from() {
+    use evertranscript_protocol::AudioChannel;
+
+    let track = |window: usize, local: u8, cluster: u32, at: u64, vector: Vec<f32>| {
+        diarize::live::Observation {
+            channel: AudioChannel::Mic,
+            cluster: diarize::Cluster(cluster),
+            window,
+            local,
+            vector,
+            runs: vec![(at, at + 3_000)],
+            clean_runs: vec![(at, at + 3_000)],
+        }
+    };
+    let observed = diarize::live::Observed {
+        embedding: diarize::live::EMBEDDING_IDENTITY,
+        observations: vec![
+            // Two local tracks of the first window: one real pair.
+            track(0, 0, 0, 1_000, vec![1.0, 0.10, 0.0]),
+            track(0, 1, 1, 2_000, vec![1.0, -0.10, 0.0]),
+            // The second window's tracks. Their runs sit inside the first
+            // window too, which is the whole trap.
+            track(1, 0, 2, 6_000, vec![0.0, 0.0, 1.0]),
+            // One person segmentation split in two: a pair the constraint
+            // forbids that ought to be merged.
+            track(1, 1, 3, 6_500, vec![0.0, 0.05, 1.0]),
+        ],
+        // Overlapping, as a slide makes them.
+        windows: vec![
+            (AudioChannel::Mic, 0, 10_000),
+            (AudioChannel::Mic, 5_000, 15_000),
+        ],
+    };
+    let speaking = |who: &str, start: u64, end: u64| Span {
+        speaker: who.to_string(),
+        start_ms: start,
+        end_ms: end,
+    };
+    let one = Inferred {
+        name: "overlapping".to_string(),
+        reference: vec![
+            speaking("alice", 1_000, 4_000),
+            speaking("bob", 2_000, 5_000),
+            speaking("carol", 6_000, 9_000),
+        ],
+        observed,
+        audio_seconds: 15.0,
+        seconds: 1.0,
+    };
+
+    let (merged, pairs, rejoins) = same_window_merges(&one, 0.5);
+    assert_eq!(
+        pairs, 1,
+        "one window held two tracks, so there is one pair to judge; \
+         grouping by geometry would find two"
+    );
+    // Alice and Bob are near enough to be one voice at this threshold, which
+    // is the violation — unless the constraint the diagnostic scores against
+    // is the one forbidding it.
+    let expected = if cannot_link_enabled() { 0 } else { 1 };
+    assert_eq!(
+        merged, expected,
+        "the diagnostic scores the clusterer that ran"
+    );
+    // The other half of the ledger: the second window's two tracks are both
+    // Carol, so forbidding them is a cost, not a violation caught.
+    assert_eq!(
+        rejoins, 1,
+        "a same-window pair the reference calls one person is counted as a \
+         rejoin the constraint forbids, never as a pair it judges"
     );
 }
 

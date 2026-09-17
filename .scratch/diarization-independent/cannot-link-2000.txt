@@ -1,5 +1,5 @@
-# Unconstrained control (the shipped agglomerate).
-# Rescored 2026-09-16 from the cached 10000ms observations in /tmp/obs-step-10000.
+# Same-window cannot-link ENFORCED (agglomerate_constrained).
+# Rescored 2026-09-16 from the cached 2000ms observations in /tmp/obs-step-2000.
 # No re-inference: the wall-clock line below is the original inference cost,
 # carried in the snapshot. WeSpeaker, GRID_MS=10, merge threshold 0.60 set
 # explicitly (EVERTRANSCRIPT_MERGE_SWEEP=0.60). Six AMI dev meetings.
@@ -21,44 +21,44 @@ warning: unused variable: `rejoins`
      = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
 warning: `evertranscript-core` (test "diarization_accuracy") generated 1 warning (run `cargo fix --test "diarization_accuracy" -p evertranscript-core` to apply 1 suggestion)
-    Finished `release` profile [optimized] target(s) in 0.32s
+    Finished `release` profile [optimized] target(s) in 0.12s
      Running tests/diarization_accuracy.rs (target/release/deps/diarization_accuracy-94c4bb5fc6cbc050)
 
 running 1 test
 embedding under test: wespeaker-voxceleb-resnet34-LM v2 (/Users/frankdai/Library/Application Support/EverTranscript/models/diarize-embedding.onnx)
-segmentation step: 10000 ms
-same-window cannot-link: off (shipped clusterer)
-ES2011a       observed   17.3s for 1113.8s of audio  (0.02x)
-IB4002        observed   27.6s for 1882.4s of audio  (0.01x)
-IB4003        observed   37.1s for 2023.3s of audio  (0.02x)
-IS1008a       observed   15.6s for  943.8s of audio  (0.02x)
-TS3004b       observed   38.4s for 2246.1s of audio  (0.02x)
-TS3004d       observed   40.8s for 2750.8s of audio  (0.01x)
-ES2011a       DER   27.9%  (missed   9.6  false alarm   5.3  confusion  13.0)  oracle   19.6%
-IB4002        DER   53.6%  (missed  12.5  false alarm  10.9  confusion  30.3)  oracle   30.5%
-IB4003        DER   19.3%  (missed   6.1  false alarm   4.1  confusion   9.1)  oracle   14.9%
-IS1008a       DER   13.5%  (missed   4.8  false alarm   4.8  confusion   4.0)  oracle   10.4%
-TS3004b       DER   21.4%  (missed   5.6  false alarm   5.2  confusion  10.7)  oracle   15.8%
-TS3004d       DER   38.4%  (missed   8.5  false alarm   7.8  confusion  22.0)  oracle   24.5%
+segmentation step: 2000 ms
+same-window cannot-link: enforced
+ES2011a       observed   82.0s for 1113.8s of audio  (0.07x)
+IB4002        observed  132.3s for 1882.4s of audio  (0.07x)
+IB4003        observed  182.3s for 2023.3s of audio  (0.09x)
+IS1008a       observed   75.4s for  943.8s of audio  (0.08x)
+TS3004b       observed  181.8s for 2246.1s of audio  (0.08x)
+TS3004d       observed  183.8s for 2750.8s of audio  (0.07x)
+ES2011a       DER   24.4%  (missed  10.8  false alarm   4.3  confusion   9.3)  oracle   19.9%
+IB4002        DER   45.2%  (missed  17.2  false alarm   8.7  confusion  19.4)  oracle   31.0%
+IB4003        DER   17.6%  (missed   8.4  false alarm   3.1  confusion   6.1)  oracle   14.4%
+IS1008a       DER   11.4%  (missed   4.5  false alarm   3.9  confusion   2.9)  oracle    9.6%
+TS3004b       DER   20.2%  (missed   8.5  false alarm   4.4  confusion   7.2)  oracle   16.6%
+TS3004d       DER   32.8%  (missed  13.1  false alarm   5.4  confusion  14.3)  oracle   25.1%
 
 6 meetings
-DER             29.85%   missed 7.78  false alarm 6.42  confusion 15.65
-oracle floor    19.82%   what perfect clustering would still cost
-same-window      0.47%   4 of 858 pairs heard talking at once were merged anyway
-forbidden       30.07%   369 of 1227 same-window pairs are one person split in two
+DER             26.12%   missed 10.80  false alarm 4.97  confusion 10.35
+oracle floor    20.04%   what perfect clustering would still cost
+same-window      0.00%   0 of 4173 pairs heard talking at once were merged anyway
+forbidden       31.43%   1913 of 6086 same-window pairs are one person split in two
 -- all-pairs, fragmentation-confounded; do not rank configurations on these --
-cross-meeting  EER 34.92% at 0.102   177210 trials
+cross-meeting  EER 28.46% at 0.134   58443 trials
 at MATCH_FLOOR 0.62:   0.0% of different colleagues would be accepted as the same person
-nearest voice   21.8% right   674 voices, each against every other meeting's
+nearest voice   27.3% right   388 voices, each against every other meeting's
 -- end fragmentation-confounded block --
 
 oracle voices  24 voices from perfect clustering — the ceiling any threshold aims at
-  cross-meeting EER 3.83% at 0.328   240 trials
+  cross-meeting EER 4.04% at 0.331   240 trials
   nearest voice     33.3% right
-  floor that admits nobody: 0.712, refusing 20.00% of genuine pairs
+  floor that admits nobody: 0.696, refusing 20.00% of genuine pairs
 
-wall clock     176.9s of inference for 10960.2s of audio  (0.02x real time), 1 threshold(s) scored from it
+wall clock     837.7s of inference for 10960.2s of audio  (0.08x real time), 1 threshold(s) scored from it
 test the_pipeline_scores_what_the_record_says_it_scores ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 2.70s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 13.55s
 

@@ -1,6 +1,27 @@
-# Rescored 2026-09-16 with the corrected vote and same-window diagnostic (Q211). Merge threshold 0.6 (MERGE_THRESHOLD, sweep unset). WeSpeaker. No re-inference: the cached observations were reused.
+# Unconstrained control (the shipped agglomerate).
+# Rescored 2026-09-16 from the cached 2000ms observations in /tmp/obs-step-2000.
+# No re-inference: the wall-clock line below is the original inference cost,
+# carried in the snapshot. WeSpeaker, GRID_MS=10, merge threshold 0.60 set
+# explicitly (EVERTRANSCRIPT_MERGE_SWEEP=0.60). Six AMI dev meetings.
+#
+# 'same-window' counts pairs of distinct local tracks of ONE recorded source
+# window that the reference names as two different people, and how many
+# clustering merged anyway. 'forbidden' counts the same-window pairs the
+# reference names as ONE person: merges the constraint prevents that ought
+# to happen. Read them together; the first alone flatters the constraint.
+#
+# The all-pairs EER/nearest block is fragmentation-confounded and must not be
+# used to rank these configurations (Q211). The oracle block is valid.
+warning: unused variable: `rejoins`
+    --> crates/evertranscript-core/tests/diarization_accuracy.rs:2394:25
+     |
+2394 |     let (merged, pairs, rejoins) = same_window_merges(&one, 0.5);
+     |                         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_rejoins`
+     |
+     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
-    Finished `release` profile [optimized] target(s) in 0.13s
+warning: `evertranscript-core` (test "diarization_accuracy") generated 1 warning (run `cargo fix --test "diarization_accuracy" -p evertranscript-core` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.12s
      Running tests/diarization_accuracy.rs (target/release/deps/diarization_accuracy-94c4bb5fc6cbc050)
 
 running 1 test
@@ -24,9 +45,12 @@ TS3004d       DER   30.4%  (missed  12.8  false alarm   5.4  confusion  12.2)  o
 DER             24.33%   missed 10.76  false alarm 4.96  confusion 8.62
 oracle floor    19.86%   what perfect clustering would still cost
 same-window      0.89%   37 of 4173 pairs heard talking at once were merged anyway
+forbidden       31.43%   1913 of 6086 same-window pairs are one person split in two
+-- all-pairs, fragmentation-confounded; do not rank configurations on these --
 cross-meeting  EER 30.10% at 0.130   51224 trials
 at MATCH_FLOOR 0.62:   0.0% of different colleagues would be accepted as the same person
 nearest voice   25.2% right   365 voices, each against every other meeting's
+-- end fragmentation-confounded block --
 
 oracle voices  24 voices from perfect clustering — the ceiling any threshold aims at
   cross-meeting EER 4.04% at 0.331   240 trials
@@ -36,5 +60,5 @@ oracle voices  24 voices from perfect clustering — the ceiling any threshold a
 wall clock     837.7s of inference for 10960.2s of audio  (0.08x real time), 1 threshold(s) scored from it
 test the_pipeline_scores_what_the_record_says_it_scores ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 10.38s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 9.88s
 
