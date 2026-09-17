@@ -1,0 +1,39 @@
+    Finished `release` profile [optimized] target(s) in 0.48s
+     Running tests/diarization_accuracy.rs (target/release/deps/diarization_accuracy-94c4bb5fc6cbc050)
+
+running 1 test
+embedding under test: wespeaker-voxceleb-resnet34-LM v2 (/Users/frankdai/Library/Application Support/EverTranscript/models/diarize-embedding.onnx)
+segmentation step: 1000 ms
+same-window cannot-link: off (shipped clusterer)
+test the_pipeline_scores_what_the_record_says_it_scores has been running for over 60 seconds
+ES2011a       observed  159.5s for 1113.8s of audio  (0.14x)
+IB4002        observed  255.5s for 1882.4s of audio  (0.14x)
+IB4003        observed  352.9s for 2023.3s of audio  (0.17x)
+IS1008a       observed  150.1s for  943.8s of audio  (0.16x)
+TS3004b       observed  362.8s for 2246.1s of audio  (0.16x)
+TS3004d       observed  362.9s for 2750.8s of audio  (0.13x)
+ES2011a       DER   22.1%  (missed  10.2  false alarm   5.2  confusion   6.8)  oracle   19.3%
+IB4002        DER   43.3%  (missed  15.2  false alarm  10.0  confusion  18.1)  oracle   30.3%
+IB4003        DER   15.0%  (missed   7.6  false alarm   3.5  confusion   3.9)  oracle   13.7%
+IS1008a       DER   11.2%  (missed   3.9  false alarm   4.5  confusion   2.8)  oracle    9.5%
+TS3004b       DER   18.0%  (missed   6.6  false alarm   5.4  confusion   5.9)  oracle   16.1%
+TS3004d       DER   29.7%  (missed  10.6  false alarm   6.8  confusion  12.4)  oracle   23.7%
+
+6 meetings
+DER             23.84%   missed 9.22  false alarm 5.93  confusion 8.69
+oracle floor    19.32%   what perfect clustering would still cost
+same-window     10.21%   1050 of 10285 pairs heard talking at once were merged anyway
+cross-meeting  EER 31.23% at 0.127   59990 trials
+at MATCH_FLOOR 0.62:   0.0% of different colleagues would be accepted as the same person
+nearest voice   24.7% right   393 voices, each against every other meeting's
+
+oracle voices  24 voices from perfect clustering — the ceiling any threshold aims at
+  cross-meeting EER 4.26% at 0.334   240 trials
+  nearest voice     33.3% right
+  floor that admits nobody: 0.697, refusing 20.00% of genuine pairs
+
+wall clock     1643.8s of inference for 10960.2s of audio  (0.15x real time), 1 threshold(s) scored from it
+test the_pipeline_scores_what_the_record_says_it_scores ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 1664.25s
+
