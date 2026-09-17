@@ -14,7 +14,7 @@
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 3b463f1
 
 ## Q2 — m1/08-aec-dsp-quality — tradeoff
 
@@ -30,7 +30,7 @@
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 3b463f1
 
 ## Q3 — m1/03-capture-vertical — gate-resolution
 
@@ -46,7 +46,7 @@
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 3b463f1
 
 ## Q4 — m1/03-capture-vertical — deviation
 
@@ -62,7 +62,7 @@
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** eeafd92
 
 ## Q5 — m1/09-core-tray-lifecycle — deviation
 
@@ -78,7 +78,7 @@
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 990fa80
 
 ## Q6 — m1/11-guarantee-tests-closeout — deviation
 
@@ -94,7 +94,7 @@
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 6416cb7
 
 ## Q7 — m1/11-guarantee-tests-closeout — deviation
 
@@ -110,7 +110,7 @@
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 6416cb7
 
 ## Q8 — m1/11-guarantee-tests-closeout — tradeoff
 
@@ -126,7 +126,7 @@
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 6416cb7
 
 ## Q9 — m1/11-guarantee-tests-closeout — gate-resolution
 
@@ -144,7 +144,7 @@
 
 **Supersedes:** Q3 — its stated asymmetry does not hold on macOS 26; the conclusion it drew is kept, the evidence it drew it from is replaced.
 
-**Ref:** (pending)
+**Ref:** 7c65af5
 
 ## Q10 — m1/11-guarantee-tests-closeout — gate-resolution
 
@@ -162,7 +162,7 @@ The same run settled two things the ticket records in full. The TCC prompt does 
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** a40407d
 
 ## Q11 — m1/11-guarantee-tests-closeout — deviation
 
@@ -178,7 +178,7 @@ The same run settled two things the ticket records in full. The TCC prompt does 
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 75426c8
 
 ## Q12 — m1/11-guarantee-tests-closeout — gate-resolution
 
@@ -194,7 +194,7 @@ The same run settled two things the ticket records in full. The TCC prompt does 
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** e1382b0
 
 ## Q13 — m1/11-guarantee-tests-closeout — deviation
 
@@ -212,7 +212,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 6011e19
 
 ## Q14 — m1/11-guarantee-tests-closeout — gate-resolution
 
@@ -228,7 +228,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 6011e19
 
 ## Q15 — brand-identity/02-concepts-and-pick — gate-resolution
 
@@ -238,7 +238,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** human
 **Justification:** The Operator picked B from the rendered contact sheet after all three were mocked into the Dock, both menu bars, and a browser tab (`brand/explorations/`, review page linked in the ticket). B was also the recommendation: the only candidate that stays itself at 18 pt — A collapses to three bars and borrows the ≡ menu glyph's meaning, C reads as the letter Q at every size rendered.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** dbfdb41
 
 ## Q16 — brand-identity/01-asset-pipeline — tradeoff
 
@@ -248,7 +248,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** agent
 **Justification:** The tray embeds its glyphs with `include_bytes!`, so the files must exist at `cargo build` time on every machine and CI leg — a render step before every Rust build would put Node in the Rust toolchain's path (both reference repos, anarlog and Meetily, commit their Tauri icon sets for the same reason). The cost, binary diffs, is bounded: the render is deterministic (vector-rasterized per size, no system fonts, byte-compare before write; re-running produces no diff), so a diff can only mean the masters or the script changed.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** dbfdb41
 
 ## Q17 — brand-identity/04-tray-and-electron-integration — deviation
 
@@ -258,7 +258,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** agent
 **Justification:** Ticket 09 left the dots as a placeholder, and both studied competitors identify themselves in the menu bar with their mark as a template (their tray is also a state indicator — the model followed here). Attention is a new visible state the dots could not express: NotReady/NotPermitted previously looked identical to Idle until the menu was opened. The enum keeps the artwork out of the tested state machine; a decode test pins that every embedded TIFF is a 2-rep 18 pt template, and the Windows CI leg is unaffected because the bytes live inside the cfg(macos) module (`cargo tree --target x86_64-pc-windows-msvc` shows no objc2).
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** dbfdb41
 
 ## Q18 — brand-identity/03-final-mark-and-outputs — gate-resolution
 
@@ -268,7 +268,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** human
 **Justification:** The Operator chose the teal direction from the option set before the concepts were drawn. Constraint honoured throughout: the mark may suggest nothing the guarantees forbid (ADR-0001/0020/0034 — no clouds, sync arrows, globes, padlocks, sparkles), and it must not collide with the three neighbours studied (Granola chartreuse, Anarlog cream, Meetily purple) or the Zoom/Teams blues beside it in a Dock.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** dbfdb41
 
 ## Q19 — brand-identity/reference-logos — deviation
 
@@ -278,7 +278,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** agent
 **Justification:** They are other companies' copyrighted artwork and trademarks, and ADR-0033 makes this tree public at M2 — committing them would make the repo redistribute marks that are not ours (a different thing from *naming* the products, which `docs/competitive-facts-*.md` already does). Untracked-with-provenance keeps the requested local convenience and loses nothing that cannot be regenerated from the named paths. Easy to override: `git add -f brand/reference` if the Operator wants them tracked.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** f98c8f9
 
 ## Q20 — m2-auto-record/09-m2-closeout — finding
 
@@ -288,7 +288,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** human
 **Justification:** The closeout ticket had written down, in advance, that a live run "would add only whether the platform reports *that application* holding the microphone". That sentence names the entire failure mode and then dismisses it. It is the second time this milestone: Safari's audio processes report `com.apple.WebKit.*`, and that row was dead too. Both apps passed every unit test, because the tests and the code were written from the same wrong belief about the name — a fixture can only ever assert the id you already thought of. Before these two fixes, 2 of 6 Watchlist rows could not have triggered on macOS, in a product whose headline promise is never missing a meeting. The measured 0% false-negative rate was real and was measured on Chrome, which is why it caught neither. What remains unobserved is not reassuring by analogy: Arc and Edge (declined) and all of Windows are exactly where a third instance of this would hide.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** caae28e
 
 ## Q21 — m2-auto-record/05-windows-detection-vertical — finding
 
@@ -298,7 +298,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** agent
 **Justification:** Two of the three instances of this bug were found by running the app, which made the whole class feel like it needed hardware. It did not: this one is visible in the type of the thing being compared. Ticket 05's second criterion — "the exe→app table twin ... ported as seed data" — was already checked off, which is how it stayed hidden; the macOS `.helper` rule is platform-neutral code, so sharing the *function* read as having built the *table*. A twin of a table is a table. Notably, browsers were spared only by accident: `known_browsers` lists executables beside bundle ids, so two different mechanisms now cover the two kinds of row, and the new table deliberately omits browser executables so they cannot disagree. The four executable names are the only identifiers in this project asserted from memory rather than read off a running machine — the exact mistake Q20 is about — so they are marked unverified in the source, and `windows-check.md` asks for the real ones. A wrong name matches nothing, which is precisely the behaviour being replaced, so the table cannot regress the platform while it waits.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 92474d4
 
 ## Q22 — m2-auto-record/09-m2-closeout — finding
 
@@ -308,7 +308,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** human
 **Justification:** Re-asking was not noise, because the evidence had changed: the decline was made when the row's assumption looked like a formality, and by the time it was reversed three instances of that exact assumption had failed. This was the fourth. It also breaks the pattern the first three had suggested — Safari and Teams both needed the app *running* to expose, so the class felt like it needed hardware and driving; Arc needed only its `Info.plist`, and could have been caught the day the row was written. Two details worth keeping. First, Chrome and Edge are why nobody saw it: their vendors lowercase nothing, so `com.google.Chrome.helper` is exactly the app plus a suffix, and both had been *watched live* under those ids, which made the rule look confirmed rather than lucky. Second, the tests asserted `company.thebrowser.Browser.helper.Renderer` — a string Arc does not ship — which is the same invented-id habit as Q20, in the same file, in a test written to prove the opposite. The fix is the comparison and not an alias row for Arc, because bundle ids are case-insensitive to LaunchServices and an alias would have left the next vendor to lowercase a helper undiscovered. Residual, recorded and not closed: whether Arc's audio comes from a `.helper` process at all is still unobserved, since Arc requires an account to open a window — and that is precisely what Teams turned out to fail.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 033289e
 
 ## Q23 — m2-auto-record/05-windows-detection-vertical — finding
 
@@ -318,7 +318,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** agent
 **Justification:** One in four wrong is the argument for having looked. The corrected id is also the one VooV was observed under live on macOS, so the two independent sources agree, which is worth more than either alone. On provenance: Granola is not one of PORTS.md's three licensed upstreams, so what was taken is deliberately narrow — the identifiers for rows this product already ships, which are facts about Zoom's and Tencent's software rather than Granola's expression, and no code, structure, or entry for an app we do not watch. Whether Granola belongs in the ledger at all is the Operator's call, not one to make silently by adding a row; the absorption catalog directs porting from it while PORTS.md does not license it, and that tension should be resolved deliberately. What this does **not** do is close ticket 05: it establishes what the names are, not that the Windows detector reports them, and those are different claims — the same distinction Teams collapsed, where the bundle id was right and the recording process was something else entirely. The Chinese 腾讯会议 executable is still unknown, and is deliberately not guessed at.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 6f97b5e
 
 ## Q24 — brand-identity/raster-app-icon — deviation
 
@@ -328,7 +328,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Decided-by:** agent (the replacement itself was the Operator's instruction; this entry is the how)
 **Justification:** A plain copy would be reverted by the next `pnpm -C brand render`, silently — the invariant that the script produces every committed output is what makes the assets trustworthy, so the new art has to enter as a master, not as an output. Redrawing as SVG was not asked for and would change the art. Fixed en route: the icns writer's 16/32 @1x entries (`icp4`/`icp5`) round-tripped to noise under Apple's own tooling — Apple ships those sizes as raw ARGB or not at all — so the container now carries exactly the PNG types Apple's icons use and lets macOS derive the 1x smalls. The vector e remains the mark everywhere not asked about: tray templates, favicon/web, iOS, Android, lockups — a split state, flagged to the Operator.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b92914d
 
 ## Q25 — brand-identity/raster-rebrand — deviation
 
@@ -339,7 +339,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Justification:** The split was flagged when the desktop icon changed, and the Operator's instruction resolved it. Vectorizing first was rejected as silent scope: tracing the AI art into paths changes it, and every surface here consumes rasters anyway. Fixed en route: an opacity passed through the progressive-halving resizer compounded per step (0.45 five times ≈ invisible), caught because the busy tray state vanished; tint and opacity now land exactly once, in the final render. Verified live: the seahorse template with the Attention and Recording badges photographed in the real menu bar.
 **Outcome:** applied
 **Supersedes:** Q15 — the letterform e chosen there is no longer the shipped mark; it remains the vector fallback, and everything else Q15 rested on (the review process, the tile discipline) carries forward.
-**Ref:** (pending)
+**Ref:** 8714620
 
 ## Q26 — brand-identity/vectorize-the-seahorse — deviation
 
@@ -350,7 +350,7 @@ Separately and with no measurement needed, `previous_text` was a single field us
 **Justification:** The Operator chose redrawing over keeping the raster or deleting the fallback. The trace was verified by overlaying the vector on the raster at 1:1 (differences below one stroke width), and it strictly improved the outputs the raster struggled with: the 16 px favicon and tray render from curves instead of five halvings, the Icon Composer layer is a true outline again, and the lockup's mark finally matches the wordmark's weight. The e is gone from the masters — the fallback story ended where the traced vector made it unnecessary — and survives in `explorations/` and history.
 **Outcome:** applied
 **Supersedes:** Q24 — the raster-master mechanism it introduced is retired; the art it carried is what the trace preserves.
-**Ref:** (pending)
+**Ref:** 8714620
 
 ## Q27 — m2-auto-record/05-windows-detection-vertical — finding
 
@@ -372,7 +372,7 @@ What this does **not** establish: no meeting app has been observed holding the m
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** 42d687f
 
 ## Q28 — m2-auto-record/05-windows-detection-vertical — gate-resolution
 
@@ -382,7 +382,7 @@ What this does **not** establish: no meeting app has been observed holding the m
 **Decided-by:** human
 **Justification:** The run did the thing that mattered: it found that Windows detection had never worked at all — `GetModuleBaseNameW` denied on every process, so `microphone_holders` always answered "nobody" — and fixed it. Holding the ticket open for a fuller matrix would confuse two different states: a platform that does not work, and a platform that works and has been exercised on one app. Only the first is a milestone blocker. The Operator has the machine and has ended this line of work, and more of their time is theirs to offer. The reason for naming Teams so precisely is that it is the one case with a *predicted* failure shape rather than a general unknown, and the prediction must not become the fix: adding `msedgewebview2.exe` on the strength of the reasoning would match every WebView2 app and would be Q20's mistake with a new spelling. `examples/mic-holders.rs`, which the run added, settles it in one command whenever a signed-in Teams call exists.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7c55e37
 
 ## Q29 — m2-auto-record/05-windows-detection-vertical — deviation
 
@@ -392,7 +392,7 @@ What this does **not** establish: no meeting app has been observed holding the m
 **Decided-by:** human
 **Justification:** Investigating it turned up a sharper form the run had not named, and it changes the answer. Windows keeps a separate default per `ERole` and directs communications software at `eCommunications` — which it reassigns on its own when a headset appears. Meeting apps are communications software. So the failure was never confined to "a second microphone", which is a rare setup; it was "the Operator plugged in a headset", which is the ordinary case and is the same device churn ADR-0023's continuity window already exists to survive. Framed that way it is not a product question about watching more microphones, it is a false negative on the platform ADR-0025 makes the ship gate, and the PRD puts false negatives first among risks. Two details of the shape are deliberate: per-device failures never abort the scan, and an empty endpoint list logs, because the defect this platform shipped with was a call that failed and was indistinguishable from an idle machine — the same postmortem must not be reachable twice. On confidence: it cross-compiles clean under `clippy -D warnings`, which is worth nothing about runtime and is precisely what hid the last defect; what makes it better founded is that the enumeration is lifted from `examples/mic-holders.rs`, which ran on the real machine. It is still **unobserved in the detector**, and one `mic-holders` run against a headset would settle both that and whether the two roles disagree in practice.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** c14e78a
 
 ## Q30 — m2-auto-record/05-windows-detection-vertical — finding
 
@@ -414,7 +414,7 @@ Worth keeping about method. Three input paths — `mouse_event`, `SendInput`, an
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** b76d93c
 
 ## Q31 — m2-auto-record/05-windows-detection-vertical — finding
 
@@ -438,7 +438,7 @@ Two incidental findings worth keeping. Zoom registers its capture sessions at la
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** bb29f3f
 
 ## Q32 — m2-auto-record/05-windows-detection-vertical — finding
 
@@ -458,7 +458,7 @@ There is a real asymmetry worth recording between the two platforms. On macOS, T
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** d0c2ae5
 
 
 ## Q33 — m2-auto-record/05-windows-detection-vertical — finding
@@ -477,7 +477,7 @@ Arc is left open rather than closed by analogy, which is the same call made abou
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** c7b6ad6
 
 ## Q34 — m2-auto-record/05-windows-detection-vertical — deviation
 
@@ -497,7 +497,7 @@ What makes the narrowing defensible is the evidence line rather than the count: 
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** ceed33f
 
 
 ## Q35 — m2-auto-record/05-windows-detection-vertical — deviation
@@ -527,7 +527,7 @@ Two process notes. First, this is the session's own failure mode once more: a pl
 **Decided-by:** agent
 **Justification:** The construction found three defects that every unit test had passed, which is the whole argument for measuring something imperfect rather than nothing. **(1)** The catalog's Voiceprint span rules — clip to the middle 10 s, drop under 1.5 s — were being used to define *turns*, so 28% of speech had no speaker at all; correct for choosing what to embed, disastrous for saying who talked. **(2)** One embedding per contiguous span made two people alternating without a pause into one speaker, at 23.6% confusion. **(3)** `agglomerate` was not agglomerative: a single pass joining each cluster to the first earlier one within threshold split one voice into two groups that never got compared, giving three speakers in a two-speaker recording. DER went 38.4% → 26.6% → 3.9% across the three fixes. What the number is **not** is equally important and is written into the ticket rather than buried: voice B is not a second person, so 3.9% is evidence that the pipeline separates two acoustically distinct voices and is not a DER on a real meeting, which is still owed. The embedding bake-off is likewise not run and is recorded as not run — a bake-off with one entrant is a preference wearing a lab coat, and it should be run against the same real audio when there is some.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 15fab98
 
 ## Q37 — m2-auto-record/05-windows-detection-vertical — finding
 
@@ -547,7 +547,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 
 **Outcome:** applied
 
-**Ref:** (pending)
+**Ref:** def80d2
 
 ## Q38 — m4-summary/09-m4-closeout — finding
 
@@ -557,7 +557,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Decided-by:** agent
 **Justification:** The number is bad and it is the honest number for what is in the box today, which is the only kind worth putting in a close-out. It also confirms a prediction that was written down *before* it was measured: the `SUMMARY_DEFAULT` comment says the registered model "is the model that was verified, not the model that should ship". Measuring it turns that from an opinion into evidence for choosing the real default, which is the work still owed. What the run did earn was two defects that no unit test could have found, both now fixed: greedy sampling with no repetition penalty made the model restate the transcript five times to the token ceiling, and the absence of stop handling wrote the prompt's own scaffolding — the literal sentence "The operator's own notes from this meeting" — into a stored Summary. Neither is a model-quality issue; both are pipeline bugs that only appear when a real model runs. What the measurement is **not** is a test of the thing M4 is most likely to get wrong: the recording is 89 seconds, so map-reduce never engaged, and chunk-boundary behaviour on a ninety-minute meeting remains exercised only against the fake.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** a456913
 
 ## Q39 — m4-summary/07-the-knob — gate-resolution
 
@@ -567,7 +567,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Decided-by:** agent
 **Justification:** This is the first milestone where a bug leaks meeting content, and every other failure in this product is recoverable — a lost recording, a missed meeting, a mislabelled speaker. Sending a transcript to a provider the Operator did not choose is not. A boolean that happens to be false and a function that cannot express the wrong thing are different guarantees, and only the second survives a future edit by someone who has not read this entry. The tests are written to tell them apart: each drives all four failure shapes and asserts the *other* Backend was never called, rather than only that the right one answered. Cancellation is excluded from fallback for the same reason — an Operator who pressed stop must not discover that stopping is what sent their transcript somewhere. The gate on choosing Cloud lives in the Core rather than the UI on the same principle: a gate a Client can walk around by forgetting to call it is not a gate.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** ac998f7
 
 ## Q40 — m5-onboarding/04-floating-indicator — gate-resolution
 
@@ -577,7 +577,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Decided-by:** agent
 **Justification:** The recipe is available and the work is small, which is exactly why the decision needs a reason rather than a shrug. **A Client-owned indicator has a defect the tray does not: it disappears when the Client is closed, and the Core keeps recording.** That is not a corner case — it is the product's normal state, since ADR-0026 makes the Core an always-on daemon and the Client a thin optional window, and Auto-Record starts meetings without opening one. An indicator that is absent precisely when someone has closed the window and forgotten they are recording is worse than no second indicator, because its usual presence teaches an Operator to read its absence as "not recording". The one thing the tray genuinely loses to is fullscreen — the menu bar hides, and the catalog's `visibleOnFullScreen` flag is aimed at exactly that. But M1 already answered the fullscreen case by making the tray icon reachable on mouse-to-top, and story 4 in the PRD describes it that way. So the gap this would close is narrower than it first looks, and the cost is a second always-on-top window whose correctness depends on a six-flag incantation that neither steals focus nor blocks clicks. Revisit if a real Operator reports losing track of a recording in fullscreen; that report would be evidence, and this is not.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** a0c4db2
 
 ## Q41 — m5-onboarding/08-polish — finding
 
@@ -587,7 +587,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Decided-by:** agent
 **Justification:** This is the second time this file has contradicted itself in a way that mattered; M2 found the first (Meeting Detection calling itself the "single" ambient sense eleven entries above a list of two). The wording is inherited from ADR-0034, which says "enumerable, content-free list" in one sentence and then, in the next, rewords the guarantee test to "none of it carrying meeting content" — a phrasing that is only true of entries one and two. The glossary is normative for every spec written after it, and this is exactly the sentence a privacy-conscious evaluator would quote back after finding the cloud Backend. Corrected in `CONTEXT.md` to say plainly that two of the three are content-free and the third is not, with an `_Avoid_` entry naming the phrase. **ADR-0034 itself is left alone**: amending a ratified decision is not a polish-pass act, and the ADR's substance — three entries, enumerable, one requiring an explicit choice — is right. What was wrong is one adjective, and the glossary is where it does damage.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** a0c4db2
 
 ## Q42 — m5-onboarding/09-m5-closeout — finding
 
@@ -597,7 +597,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Decided-by:** agent
 **Justification:** Recorded because of what it nearly did rather than what it did. This project has spent five milestones learning that a checkbox asserting something nobody observed is the most expensive kind of wrong — M2 shipped six such defects, and the M2 close-out had *written down in advance* the exact failure mode it then missed. Ticket 09's criteria are the ones this repository structurally cannot self-serve, and a blanket edit marked precisely those as done. The correction took a minute; had it survived, it would have said the milestone was validated by a person who does not exist. The lesson is narrow and worth keeping: **an edit that ticks boxes should never be able to tick a box its author did not read**, and the earlier tickets in this milestone where the same blanket replace was used should be treated as suspect for the same reason.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 8957552
 
 ## Q43 — m5-onboarding/09-m5-closeout — finding
 
@@ -607,7 +607,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Decided-by:** agent
 **Justification:** The second defect is the serious one and it is mine, from M4 and M5. Those tests copied models into a directory the Core never looked at, then ran against whatever the machine happened to have — so on a CI runner with no models they would have exercised a Core that could not diarize or summarize, observed no network traffic, and passed. A guarantee test that passes because there was nothing to do is worse than a missing one: it occupies the space where the real check would go. Both now assert the Core can actually see the models before proceeding, so they fail rather than pass vacuously. The third is the same shape one level down — a test whose *name* claimed a Summary it never asked for. And the first is why none of this surfaced earlier: without `EVERTRANSCRIPT_APP_SUPPORT_DIR` there was no way to be in the state every real first run is in, so nobody had been. With it, the pre-capture invariant demonstrably holds, models read `missing`, no Backend is preselected, and a Meeting still records with no models at all — ADR-0019's degradation working. **This is the criterion doing exactly what it was written to do**: the close-out said every prior milestone found its defects by running the real thing on real input, and the one form of that available here found three.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 9dec4c6
 
 ## Q44 — m5-onboarding/09-m5-closeout — finding
 
@@ -617,7 +617,7 @@ And the automation failures on the way were misdiagnosed twice before being meas
 **Decided-by:** agent
 **Justification:** Two defects, and the second explains the first's survival. The staging step writes `evertranscript.exe` on Windows; `extraResources` named `evertranscript`. **electron-builder skips a missing source in silence** — no warning, exit 0, a 94 MB artifact uploaded — so a hollow installer passed a green matrix, a published checksum, and a manifest generated from real artifacts. Every one of those checks was about a file rather than a product. The reason it went unnoticed is that `coreBinary()` searched `EVERTRANSCRIPT_BIN`, `PATH`, and a checkout's `target/`, and never `process.resourcesPath` — neither the macOS zip nor the NSIS installer puts anything on `PATH`, so the bundled Core was unreachable on both platforms and a Windows package that never contained one behaved no differently from a macOS one that did. The bundle's copy now wins *over* `PATH` rather than filling in after it: the Core is replaced wholesale when the Client updates (ADR-0016), and a `PATH` entry winning would pin an Operator who once installed a Core by hand to that Core across every update — the protocol skew ADR-0028 exists to survive, reached deliberately instead of by accident. Both artifacts are now searched for both binaries rather than trusted to contain them. **The pattern is the one this project keeps paying for, one layer further out than before**: M2 found identifiers the machine did not honour, M3 a pipeline that measured wrong, M4 a sidecar that hung, Q43 tests that passed vacuously — and this is a *release artifact* that was verified as a file and never as a product. "The installer builds" and "the installer installs something that runs" turned out to be different claims, and only the first had ever been checked.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 499abc8
 
 ## Q45 — m4-summary/04-local-sidecar — finding
 
@@ -633,7 +633,7 @@ The test **reports** that measurement and does not assert on it. Asserting would
 
 One assumption checked rather than reasoned about: `cargo test --workspace` does **not** build `target/<profile>/evertranscript-summarizer`. It builds the summarizer's unit-test harness into `deps/` and stops. Found by deleting the file and re-running, which is the only reason CI is not red.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 5f6d3ee
 
 ## Q46 — m4-summary/04-local-sidecar — finding
 
@@ -651,7 +651,7 @@ Numbers for the bound, measured rather than guessed. The two inference tests tak
 
 CI gets `timeout-minutes` too — 60 on the job, 45 on the `Tests` step — and that is worth keeping **despite** the false alarm rather than because of it. GitHub's default is six hours of silence, which was a reasonable default while this job only compiled and ran fast tests and stopped being one when it started loading a real model and supervising a child to do it. The step is tighter than the job because it holds the unbounded work and because failing there names the step instead of cancelling the job out from under it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 01c1cd4
 
 ## Q47 — m5-onboarding/09-m5-closeout — finding
 
@@ -665,7 +665,7 @@ The product-visible defect is in the Client. `child.on("error")` fires when a sp
 
 **And the fix's own premise was wrong until it was measured.** The first version claimed the Core exits 0 when another Core already holds the socket, and treated that as the case worth staying quiet about. It exits **1**, with `another EverTranscript Core is already listening` — so the code was silent about a case that does not occur and would have spoken about the ordinary one. It is harmless only because the caller reaches the message solely after every connection attempt has failed, which means the socket, not the exit code, is the authority. The comment now says that, because the next person to read it would otherwise inherit the same false belief. Three checked assumptions this session have gone the same way: `cargo test --workspace` not building the sidecar (Q45), `node --test <dir>` running non-test modules (Q49), and this.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 39c4508
 
 ## Q48 — m1-walking-skeleton/06-live-asr-captions-channel — finding
 
@@ -687,7 +687,7 @@ Third, the model is verified by **crc32 and size, not sha256**, because `WHISPER
 
 **Not established: the numbers.** This makes the measurement run; it does not yet say what it reports. The M1 close-out recorded WER 2.5% on English and a bilingual CER measured on the tiny model, both by hand — whether the registered large-v3-turbo reproduces that on a runner, on either platform, is what the next green run will say. The crc32 helper is also the one piece not executed locally: no Python on this machine. It fails closed — an unusable interpreter is diagnosed and a missing one reddens the job rather than passing it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 49c545b
 
 ## Q49 — m5-onboarding/09-m5-closeout — finding
 
@@ -702,7 +702,7 @@ Third, the model is verified by **crc32 and size, not sha256**, because `WHISPER
 Two details worth keeping. `node --test <dir>` executes every compiled module in it, and `index.js` calls into Electron at import time, so the runner is pointed at `*.test.js`. And tests compile to `dist-test/` rather than `dist/`, because electron-builder ships `dist/**/*` and would otherwise have packaged test code into the product — verified by building and finding zero `*.test.js` in the bundle rather than by assuming the glob.
 **Numbering:** filed as Q46 and renumbered. Another session had already taken Q46 two commits earlier, and this was appended with the number read before that landed — an append-only journal is exactly where a duplicate identifier does damage, because every later reference to "Q46" becomes ambiguous. Renumbered here rather than in the other entry, which was first.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** f1851df
 
 ## Q50 — m1-walking-skeleton/08-aec-dsp-quality — finding
 
@@ -724,7 +724,7 @@ The replacement is `audio::aec::tests::real_speech_echo_is_cancelled_by_a_measur
 
 **Not established:** whether 64.9% is acceptable. That is a product judgment about a known attribution leak, not a test question, and moving the guard does not answer it. Also unreproduced: M1's uncancelled 0.08, which is 0.0% today on both tiny and turbo. It is the control, it passes either way, and I cannot account for the difference.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** de537e4
 
 ## Q51 — m1-walking-skeleton/08-aec-dsp-quality — finding
 
@@ -748,7 +748,7 @@ The guard is `real_speech_echo_is_cancelled_by_a_measurable_amount`, its bar rai
 
 **Not established:** any of this on a real speakerphone. The room is synthetic, which is the case Q1 already reserved DTLN for — "revisit if real speakerphone recordings show the linear filter failing on nonlinear speaker distortion, which synthetic fixtures cannot exhibit". That is still true and still untested.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 341b712
 
 ## Q52 — m1-walking-skeleton/08-aec-dsp-quality — finding
 
@@ -766,7 +766,7 @@ The consequence is methodological and outlives this test. **A WER threshold over
 
 Q51's fix has since made the point moot for this fixture — the mic channel now transcribes to the empty string, 100% against the far end, zero leaked words where 64.9% left thirteen.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** a8260f6
 
 ## Q53 — m5-onboarding/09-m5-closeout — finding
 
@@ -782,7 +782,7 @@ That asymmetry retroactively justifies a decision Q47 made on a guess. `classify
 
 The pattern is the one this milestone keeps repeating and is worth naming plainly: **every check of a release artifact so far has verified the file we built rather than the file someone receives.** Q44 was the packaged binary, Q47 the macOS attribute, this the Windows one. Each was found by making CI do the thing rather than describe it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 2a6beba
 
 ## Q54 — m2-auto-record/09-m2-closeout — finding
 
@@ -802,7 +802,7 @@ Replaced with polling on the state the test is actually waiting for, up to a dea
 
 **Not established:** a real Windows audio stack. Every one of these drives `FixtureSource` and `FixtureDetectionSource`, so what is now covered on Windows is the Core, the store, the driver and the transport — not a microphone. Auto-Record, dual-channel capture and the device-churn path on physical Windows hardware remain exactly as unobserved as before, and remain the thing only an Operator's own machine can supply.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 2db50fd
 
 ## Q55 — m1-walking-skeleton/02-storage-spine-meeting-lifecycle — finding
 
@@ -820,7 +820,7 @@ Nothing in the file is about capture — it says so itself, standing in for the 
 
 Settling it needs one of two things: a Windows machine with no input device, or a test that deliberately opens live capture on the runner and asserts it degrades rather than dies. The second is cheap and belongs with the M2 criteria that already say Auto-Record and dual-channel capture are unobserved on physical Windows hardware — this is the same gap, reached from the other side.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 751ec66
 
 ## Q56 — summary-chunking-and-suggested-title/03 — decision
 
@@ -834,7 +834,7 @@ Settling it needs one of two things: a Windows machine with no input device, or 
 
 Backends became injectable on the Core, following the `set_transcriber_factory` / `set_source_factory` idiom that already existed for exactly this reason. That is a new factory, not a new *kind* of seam, and it is what lets every behaviour here be tested without half a gigabyte of model.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 644f7e1
 
 ## Q57 — qwen3-4b-summary-model/03 — finding
 
@@ -848,7 +848,7 @@ Three separate reasons it stayed invisible, and they compound. The meeting M4 me
 
 It is also the fourth time this project has found a defect the moment something real was run through a path that had only ever been reasoned about: M2's identifiers, M3's DER, Q44's packaged binary, and now this. The regression test asserts the prompt exceeds one default batch before asserting anything else, so it cannot quietly stop testing the thing it exists for.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 8089425
 
 ## Q58 — qwen3-4b-summary-model/04 — finding
 
@@ -871,7 +871,7 @@ The fabrication gate therefore passes, and the incumbent's *content* failures st
 
 **What survives as a real limitation:** given a transcript with no timestamps, Qwen3 still invents one. Production cannot produce that input, so it is not a shipping defect — but it is the honest boundary of what was measured, and the standing test says so rather than implying the model is incapable of inventing.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 8089425
 
 ## Q59 — qwen3-4b-summary-model/04 — finding
 
@@ -887,7 +887,7 @@ Running it where it runs is not a retreat. **Windows was the platform this cover
 
 **It is also product evidence, not just CI trivia.** A 4B is slow on modest hardware. ticket 01's layers-that-fit calculation answers the memory half; it says nothing about speed, and an Operator on a machine like that runner would wait half an hour for one chunk. The registry now ships a model that not every machine can use well, which is a real change in what "local Summary" promises and belongs in what-v1-is-not.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 5fe121b
 
 ## Q60 — m4-summary/09 — finding
 
@@ -907,7 +907,7 @@ What is left is the check that earns its cost. It makes the `Said at` column do 
 
 **The remaining gap is stated rather than closed.** A total hijack that emits no table still passes: nothing separates `BREACH` from a terse summary without reading it. That is a garbage record, not a false one — the lesser harm, and the one the product can survive. It is in what-v1-is-not, and the canary asserts the narrow thing that *is* guaranteed: the injected text must not escape the Summary body and become the Meeting's name.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** fb4abf4
 
 ## Q61 — m4-summary/09 — finding
 
@@ -938,7 +938,7 @@ That is why the assertion in the test is at the map stage only. Gating on the re
 
 Rebuilding it also exposed that the rule was **stricter in Chinese than in English**: ideographs are alphanumeric, so a whole Chinese clause became one token matching only verbatim, which would have refused any paraphrased Chinese action item in a product whose transcripts are routinely Chinese. Chinese is now matched by character bigram, so it degrades the same way English does.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4c78e26
 
 ## Q62 — m4-summary/09 — fix
 
@@ -959,7 +959,7 @@ Every run with the sentence beat every run without it. That is five runs, not fi
 
 The reduce prompt also moved into `prompt.rs`. It had been written out twice — once in `server.rs` and once in the measurement that is supposed to send exactly what the Core sends — and two copies of that string would have drifted until the measurement quietly stopped measuring production.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 88171dd
 
 ## Q63 — interactive/toolchain — gate-resolution
 
@@ -969,7 +969,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** The file was Frank's ask; the reading is mine. A channel selection makes a checkout build with whatever stable rustup currently has — on a machine whose default is something else as much as here — and it is the channel both workflows already install with `dtolnay/rust-toolchain@stable`, so CI is unaffected; `scripts/check.sh` and the cargo-xwin cross build run on the same channel they did before. A root file reaches no member crate's package. Verified with `cargo test --workspace --locked --no-fail-fast` under the override: 710 passed, 1 failed — `detect::macos::tests::a_real_microphone_hold_is_visible_to_the_detector`, which fails identically with the file removed ("the detector saw no process recording at all"), so it is this headless machine's CoreAudio, not the toolchain. Recorded so nobody hunts a toolchain regression here.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** ed58d3e
 
 ## Q64 — interactive/voice-registry — decision
 
@@ -979,7 +979,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** Frank ("all recommendations accepted" on the floor; "each voiceprint should keep its original voice sample, and it should be playable" for the sample); the AEC placement and the sample mechanics are the agent's, by the same logic
 **Justification:** "Longer sample" is the wrong lever: the centroid already *is* the long sample when a cluster is big, and one-vector-per-span is what the close-out removed. The lever is refusing to store a biometric on three seconds of nobody. Ten seconds is about three sub-windows — enough for the centroid to be an average — and no fragment of echo or a cough reaches it. Recognition has no floor because "what did Alice say" must work for one sentence and the conservative match rule (floor, margin, mutual-best) is the guard there. AEC before diarization: measured 32× realtime in release, and the far end leaking into mic clusters is the largest remaining source of strangers after the floor. The sample is what makes the Registry inspectable by ear rather than by label. Not done: a real-meeting DER, still owed from M3; a Granola-style two-embedding split (cheap window to cluster, longer clip re-embedded as the durable Voiceprint) is the "longer sample done right" and needs labelled audio to judge.
 **Outcome:** applied — `diarize/{mod,live,cluster,reconcile}.rs`, `store/{schema,speakers}.rs` (migration 10), `audio/sample.rs`, `server.rs`, protocol `speaker/sample` + `Speaker.has_sample`, Client Play control, CLI `speakers sample`. ADR-0008 amended.
-**Ref:** (pending)
+**Ref:** 10ba8f2
 
 ## Q65 — interactive/voice-registry — deviation
 
@@ -989,7 +989,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** _Contradicts ADR-0009 ("Speaker records themselves are permanent"), but worth reopening because_ that sentence exists so nothing in the record dangles or rewrites, and a Speaker nothing references is not in the record: deleting it changes no Transcript, no attribution, no correction. A standing rule was rejected because a Speaker orphaned by a *Meeting* deletion matches the same predicate, and "Voiceprints outlive the recordings they came from" is a guarantee the store's own tests make. Named rows are kept regardless: a name is the Operator's act. ADR-0009 amended to say so.
 **Outcome:** applied — `store/schema.rs` migration 10, with a test that the attributed, corrected-to, corrected-from, named and Operator rows all survive it
-**Ref:** (pending)
+**Ref:** 10ba8f2
 
 ## Q66 — interactive/native-ui — tradeoff
 
@@ -999,7 +999,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human (Frank approved the plan the agent proposed — "Plan approved" — then pointed at Apple's guidelines)
 **Justification:** The brand's grounds fight AppKit's semantic colours, which is what Apple's colour guidance asks a Mac app to use, while Windows 11 has no published palette beyond the accent, so the brand has somewhere to live there. The details are Q67–Q76.
 **Outcome:** applied — `clients/electron/src/main/index.ts`, `src/preload/index.ts`, `src/renderer/{App.tsx,index.css,i18n.ts,main.tsx}`
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q67 — interactive/native-ui — tradeoff
 
@@ -1009,7 +1009,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** The scoping is forced: `NSAppearance.current` only moves while a view draws — reproduced in a plain AppKit process, where setting `NSApp.appearance` left dynamic colours resolving in the launch appearance. Ceiling, marked `ponytail:` in the code: the non-launch appearance runs at standard contrast with an approximated selection colour until the next launch.
 **Outcome:** applied — `applySystemColors` in `main/index.ts`, darwin block in `index.css`
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q68 — interactive/native-ui — tradeoff
 
@@ -1019,7 +1019,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `toolbars.md › macOS`: toolbar items carry no bezel, and every toolbar item is also a menu command (Q72). `windows.md › macOS`: custom chrome has to do the key/non-key work itself, so toolbar labels dim when the window is inactive. `hiddenInset` put the lights about 8pt above the toolbar items' centre line (measured). Ceiling: no refraction; on macOS 15 and earlier the capsules are a macOS 26 look on an older system.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q69 — interactive/native-ui — gate-resolution
 
@@ -1029,7 +1029,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** Fluent's tall title bar is the variant for a title bar that hosts controls; Electron documents `backgroundMaterial` for Windows 11 22H2 and `accent-color-changed` as Windows-only. The 44px version of this passed the Registry e2e and the frame checks on windows-zx8 in light and forced dark.
 **Outcome:** applied — the 48px run on Windows is still owed: windows-zx8 went offline mid-session, and the driver's expectations (48px strip, pill, buttons clear of the captions) are updated and waiting
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q70 — interactive/native-ui — tradeoff
 
@@ -1039,7 +1039,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `typography.md › Specifications` for the macOS text styles, and its advice to loosen leading for long passages, which a transcript is; the Fluent type ramp for Windows. Same tokens, so no call site changes.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q71 — interactive/native-ui — deviation
 
@@ -1049,7 +1049,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `buttons.md › Content`, `menus.md` and `alerts.md` all ask for title-style capitalization on buttons and menu items; `writing.md` asks for one style per element type, which sentence-case headings keep. Chinese has no case, so only English is affected.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q72 — interactive/native-ui — gate-resolution
 
@@ -1059,7 +1059,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `the-menu-bar.md`: menu order, App menu contents, "Provide a View menu…", show/hide item titles reflect the current state, a Window menu with Minimize and Zoom even for one window. Assumed, for review: ⌘R and ⌘. as the recording shortcuts; no Help menu (the page ties it to Help Book content, which this app doesn't have); no Show/Hide Sidebar, because the sidebar does not collapse yet (`sidebars.md › macOS` suggests hiding it as the window narrows); Electron's role items stay English under zh-CN.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q73 — interactive/native-ui — gate-resolution
 
@@ -1069,7 +1069,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `alerts.md`: name the act on the button; always "Cancel" for cancelling and never as the default; the destructive style is for a destructive action people didn't deliberately choose — the Empty Trash example, where Return confirming the chosen action wins; avoid titles over two lines, which the first single-string version wrapped to three. Checked on macOS 26 through the real button: the alert rendered, and dismissing it unconfirmed left both Meetings in place.
 **Outcome:** applied — `meeting.deleteConfirm` split into title and `meeting.deleteConfirm.detail`
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q74 — interactive/native-ui — tradeoff
 
@@ -1079,7 +1079,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `focus-and-selection.md`: on macOS lists show focus by highlight rather than a ring, with distinct focused and unfocused selection colours; `windows.md` for the key/non-key difference. Ceiling: Tab still reaches every button, because Chromium ignores macOS's Keyboard Navigation setting.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q75 — interactive/native-ui — tradeoff
 
@@ -1089,7 +1089,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** Matching the Core is the requirement, not textbook FNV, and pinning one literal on both sides is what turns a silent mismatch into a failing test on whichever side moved.
 **Outcome:** applied — `core-client.ts` + `core-client.test.ts`, assertion added in `paths.rs` tests
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q76 — interactive/native-ui — deviation
 
@@ -1099,7 +1099,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** _Contradicts the Vercel guidance, but_ the more specific, later instruction was to follow Apple's HIG for this Client, and in a native window these materials are the platform's convention rather than decoration. Worth confirming that the standing guidance is meant for web surfaces, not the desktop Client's chrome.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q77 — interactive/native-ui — deviation
 
@@ -1109,7 +1109,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `settings.md › macOS`: put the settings item in the App menu and avoid a settings button in a window's toolbar, which takes room from frequently used commands. The renderer reads the `data-platform` attribute `main.tsx` already sets. Checked on a live instance: two toolbar buttons, and the menu item opens the Settings pane.
 **Outcome:** applied — `App.tsx` toolbar
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q78 — interactive/native-ui — tradeoff
 
@@ -1119,7 +1119,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** The main process holds one `window` and sends both Core notifications and menu commands to it alone, so a second window is new plumbing rather than restyling, and it is the one remaining HIG gap of this size in this pass. Easy to reverse later: nothing added here has to be undone to build it.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q79 — interactive/native-ui — deviation
 
@@ -1129,7 +1129,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `keyboards.md › Standard keyboard shortcuts` lists Command-Period as "Cancel an operation" and says not to repurpose standard shortcuts; stopping keeps the recording, so it is not a cancel. `keyboards.md › Custom keyboard shortcuts` keeps custom shortcuts for the most frequent commands, and Stop happens once per Meeting. Granola's menu binds no recording shortcut at all (`app.asar`, application menu template).
 **Outcome:** applied — `index.ts` menu
-**Ref:** (pending)
+**Ref:** 7befb41
 **Supersedes:** Q72 — only its Stop shortcut; the rest of Q72 stands.
 
 ## Q80 — interactive/native-ui — tradeoff
@@ -1140,7 +1140,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `buttons.md › Role`: the primary role goes to the button people are most likely to choose and responds to Return. `alerts.md › Buttons`: when people should read first, make no button the default. Ceiling: Return on a focused button presses that button, as Chromium does, where AppKit would press the default button and leave Space for the focused one.
 **Outcome:** applied — `main.tsx`, `App.tsx`, `index.css` comment
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q81 — interactive/native-ui — tradeoff
 
@@ -1150,7 +1150,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** windows-zx8 has been offline for this whole stretch, so the shades cannot be checked against the real title bar and Mica, and Electron exposes only the base accent, not Windows' computed shades. Fixing it blind would mean guessing at colour values. Linux (not packaged) has no accent at all and falls back to the base palette.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q82 — interactive/native-ui — gate-resolution
 
@@ -1160,7 +1160,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank, answering Q76 in session: ignore Vercel and follow the Apple and Windows native UI styles.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 **Supersedes:** Q76 — confirmed by the human, and the native styles now outrank the Vercel guidance for this Client rather than being an agent's exception to it.
 
 ## Q83 — interactive/native-ui — gate-resolution
@@ -1171,7 +1171,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank, answering the Q78 review question; consistent with Q82 (follow each platform's native style).
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 **Supersedes:** Q78 — the human chose the separate window.
 
 ## Q84 — interactive/native-ui — gate-resolution
@@ -1182,7 +1182,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank, answering the Q81 review question.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 **Supersedes:** Q81 — no longer deferred.
 
 ## Q85 — interactive/native-ui — gate-resolution
@@ -1193,7 +1193,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank, answering the Q72 review question.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 **Supersedes:** Q72 — its English role items; the rest of Q72, as amended by Q79, stands.
 
 ## Q86 — brand-identity/reference-logos — gate-resolution
@@ -1204,7 +1204,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank, answering the Q19 review question.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 **Supersedes:** Q19 — confirmed by the human.
 
 ## Q87 — interactive/native-ui — tradeoff
@@ -1215,7 +1215,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `settings.md › macOS`: "If your settings window doesn't have multiple panes, use the title App Name Settings." Window flags, title and its Chinese form matched against a SwiftUI `Settings` scene run on this Mac (not miniaturizable, not resizable, full screen off). A native Settings window has no hairline only because its content runs under the title bar, which Electron cannot do with the title still shown. Panes are the upgrade when the settings outgrow one scrolling view.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q88 — interactive/native-ui — gate-resolution
 
@@ -1225,7 +1225,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** `the-menu-bar.md › File menu` names the item Close for a window without tabs, and a native app's menu reads 关闭. Read back through Accessibility with AppKit in Chinese: every item is Chinese, AppKit still adds Writing Tools, AutoFill, Start Dictation and Emoji & Symbols to the renamed Edit menu, and the Option alternates appear. Dropping Edit items the Client already had would be a change nobody asked for.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q89 — interactive/native-ui — gate-resolution
 
@@ -1235,7 +1235,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** On windows-zx8 the registry palette matched `UISettings.GetColorValue` for all seven shades. Fluent's `AccentFillColorDefault` is Dark1 in the light theme and Light2 in the dark, with `TextOnAccentFillColorPrimary` white or black.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q90 — interactive/native-ui — irreversible-action
 
@@ -1245,7 +1245,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** The Q84 answer asked for the check on windows-zx8. Going through Settings is the only way to get the palette Windows itself derives. The snapshot diff is what shows the machine was left as found.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q91 — interactive/app-name — tradeoff
 
@@ -1255,7 +1255,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** ADR-0035 makes Application Support the home of re-creatable state, which a Chromium profile is, while keeping the Core's own files apart from a browser's. Following the Core's override keeps an isolated run fully isolated. The Client reads nothing back from the profile (no localStorage or other page storage in the renderer), so existing installs lose only caches and electron-updater's staging id when the folder moves.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q92 — interactive/app-name — tradeoff
 
@@ -1265,7 +1265,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** The Delete button calls that bridge, which runs the same `dialog:confirm` handler, so the title Windows draws is the same; the Core only decides whether a Meeting exists to press it on.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q93 — interactive/app-name — gate-resolution
 
@@ -1275,7 +1275,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** package.yml is the recipe that makes the shipped artifacts; build.sh stops before electron-builder. Without the Operator's Developer ID certificate and notary key (packaging/README.md › What only the Operator can do) the build can only be run on this Mac — Gatekeeper would reject it anywhere it was downloaded to.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q94 — interactive/e2e-harness — gate-resolution
 
@@ -1285,7 +1285,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** anarlog's sturdier scripts avoid the pattern the same two ways (read to the end, or capture first). Against an isolated Core on this Mac, 300 runs of each: `grep -q` failed 2 times with the panic, `>/dev/null` failed none. The auto-record line is the second of five, so there is always output left to write.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q95 — interactive/native-ui — gate-resolution
 
@@ -1295,7 +1295,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank, answering the Q87 review question. None of Granola, anarlog or Meetily has a separate Settings window to compare against; all three split settings into sections, but across 5 to 21 sections against this Client's 5 groups. Electron 38 cannot load SF Symbols by name (checked: `gearshape` comes back empty), so panes would mean a toolbar and icons drawn in the page.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 **Supersedes:** Q87 — confirmed by the human.
 
 ## Q96 — interactive/native-ui — gate-resolution
@@ -1306,7 +1306,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank, answering the review question. Granola, anarlog and Meetily give buttons one fixed colour and do not follow the system accent. The shades are the default blue's own palette, from windows-zx8's `AccentPalette` backup taken before the Q90 run. With Gold set, the built stylesheet gave the button those fills and text colours in both themes, 90% and 80% on hover and press, and Gold on the pill, underline and checkbox; the Mac rules still take the accent. Not re-run on windows-zx8: the button no longer reads the accent, and checking with Gold would mean changing the machine's accent again.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 **Supersedes:** Q84 — filled buttons no longer take the accent shades; the same change retires the accent-button part of Q89.
 
 ## Q97 — interactive/native-ui — irreversible-action
@@ -1317,7 +1317,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** Frank asked for the check on windows-zx8 with Gold. Picking in Settings is the only way to get the palette Windows itself derives, and the snapshot comparison is what shows the machine was left as found.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7befb41
 
 ## Q98 — interactive/voice-registry — deviation
 
@@ -1327,7 +1327,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** Frank ("go ahead with the fix on top of 7befb41"); the exemplar clause and dropping the migration are the agent's
 **Justification:** The first run's Voiceprints were cut from the audio being re-run, so recognizing them from it is circular: 24 of 24 Speakers in one Meeting were pre-existing, 7 new across six re-runs, and Q64's floor never got a say. Withdrawing only *anonymous* Speakers' evidence keeps the Operator's acts — a name is confirmation (ADR-0008 as amended), a correction is the Operator's exemplar — outside the machine's reach by construction. _Contradicts ADR-0009's 09-10 amendment ("a migration and not a standing rule"), but worth reopening because_ the reason that rule could not stand was the Meeting-deletion orphan, and requiring "no exemplar" is exactly what tells that orphan (evidence, no Meeting) from a re-run's leftover (nothing at all). `deleting_a_meeting_keeps_its_speakers` now asserts the sweep leaves the orphan alone.
 **Outcome:** applied — `store/speakers.rs` (`ANONYMOUS`, `sweep_unreferenced`, `anonymous_speakers_heard_in`, `delete_machine_exemplars`), `diarize/cluster.rs` (`refresh_voiceprint`, withdrawal in `persist`), `server.rs` (transaction + sweep), CLI `diarize run` help. ADR-0009 amended.
-**Ref:** (pending)
+**Ref:** a0b7fab
 **Supersedes:** Q65's "a standing rule was rejected" — the rule stands with the exemplar clause; the one-time prune it made was still right for the rows it took.
 
 
@@ -1339,7 +1339,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank, answering the scope question.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b4af2f7
 
 ## Q100 — m2-auto-record/07 — gate-resolution
 
@@ -1349,7 +1349,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** human
 **Justification:** Frank chose the signed package over the recommended Developer Mode, as closer to how an installer could ship it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b4af2f7
 
 ## Q101 — m2-auto-record/07 — deviation
 
@@ -1359,7 +1359,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** One tested function holds the decision both platforms feed, so a reader cannot bring the bug back. The lookback is there because neither EventKit nor WinRT documents whether a range matches events by overlap or by start time: matched by start time over a short range, a meeting would leave the reading minutes after it began and end early, losing its name. Checked with `a_meeting_arms_when_it_starts_not_when_it_is_first_seen`. The module also typechecks and passes clippy for x86_64-pc-windows-msvc from a scratch crate on the Mac, which proves the calls exist and nothing more; zx8 is for whether they work.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b4af2f7
 
 ## Q102 — m2-auto-record/07 — gate-resolution
 
@@ -1369,7 +1369,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** anarlog skips all-day events on every path that acts on one: event notifications (`apps/desktop/src/services/event-notification/index.ts`), the sidebar's upcoming meeting (`apps/desktop/src/sidebar/timeline/upcoming-meeting.ts`) and calendar-based auto-stop (`apps/desktop/src/stt/auto-stop.ts`). An all-day entry is usually a holiday, an out-of-office or a birthday, and armed it would name the first Meeting recorded that day.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b4af2f7
 
 ## Q103 — m2-auto-record/07 — irreversible-action
 
@@ -1379,7 +1379,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** Frank chose the test on zx8 (Q99) and the signed package (Q100), with the certificate and package removed afterwards. The snapshot comparison is what shows the machine was left as found. The copy in the CA store is why a sweep by subject has to follow the comparison.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b4af2f7
 
 ## Q104 — m2-auto-record/07 — gate-resolution
 
@@ -1399,7 +1399,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 **Decided-by:** agent
 **Justification:** Match the existing rule rather than add a latch. ADR-0024 asks for membership and microphone use together, and a policy that keeps recording an app the Operator has just taken off the list records something they excluded. For contrast, anarlog filters an ignored app's microphone events out entirely (`plugins/detect/src/policy.rs`, `filter_apps`), so a session started from that app stops ending by itself; this avoids that. It differs from the Auto-Record switch, which turned off leaves a running recording alone until the Operator stops it. Checked by `a_watchlist_edit_takes_effect_without_a_restart`, which removes one app and adds another between two meetings.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** af723ff
 
 ## Q106 — m2-auto-record/07 — gate-resolution
 
@@ -1415,7 +1415,7 @@ The reduce prompt also moved into `prompt.rs`. It had been written out twice —
 
 Granola 7.515.1 never waits longer after a release; within 5 minutes of the scheduled end it skips its LLM check and stops. Nobody can answer a prompt here, so the prompt's wait becomes window. A hold until the end would record the room after every meeting that ends early, the reason ADR-0036 turned down capture at the scheduled time. The longer wait is for browsers only because no anarlog version gave native apps more than the short wait. Checked by `a_browser_meeting_that_goes_quiet_early_has_longer_to_come_back`, which fails if the extension is missing, applies near the end, or applies to a native app.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 63252d3
 
 ## Q107 — m2-auto-record/07 — deviation
 
@@ -1429,7 +1429,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** An empty reading ends every announced meeting, and the next good poll announces them again. The policy then re-arms them and can raise "never started" for meetings that did start. Before this change an exception reaching Rust aborted the Core, so a failed EventKit poll could not happen; catching it makes that the likeliest failure. anarlog catches the same calls and retries three times at 100 ms (`crates/apple-calendar/src/apple/handle.rs`, since #2485). Here the next poll, 30 s later, is the retry. A store that stays unreadable keeps its meetings armed, so a later recording could take a stale title; that case is not handled. The guarantee suite still passes, including the framework audit.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 5a980f9
 
 ## Q108 — m2-auto-record/07 — deviation
 
@@ -1443,7 +1443,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** Frank ("make the app ask for calendar access"); the on-demand shape, the always-on poll and the five-minute wait are the agent's
 **Justification:** Probed on macOS 26.6.2 with a throwaway bundle: hardened runtime with usage strings and *no* calendars entitlement got `granted=false` instantly and no prompt; the same bundle with the entitlement waited for an answer. A bare hardened binary with the entitlement and no Info.plist, run as its own launchd job, also prompted. TCC attributes the prompt to the responsible process — the Client when it spawned the Core — but keys the grant on the app bundle: probed after Frank granted it, the bundle's own Core binary started as a launchd job read `calendarGranted: true` and a copy of it outside the bundle read `false`, so the login-item Core is covered (this entry first said the opposite; corrected 2026-09-15). The always-on poll replaces a restart hook: one status check every thirty seconds costs nothing measurable and needs no new channel between the server and Meeting Detection.
 **Outcome:** applied — `detect/calendar.rs` (`request`, always-on poll), `server.rs` (`request_calendar_access`), protocol + fixtures, CLI `calendar request`, `useCalendarAccess`/`CalendarAccessPanel` in the Client, entitlements, `package.json` `extendInfo`; ADR-0036 amended
-**Ref:** (pending)
+**Ref:** ceaac81
 
 ## Q109 — m4-summary/07 — gate-resolution
 
@@ -1453,7 +1453,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Match the existing rule. `summarize_meeting` already lets the first chunk choose the Backend for the whole run, so that a fallback cannot stitch one record out of two models, and a switch is the same shape. It is also consistent with story 38, which asks the Client to show the Backend running now rather than the one configured, and so expects the two to differ. The cost is the Cloud to Local case: an Operator who switches in order to stop sending the meeting still sends the rest of that run. Cancelling on that switch is the alternative if it matters, and it is cheap, because a run already has a `Cancel`. Checked by `switching_the_knob_mid_generation_leaves_the_run_alone`, which fails when later chunks go to the fallback or when the switch waits for the run.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 5dd0850
 
 ## Q110 — m2-auto-record/07 — deviation
 
@@ -1463,7 +1463,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The policy option is a smaller change, and would also cover a calendar thread that died. But the policy only ever sees the end a meeting armed with. A meeting moved later in the calendar would stop being armed at its old end, so a recording starting after that would lose the title it gets today: a change to the path that works. The source sees every reading. A meeting moved later during the outage itself still ends at the end known before it. Checked by `a_store_that_stops_answering_still_ends_a_meeting_on_schedule`, which fails when a moved end is not remembered. The code is shared by both platforms; it typechecks for Windows and has run only on the Mac.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 09189e1
 
 ## Q111 — m3-diarization/09-m3-closeout — finding
 
@@ -1493,7 +1493,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** tccd logs the subject each request is decided on, preflights included, so attribution was read on macOS 26.6.2 rather than inferred from a grant. On HEAD packaged by electron-builder without a certificate (what v1.0.1 shipped: `Sealed Resources=none`, and `--verify` fails), a Core the Client spawns is decided as `Contents/MacOS/EverTranscript`, and one started as a launchd job as `Contents/Resources/evertranscript`. That is two subjects, for Microphone, AudioCapture and Calendar alike; the v1.0.1 release's own Core gave the same. Packaged with `identity=-`, both are `com.evertranscript.client`, and so is the Core unpacked from the zip. A throwaway bundle split the same way, and a seal broken after signing behaved like no seal. Frank's install carries an Apple Development signature, which is why 43c4d00 saw the grant carry. Granola and anarlog avoid the question because the login item is the app's own executable (`setLoginItemSettings`; a LaunchAgent on `Contents/MacOS/Anarlog`). Here the Core is a separate binary by ADR-0026, so the seal is what makes both Cores the app. The ad-hoc app launched with its helpers under the hardened runtime, which electron-builder warns might not happen. `spctl` rejects both builds, so Gatekeeper refuses a quarantined download as it did before (Q47); that was not rerun with the quarantine attribute.
 **Outcome:** applied — `.github/workflows/package.yml`, the `eventkit::request` doc comment, issue 07's Mac note. The workflow's new lines were run locally against both zips; the job itself runs on tags only and has not run.
-**Ref:** (pending)
+**Ref:** 235555f
 
 ## Q114 — interactive/server-loop — deviation
 
@@ -1503,7 +1503,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** One loop reads every Client's requests and forwards every notification, and it awaited each request before reading the next. `summary/generate` awaited the whole run, which is minutes with a local model. `models/fetch` awaited the whole download, `audio/check` 20 s by default and up to 120, and the Calendars prompt up to five minutes. Meanwhile the window's Stop waited, a CLI download could not be cancelled because `models/cancel` queued behind it, and a running recording could overflow the 512-slot notification buffer. `summarize_meeting`'s comment already said a Summary could not stall Clients, so the loop, not the intent, was wrong. Fixing only the calendar request would have left the commonest case, generating a Summary, stalled. The Electron Client and `CoreClient` both match responses by id, and no doc promises response order. Two local runs at once would each start a sidecar loading the model, which the loop had prevented by accident, hence the lock. Checked by `a_summary_being_generated_does_not_hold_up_other_clients`: before the change another Client's request timed out after 5 s, and it passes after.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** ff77170
 
 ## Q115 — m3-diarization/09-m3-closeout — finding
 
@@ -1622,7 +1622,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Ticket 11 states rule 1 in those words — "makes every mic-channel cluster of that Meeting the Operator" — and the two criteria coexist because the shared-room criterion is asserted on a Meeting carrying no isolated-mic fact. Narrowing it would have been me overruling the spec on a case the spec had in view. The residual risk is a real one and it is the reason the probe underneath is conservative: what actually fires rule 1 is `mic_isolated == Some(true)`, and that needs headphones on every reading plus a microphone that was never swapped. Flagged for confirmation.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 51121b4
 
 ## Q127 — diarization-pyannote-redimnet2/11 — tradeoff
 
@@ -1632,7 +1632,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Restricting rule 1 to the 3.5 mm jack would exclude the common case and leave the rule nearly dead. Granola reaches the same conclusion — its native audio library exposes `outputDeviceIsHeadphones` and uses it to turn echo cancellation off, which is the same "the far end cannot reach the microphone" claim. The residual false positive is a Bluetooth speaker in a shared room, and `MicIsolation` narrows it: every reading across the Meeting must say headphones and the microphone must not have been swapped. The AEC idle signal remains available as the ticket's named fallback if this proves wrong in the field; it is not wired in, because wiring a second signal before the first has been shown to fail is guessing twice.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 51121b4
 
 ## Q128 — diarization-pyannote-redimnet2/11 — gate-resolution
 
@@ -1642,7 +1642,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Only 1 grants rule 1, so the other two behave identically today and a boolean would have worked. But `NOT NULL DEFAULT 0` writes "the room was audible" onto every Meeting already on disk, and ticket 12 re-runs all of History — at which point a Meeting that was never asked is indistinguishable from one that was asked and answered no. The column is cheap; the lost distinction is not recoverable.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 51121b4
 
 ## Q129 — diarization-pyannote-redimnet2/11 — deviation
 
@@ -1652,7 +1652,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Ticket 11 names "80% of mic time, the existing margin, and at least 20 seconds" as the rule, so removing a named component to tidy up would be a silent narrowing of the spec. It costs two comparisons and is correct again the moment `DOMINANCE` is lowered. Noted here because a later reader finding a branch no test can reach deserves to know it was looked at rather than missed. `one_quiet_voice_among_many_does_not_become_the_operator` was resized past `MIN_OPERATOR_MS` so that it is the share refusing, not the new floor — its old numbers passed for a reason the test name did not describe.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** a83e6fa
 
 ## Q130 — diarization-independent/ab — tradeoff
 
@@ -1662,7 +1662,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Sniffing is the shorter code and would be right nearly always, but it fails silently in exactly the case this rig exists to prevent. A stale `/tmp/et-diarize-models/diarize-embedding.onnx` on this machine was in fact a ReDimNet2 export under WeSpeaker's filename; a sniffing loader would have accepted it and produced an A/B comparing ReDimNet2 against itself, reported as a win. Naming the front end makes that a load error instead of a plausible number. The harness prints the model and file it believes it is testing for the same reason.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** a83e6fa
 
 ## Q131 — diarization-independent/ab — gate-resolution
 
@@ -1672,7 +1672,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The whole point of this rig is that Q111's bake-off moved two variables and attributed the result to one. Main's own Q115 records that it "compared three models through the same wrong front end, which is why WeSpeaker looked so much worse than the ReDimNets there." Letting each model window differently would reintroduce the same confound with the sign flipped. Per-model tuning is a later question and a real one; it is not answerable until the single-variable number exists.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** dbeb867
 
 ## Q132 — diarization-independent/ab — deviation
 
@@ -1682,7 +1682,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Not a corner case, and it invalidated the measurement it was part of. Segmentation frames are ~17 ms and feature rows 10 ms, so counting the wrong one moves the bar by 1.7x; and branching on run *count* rather than frame count meant a speaker with two short clean stretches took the alone branch under waveform and the all-frames branch under fbank. That regime is overlapped speech — the hard cases that drive confusion error — so the two embeddings would have been fed different audio exactly where it matters most, reintroducing the second variable Q131 exists to remove. Found by reading the path after it had already been committed and smoke-tested; the smoke numbers were plausible, which is the point. Q131 stands as the intent; this is the implementation finally matching it. `both_front_ends_choose_the_same_frames` pins it, and the first draft of that test asserted the wrong thing for the same unit confusion.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** d0adc48
 
 ## Q133 — diarization-independent/merge — deviation
 
@@ -1692,7 +1692,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Neither subsumes the other. The queue lives in the record, so it already resumes anything that reached it — but it is a new table, and the two real Meetings Q125 was written for predate it and are not in it. Theirs as written would fight the queue rather than complement it: one worker is the policy, `runner::Slot` refuses a second claim, and theirs' own comment says a fan-out "would diarize one and log `Busy` for the rest" — which is exactly what a direct call alongside a running worker produces. `Back` rather than `Front` because a Meeting that just ended has somebody waiting for it, and these have been waiting since a previous Core. `set_diarized` is called inside the existing attribution transaction, so a Meeting cannot be marked diarized without the words the mark is about; without it the startup pass would offer the same Meetings forever.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** d0adc48
 
 ## Q134 — diarization-independent/merge — irreversible-action
 
@@ -1702,7 +1702,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `origin/main` is pushed, so a database out there may already sit at `user_version` 11 meaning `diarized_at` was applied. Migrations run by number and only forward: putting this branch's `diarize_queue` at 11 would make every already-migrated database skip it permanently, and the failure would surface much later as a queue table that does not exist. This branch was never pushed, so renumbering it costs nothing. The first attempt at this resolution left migration 11's raw string unterminated — its `"#,` had been in the shared tail that the reorder moved past — so the Rust comments below it were parsed as SQL and every migration failed at startup; caught by the guarantees tests, which could not start a Core.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** d0adc48
 
 ## Q135 — m4-summary/09-m4-closeout — decision
 
@@ -1712,7 +1712,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Measured first, and the measurement killed the idea I went in with. A *grounding ratio* — refuse a Summary sharing little with its transcript — scores the attack at 100%: a dictated order is transcript text, so reproducing it echoes the transcript perfectly. The same run pointed at the signal that works. An attacker can only put words into the utterance they speak, so a Summary made of their payload draws every word from that one line; the nine real Summaries on this machine touch 69 to 500 segments each. Counting *lines* rather than a ratio is what makes it scale-free: concentration for those nine ran 8.5% to 24.4%, which looks like room for a cutoff until you notice they are meetings of 152 to 693 utterances and that a ratio calibrated there says nothing about a meeting of eight — the same reasoning that gave `DOCUMENT_LABELS` its hole in Q124. Two guards were added because two false positives demanded them, neither imagined: the check must skip Summaries that carry rows, because a one-row summary of a short meeting legitimately quotes the line its item came from (it refused three existing unit canaries); and it must require *every* word to be echoed, not most, because an honest summary with nothing in it — `Discussed things.` over `None noted.` — refused when only concentration was counted. A quotation has no words of its own, which is the difference. `None noted.` itself is exempted, since rule 6 dictates that phrase and `drop_placeholder_items` writes it. Validated both ways: the real-model canary now refuses on 6 of 6 runs — the model obeyed on all 6, as it did before, so the refusal and not luck is carrying the test — and none of the nine real Summaries is refused (eight carry tables and are skipped; the tableless one passes). What is left standing is stated in `what-v1-is-not.md`: a hijack that reproduces the order *and* adds a sentence of its own passes, being indistinguishable from a bad summary without reading it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 11e2851
 
 ## Q136 — diarization/03 — deviation
 
@@ -1722,7 +1722,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Main already has the substance the ticket was written for, reached another way: `masks` carries which local speaker holds a frame rather than a count, each local speaker is embedded with the others masked out, overlap produces an Observation per speaker, and `MIN_EMBED_FRAMES` is kept separate from `MIN_SPAN_MS` so a short interjection keeps its speaker. The ticket's premise — a 32.6% oracle floor — describes a pipeline that no longer exists; the rig measures main at 19.71% on AMI test and 19.36% on dev. What is missing is only that windows do not overlap (`step_by(SEGMENT_WINDOW)`) and there is no per-voice reconstruction. Those two are one change, because `assemble` builds turns as a union of each observation's runs, and a union is only sound while windows do not overlap: at a 1 s step each instant sits in ten windows and any disagreement between them would be emitted as two people speaking at once. So coverage is now settled by vote on a 10 ms grid — an instant belongs to a voice when at least half the windows covering it say so — and `SEGMENT_STEP` defaults to `SEGMENT_WINDOW`, leaving production unchanged. At that step every instant has exactly one voter and the vote returns the union, which is why the four pre-existing `assemble` tests pass untouched; that no-op property is the point of splitting it, since it makes any later movement attributable to the step rather than to the rewrite. One sub-decision worth naming: the grid rounds both edges to the nearest cell rather than flooring the start and ceiling the end as the branch did. Expanding outward biases every span wider by up to 20 ms, and a meeting's worth of merged turns would each have grown — reading as false alarm the pipeline never produced, in the very number the step is to be judged by. Rounding is unbiased.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 9381f57
 
 ## Q137 — diarization/06 — escalated
 
@@ -1732,7 +1732,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The rig answers the measurement but not the product question, and the two point different ways. AMI dev, 18 meetings, only the embedding moving: ReDimNet2 scores DER 26.02% against WeSpeaker's 29.60%, and the whole 3.6-point gap is confusion (12.58 against 16.18) with missed and false alarm within 0.05 of each other — so it clusters better inside a meeting. WeSpeaker is better at recognising a colleague across meetings: nearest voice right 37.0% against 33.2%, cross-meeting EER 39.04% against 40.22%, and a no-impostor threshold of 0.888 refusing 25 of 108 genuine pairs against 0.911 refusing 30. The oracle ceilings are indistinguishable — both 6 of 108 at EER (5.56%) and both 65 of 72 nearest-right (90.3%), on a metric whose granularity here is 0.93 points — so neither embedding is the ceiling, and Q115's diagnosis is confirmed in the sense that matters: the original bake-off's verdict does not survive a fair front end, but neither does the reverse. This needs a human because it is a trade between two product properties the spec ranks nowhere — attribution inside a meeting against recognition of a returning colleague — and because it is not reversible on its own terms: a model change clears Voiceprints and re-runs History, which is what tickets 04, 05 and 12 exist for. Correcting my own earlier reading, which was wrong and in the way this rig was built to prevent: I compared WeSpeaker on AMI test against ReDimNet2 on AMI dev and called the oracle rows corpus-robust. They are not. WeSpeaker's own oracle moves from 0.00% EER and 100% nearest-right on test to 5.56% and 90.3% on dev, so the gap I attributed to the embedding was the corpus.
 **Outcome:** escalated
-**Ref:** (pending)
+**Ref:** 9381f57
 
 ## Q138 — diarization/06 — deviation
 
@@ -1742,7 +1742,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Raised by the Codex agent in pane `w8J:pF` reviewing this rig, and correct. `oracle_relabel` labels each turn independently by design — that is what makes the oracle floor an honest bound — so reading `first()` named a cluster after whoever happened to open it: one second of Alice ahead of ninety-nine of Bob made the cluster Alice. Worse silently, a cluster whose first turn fell in a gap in the reference kept its `cluster-N` label and was then dropped by the `starts_with` filter, so it left the trials altogether rather than being mislabelled in them. The comment directly above the code already claimed "the reference speaker the cluster mostly is"; the code never did that, and nothing failed, because the harness asserts bounds on DER and prints everything else. The blast radius is exactly the shipped-pipeline cross-meeting rows — EER, nearest-voice-right, and the voice count — for both embeddings. DER and the oracle floor never pass through this path and are unaffected, as are the oracle cross-meeting rows, which are built from reference spans rather than from clusters. Q137's shipped recognition figures were computed this way and cannot be relied on; both dev passes are re-running, and the corrected figures will supersede them.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 8c3a1ae
 
 ## Q139 — diarization/06 — gate-resolution
 
@@ -1753,7 +1753,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The correction moved real numbers and left the verdict standing, which is the useful outcome: the trade Q137 escalated is not an artefact of the defect. AMI dev, 18 meetings, only the embedding moving. ReDimNet2 is better inside a meeting — DER 26.01% against 29.60%, a 3.59-point gap that is entirely confusion (12.58 against 16.19) with missed and false alarm agreeing to within 0.04. WeSpeaker is better at recognising a colleague across meetings — nearest voice right 43.5% against 39.0%, cross-meeting EER 37.74% against 39.18%, and a no-impostor threshold of 0.888 refusing 23.15% of genuine pairs against 0.911 refusing 27.78%. The oracle rows are byte-identical between the models and unchanged by the fix, as they must be: they are built from reference spans and never pass through cluster labelling. What the fix moved was the shipped rows, and it moved both models the same way — nearest-right up 6.5 points for WeSpeaker and 5.8 for ReDimNet2, EER down 1.3 and 1.04, and 18 more voices each, those being the clusters whose first turn fell in a gap and were dropped whole. So the cross-meeting ordering is unchanged and its margin slightly wider. This still needs a human for the reason Q137 gave: it is a trade between attribution inside a meeting and recognition of a returning colleague, which the spec ranks nowhere, and a model change is not reversible on its own terms. Incidental confirmation from the same runs: these were the first full-split passes on the post-Q136 grid, and the oracle floors moved 19.36 to 19.30 and 18.98 to 18.93 — 0.06 and 0.05, against the 0.2 worst case the six-meeting subset showed — so the grid reconstruction is a no-op at full scale as intended.
 **Outcome:** escalated
 **Supersedes:** Q137 — same question, same answer, but its shipped cross-meeting figures were computed with the first-turn cluster labels Q138 replaced and should not be cited.
-**Ref:** (pending)
+**Ref:** 713cc62
 
 ## Q140 — diarization/06 — gate-resolution
 
@@ -1763,7 +1763,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The objection was raised by the Codex peer and is a real one: an embedding decides a similarity distribution, a threshold decides where that distribution becomes a partition, and the same number need not cut two distributions in the same place. Measured rather than argued. AMI dev, 18 meetings, thirteen thresholds from 0.30 to 0.90, with segmentation, observation and reconstruction fixed and inference paid once per meeting so every threshold scored byte-identical model output. WeSpeaker's best DER is 29.13% at 0.65; ReDimNet2's is 26.01% at 0.60. Tuning WeSpeaker to its own optimum recovers 0.47 points, leaving 3.12 between the optima against 3.59 at the shipped threshold, and ReDimNet2 holds the better DER at every threshold from 0.45 up. So the advantage is not where we cut. The sweep also produced an unasked-for result that discredits a number I have reported three times: nearest-voice-right rises monotonically with the threshold, from 33.3% at 0.30 to 72.4% at 0.90 for WeSpeaker, while DER over the same range goes from 37% to 86%. At a high threshold almost nothing merges, so every cluster is a small pure fragment that trivially matches its own speaker — the metric rewards fragmentation. Comparing it across two models that fragment differently is therefore confounded, and cross-meeting EER moves the same way for the same reason. The recognition half of the Q139 trade is not measured by the numbers I used to state it, and the honest position is that ticket 06 has one solid column and one that needs a chronological enrollment replay to have at all.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 0696335
 
 ## Q141 — diarization/06 — gate-resolution
 
@@ -1773,7 +1773,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Raised by the Codex advisor reviewing the sweep, and correct as a code claim. `optimal_mapping` gated on `max(reference, hypothesis)` against a limit of 18 while the comment explained that AMI's four or five people keep it on the exact path; the hypothesis offers about a hundred clusters a meeting, so the gate was never the room's size and the exact path never ran. The fix is to gate on the narrower side and make the DP rectangular — mask the four or five, stream the hundred — which is what the comment always described. Rescored both models over the same thirteen thresholds on AMI dev, 18 meetings: DER, oracle floor and voice counts are identical at every point for both models, with one 0.01 rounding digit of movement in WeSpeaker's confusion at 0.35. So greedy had been finding the optimal mapping all along here, which is what four well-separated speakers with a hundred candidates each should give — greedy only errs when two reference speakers' best cluster is the same cluster, and that collision does not occur in this corpus. Kept anyway: the code now does what it documents, greedy's exactness is a property of AMI rather than a guarantee, and the exact path is a few thousand operations. The third defect this advisor has found in this harness and the third of the same shape — a doc comment asserting an intent the code does not implement, invisible to tests that assert bounds on DER and merely print everything else. This one is the first that cost nothing. The regression gate is a two-speaker meeting with seventeen clusters of nobody added, which fails on the old `max` and passes on the new `min`; the existing optimality test is 2x2, which is why the defect survived.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** f843cbc
 
 ## Q142 — diarization/03 — gate-resolution
 
@@ -1783,7 +1783,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The plan's own rule was check for it, do not pre-build it. No fixture can catch this because fixture vectors are orthogonal and never come close enough to merge, so it needed the corpus. The measurement counts pairs of observations from one window whose reference speakers differ — pairs that must not merge — against how many agglomeration merged anyway. AMI dev, 18 meetings, WeSpeaker, 2628 such pairs. The rate falls monotonically as the threshold rises: 23.86% at 0.30, 11.19% at 0.45, 6.28% at 0.55, 3.46% at 0.60 (shipped), 0.53% at 0.65, 0.08% at 0.90. That last column is the interesting one. DER is minimised at 0.65, where the violation rate has already fallen to 0.53% — so the merge threshold is doing the constraint's job implicitly, and part of what tuning the threshold buys is simply refusing merges the constraint would have refused on principle. The value of an explicit constraint is therefore not the 91 merges it would fix at 0.60; it is that it decouples how eagerly to merge from do not merge a provable non-match, which could let a lower threshold work better than 0.65 does now. That is a hypothesis with a number attached and it is worth one experiment, but it changes production clustering, so it goes behind a harness-only entry point the way `agglomerate_with` did rather than shipping on the strength of the argument. Required extracting `provisional_of` from `cluster_observed`: the cannot-link question is about which observations ended up together, and `assemble` has already discarded the partition by the time `cluster_observed` returns.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7dde6c0
 
 ## Q143 — diarization/06 — gate-resolution
 
@@ -1792,7 +1792,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The advisor's proposed 2.0-point adoption bar is about test performance after dev selection, so the dev figure never addressed it whatever its size — right number, wrong split. Closing that is a measurement, not a judgement, so it ran without asking. AMI test, 16 meetings (EN2002, ES2004, IS1009, TS3003), disjoint from the dev split, each model pinned at the single merge threshold dev selected for it — WeSpeaker 0.65, ReDimNet2 0.60. One threshold each and no sweep: sweeping the held-out split would be tuning on it. WeSpeaker 28.64% DER (missed 10.02, false alarm 4.32, confusion 14.30), oracle floor 19.57%. ReDimNet2 24.62% (missed 10.37, false alarm 4.26, confusion 9.99), oracle floor 19.68%. The gap is 4.02 points against 3.12 on dev, so it did not shrink out of the corpus it was chosen on. The decomposition is the same as dev's and is what makes it attributable: missed and false alarm agree to within 0.35 and 0.06, and the oracle floors agree to within 0.11 — the same segmentation, the same turn placement, the same ceiling — while confusion differs by 4.31, which is the whole gap. Only the clustering moved, which is the only thing the embedding touches. Incidental from the same runs: the same-window cannot-link violation rate on test at these thresholds is 0.49% for WeSpeaker and 0.99% for ReDimNet2, matching dev's 0.53% and confirming Q142's finding is not a dev artefact. This resolves the DER half of ticket 06 on the terms the bar was stated in. It does not resolve the recognition half, which the enrollment replay is being built to measure, and it does not adopt the bar — that remains the user's, unapproved, as does what counts as acceptable recognition uncertainty.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 48805f2
 
 ## Q144 — diarization/06 — deviation
 
@@ -1802,7 +1802,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Raised by the advisor and verified against the code before anything changed. The old path picked one cluster per person and gave that person's entire reference speech time that cluster's outcome, so somebody 900 seconds correctly attached and 100 wrongly attached came out as 1000 of one or the other, and a person split across two stored identities could not be represented at all. It was not speaker-time attribution, and it is the same failure mode as the nearest-right confound Q140 withdrew — a denominator that moves with fragmentation — which is why it had to be fixed before any number was read rather than footnoted. Nothing in a corpus run would have shown it: the totals are plausible under either rule. The fix keeps the transcript already generated and adds an evaluator-only map from each appended segment to its originating reference person and duration; after the real `reconcile::apply`, each segment's stored SpeakerID is scored against that person and the fixed mint anchor, then aggregated by person, meeting and population. Reported as reference-transcript speaker-time, since the boundaries are reference-derived and there is no ASR. No oracle mapping enters recognition scoring; `optimal_mapping` now appears only where it decides what a stored identity is, once, at mint. Missing-ID reasons come from production's own signals rather than from duration — no chosen cluster is no-turn, chosen but unembedded is no-embedding, chosen and embedded and heard and unstored is the mint floor, and anything else is reported as unexpected rather than filed under a reason, because a short cluster that was recognized keeps its identity and duration alone proves nothing. Also folded in: mixed anchors no longer count as anybody's enrollment, pairing asserts on duplicate rows, unequal coverage, population disagreement and a moved denominator instead of continuing quietly, unscorable time stays out of every scored denominator, and the sign test is gone because a shared gallery and a cascading history leave these person-meetings dependent, which a sign test needs just as much as a t-test does. The guard is an offline regression check — the only part of that file in the default `cargo test` path — asserting seconds sum to the fixed reference denominator and that splitting a same-outcome fragment cannot move them. Settled with the advisor and left as it is: seconds lost because a person's cluster fragmented and a second identity was minted beside a recognized one stay in abstain-enrolled, since failing to reuse an enrolled identity is a real end-to-end cost and another fragment recognizing the person does not make these seconds correct. A descriptive partially-recognized flag can be derived from the corrected event files later without moving seconds between buckets, and would not be evidence of causation.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 48805f2
 
 ## Q145 — diarization/06 — gate-resolution
 
@@ -1811,7 +1811,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Four replays, one fresh store per model per split, every meeting in one declared order, scored as reference-transcript speaker-time by the Q144 rule. A zero-tolerance validity gate ran first: `unattributed:unexpected` is a lifecycle invariant, not a threshold, so any occurrence would have blocked the run from the model decision until explained. Zero rows and zero seconds in all four files. Paired denominators agree exactly on test (returning 25538s, new 5176s) and to within 2s on dev, where IB4002's 1560 unscorable seconds are excluded from every scored denominator on both sides. Returning, as a share of scored seconds: dev correct 77.7% → 79.2% and wrong 9.9% → 12.2%; test correct 76.9% → 80.8% and wrong 9.6% → 11.5%. Newcomers: dev correct-new 87.7% → 90.4% with false-attach flat at 2.3%, test 83.2% → 90.4% with false-attach 8s → 0s. Newcomers cost nothing on either split and gain on both, so the whole question is the returning trade, and it does not point one way: dev buys 311 correct seconds for 510 wrong ones, test buys 994 for 490. A 2.0-point DER bar would be met on both splits, but no no-harm condition stated in seconds is met on dev, and averaging the two splits would be selecting the answer. Three limits belong to the number and were named by the advisor. First, these are net changes in aggregate buckets, not measured transitions: ReDimNet2 leaving 819 fewer dev seconds and 829 fewer test seconds under the mint floor does not establish that those seconds became the correct and wrong ones, and no mechanism is claimed. Clustering differences and divergent gallery histories are both available explanations and neither is isolated here. An earlier draft of this report did claim a mechanism — that WeSpeaker's smaller clusters fail to clear the mint floor and ReDimNet2's clear it and misattach — and the code refutes it twice: `cluster.rs:602` gates only `Resolved::New` on `voiced_ms`, so recognition of a sub-floor cluster is unaffected and the doc comment above it says as much, and `classify` scores a returning person who gets a newly minted identity as abstention, never as wrong, so wrong requires a mismatched anchor from an earlier meeting. Second, this is a shipped-matcher comparison: only the merge thresholds were selected per model on dev (WeSpeaker 0.65, ReDimNet2 0.60), while MATCH_FLOOR 0.62 and the 0.08 margin are the shipped values for both. Ticket 07's per-model dev calibration of the matcher is still required before this can be read as the best recognition either embedding can deliver, and a recognition result under one model's untuned matcher is not that model's ceiling. Third, order across series and within the IB meetings is declared rather than known, and segment boundaries are reference-derived with no ASR. Descriptive only, no significance test: a shared gallery and a cascading history make these person-meetings dependent. One legible individual difference, offered as an observation and not as evidence: TS3003b/MTD011UID is 281 seconds of abstain-never-enrolled under WeSpeaker and 281 seconds of correct under ReDimNet2 — that person had been enrolled by the earlier TS3003 meetings in one run and not in the other. Neither the 2.0-point bar nor the split-architecture option is adopted here; both remain the user's and both are unanswered.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 48805f2
 
 ## Q146 — diarization/06 — deviation
 
@@ -1822,7 +1822,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Supersedes:** Q145 — the interpretation and three figures, not the measurement, which stands unchanged and was not re-run.
 **Justification:** Raised by the advisor, verified by re-summing the four raw event files with exact decimal arithmetic before anything was written. Dev: correct +311.390s, wrong +509.740s. Test: correct +993.600s, wrong +489.550s. Both buckets move the same direction on both splits, so the flip Q145 described was not in any measured quantity — it was in delta-correct minus delta-wrong, a scalar that weighs a wrong second exactly against a correct one. Nobody chose that weighting, and M3 is explicit that a confident wrong attribution is not the equal and opposite of a correct one, so collapsing the pair to one number smuggles in the utility function the escalation exists to ask about. It also misreported the guardrail: wrong time rises by roughly 490 to 510 seconds on both splits, so a no-increase-in-wrong condition is missed on test as well as dev, where Q145's phrasing implied test had met it. Three numbers were also wrong at the last digit, all from tallying integer seconds in `awk` where the events carry milliseconds. Scored denominators are not merely close but exactly equal on both splits — dev returning 22182.515s and new 7816.070s, test returning 25538.370s and new 5175.554s — so Q145's claim that dev agreed only to within 2s described a discrepancy that does not exist and would have been a real defect in the pairing if it had. Dev ReDimNet2 correct is 79.1%, not 79.2%; test WeSpeaker wrong is 9.5%, not 9.6%. Corrected table, WeSpeaker to ReDimNet2 as a share of scored seconds. Dev returning: correct 77.7% to 79.1%, wrong 9.9% to 12.2%, mint-floor 8.4% to 4.7%. Test returning: correct 76.9% to 80.8%, wrong 9.5% to 11.5%, mint-floor 8.0% to 4.7%. Newcomers, unchanged from Q145 and gaining on both splits at no cost: dev correct-new 87.7% to 90.4% with false-attach flat at 2.3%, test 83.2% to 90.4% with false-attach 8.120s to zero. What the replay supports is that ReDimNet2 attributes more returning time and gets more of it right and more of it wrong, that it leaves far less time unattributed, and that it is better for newcomers on both splits. Whether that is an improvement depends on the exchange rate between a correct second and a wrong one, which is a product decision and remains the user's. Q145's three limits are unaffected and still hold: net bucket changes are not measured transitions, this is a shipped-matcher comparison pending ticket 07's per-model calibration, and order is declared rather than known.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** f07d1b3
 
 ## Q147 — diarization/03 — gate-resolution
 
@@ -1831,7 +1831,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** AMI dev, 18 meetings, WeSpeaker, the same 13-point grid as the recorded sweep extended down to 0.00 after the first minimum landed on the grid boundary, which would have made it unreportable as an optimum. Unconstrained optimum 0.65 at 29.13% DER; constrained optimum 0.10 at 22.48%. Confusion carries 6.29 of the 6.65: 15.97 to 9.68. The controls hold — missed 7.42 to 6.94, false alarm 5.74 to 5.86, and the oracle floor 18.71% to 18.60%, so the ceiling did not move and the gain is clustering rather than a change in what was achievable. The mechanism is visible in the voice count, and it is the opposite of what a constraint that merely fragments would do: 2214 clusters across the 18 meetings unconstrained, 112 constrained, against 72 real speakers. At threshold 0.00, where every merge the similarity allows is taken, the constraint alone still holds 104 clusters — it puts a floor under the cluster count that roughly matches the truth, which is what lets a threshold far below anything previously usable merge aggressively without making provably wrong merges. The 0.00 to 0.30 basin is flat within 0.23 points, so 0.10 is not a precise optimum and the real finding is that the constraint largely removes the system's sensitivity to a hand-tuned threshold. Two honest costs. At the shipped 0.65 the constraint makes things slightly worse, 29.13% to 29.75%: where few merges happen anyway it only removes some that were right, so its entire value is in enabling a different threshold and none of it is free at the current one. And segmentation's own mistakes are in these numbers by construction — when it splits one person into two local tracks this refuses to reunite them — because the pairs come from window and channel provenance and never from the reference. That separation is structural, not a convention: `cannot_link_of` lives in `live.rs` and has no access to reference data at all, while the reference filter in the harness's `same_window_merges` is scoring-side only. A constraint read off the answer key would have improved the number and measured nothing that could ship. Regression gate before reading any of it: the merge loop was rewritten to carry constraints, so the unconstrained arm was re-run over the whole corpus and reproduced all thirteen cells of the recorded dev sweep to the digit, 29.13% at 0.65 included. Three unit tests guard the parts a corpus run cannot isolate — an indirect merge where a forbidden pair is carried together by a third cluster, a pair split across the two blocked stages so the second stage is what would reunite them, and equality with the shipped clusterer when no constraint is given. Limits, all load-bearing. Dev only and WeSpeaker only; nothing was tuned or checked on the held-out split and the experiment must not touch it. DER only: recognition is unmeasured, and a voice count falling from 2214 to 112 changes every input to the enrollment replay, so that would have to be re-run before anything is claimed about it. Cross-meeting EER and nearest-voice moved between arms and are deliberately not reported as a comparison — 2.28 million trials against 50 thousand is exactly the fragmentation-dependent denominator Q140 withdrew. Finally, the constrained WeSpeaker figure of 22.48% is below ReDimNet2's unconstrained dev optimum of 26.01%, which bears on ticket 06, but it is not a like-for-like comparison and ReDimNet2 under the same constraint has not been run. Nothing about the model decision follows from it and nothing here is adopted.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** f07d1b3
 
 ## Q148 — diarization/03 — deviation
 
@@ -1842,7 +1842,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Supersedes:** Q147 — its guard and three claims in its wording; the measurements are untouched and were not re-run.
 **Justification:** Raised by the advisor and confirmed in the code: `LiveDiarizer::with_step` and `EVERTRANSCRIPT_SEGMENT_STEP_MS` both set the step at run time, so `SEGMENT_STEP` can still equal `SEGMENT_WINDOW` while `Observed.windows` overlap — and the assertion compared exactly the two constants that would not have moved. Under overlap an observation sits in several windows and "the window it came from" stops having one answer, so every constraint built from it would be whichever window the iterator reached first. The guard now sorts each channel's real windows and refuses any overlap, panics on an observation that falls in no window instead of silently skipping it, and panics on one that falls in more than one; an observation with no runs at all is still passed over, because that is an absence of provenance rather than provenance being dropped, and it pairs with nobody either way. The regression builds overlapping windows while asserting the defaults still agree, which is the case the old form waved through, plus one for the unmapped observation and one confirming that the other channel is not evidence about this one. No sliding-window redesign: the constraint still only knows how to work on windows that tile, and now says so when they do not. This does not invalidate the completed runs. All of them ran at 10000 ms, and `Observed.windows` comes from segmentation, which is the same model and the same step in every arm — so the guard's verdict does not depend on which embedding ran, and the ReDimNet2 dev pass clearing it on all 18 dev meetings is evidence for the WeSpeaker passes over the same audio. Three corrections to how Q147 was written, none of which move a number. First, distinct segmentation tracks are a hypothesis that two people are talking, not a proof: Q147 called merges the constraint refuses "provably wrong" and spoke of "a provable non-match", which is stronger than the evidence, and inconsistent with the segmentation-error caveat in the same entry. They are refusals of merges that contradict segmentation's own account. Second, Q147 explained the 0.62-point net harm at 0.65 by saying the constraint "only removes some merges that were right". That is an unmeasured exclusive cause: blocking a merge changes the centroid the surviving group carries and therefore every later comparison it takes part in, so the net harm is a net figure over a changed merge history, not a count of correct merges removed. The net harm is what was measured and is all that should be claimed. Third, "optimum" should read best measured threshold throughout: the grid is 0.05 apart over a basin flat within 0.23 points, and nothing was measured between its rungs.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4022f84
 
 ## Q149 — diarization/06 — gate-resolution
 
@@ -1851,7 +1851,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** ReDimNet2 swept the full dev grid under the constraint, 0.00 to 0.90 by 0.05, inference once per meeting. Its best measured dev threshold is 0.10 at 23.79%, the same rung WeSpeaker chose and the same flat basin. Both were then pinned at 0.10 and run once each on AMI test, with no held-out sweep and no retuning. Held out: WeSpeaker 23.51% DER (missed 9.59, false alarm 4.43, confusion 9.49, oracle floor 19.51%, 96 voices), ReDimNet2 23.94% (missed 9.59, false alarm 4.42, confusion 9.93, oracle floor 19.45%, 95 voices). Missed agrees to the digit, false alarm to 0.01, the oracle floors to 0.06 and the voice counts to one, so the 0.43-point gap is confusion and nothing else — the same decomposition that made Q143's gap attributable, now reading the other way. What moved is which model the constraint was worth something to: against Q143's held-out figures at their own dev-selected thresholds, the constraint takes WeSpeaker from 28.64% to 23.51%, 5.13 points, and ReDimNet2 from 24.62% to 23.94%, 0.68. The dev grid shows why, and it is a crossover rather than a uniform shift: ReDimNet2 is ahead at every threshold from 0.60 up and behind at every threshold from 0.50 down, so the two models were never being compared on a fixed question — the unconstrained pipeline sat in the high-threshold regime where ReDimNet2 is better, and the constraint moves the useful regime to where WeSpeaker is. Most of what ReDimNet2 was buying in Q139 and Q143 was resistance to over-merging that the constraint now supplies structurally, and supplies to either model. This does not retract Q143: 4.02 points is still the held-out gap for the unconstrained pipeline, which is what ships today, and the two interventions must not be mixed into one number. It does mean the model decision ticket 06 was escalated on is conditional on an architecture choice that was never part of the question. Under the constraint neither model clears the proposed 2.0-point bar over the other, on either split. Limits. DER only: recognition is unmeasured under the constraint, the partition it would be measured on changed from roughly 2214 voices to roughly 96, and the enrollment replay would have to be re-run before anything is said about it — held deliberately until this screen was complete, and now the next thing owed. Harness-only; production clustering still calls `agglomerate` with the constant and no constraints. Best measured threshold, not optimum: the grid is 0.05 apart over a basin flat within 0.23 points on dev. Segmentation's own local-track mistakes are inside every one of these numbers by construction, since the pairs come from provenance and never from the reference. Both product decisions — the 2.0-point bar and the split-model option — remain the user's and remain unanswered, and this result bears on both without settling either.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 2ded449
 
 ## Q150 — diarization/03 — deviation
 
@@ -1861,7 +1861,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Supersedes:** Q147 and Q149 — four claims in their wording. Their measurements stand unchanged.
 **Justification:** Raised by the advisor and checked in the source: `cluster.rs:53` sets `MERGE_THRESHOLD = 0.6`, and 0.65 is the dev-selected unconstrained WeSpeaker comparator from the sweep, not what production runs. Q147 called 0.65 shipped and then reasoned from it that the constraint's "entire value is in enabling a different threshold", because at 0.65 it costs 0.62 points. At the threshold actually shipped the constrained arm reads 27.34% against the unconstrained 29.60%, so the constraint is worth 2.26 points with nothing else changed and no retuning at all. That is the claim the record should carry; the 0.62-point net harm is a fact about 0.65 specifically and says nothing about the shipped configuration. Second, the collapse in cluster count belongs to the constrained-and-retuned configuration, not to the constraint alone, and must be quoted within one split: dev 2214 voices at unconstrained 0.65 against dev 112 at constrained 0.10. The earlier report paired a dev count with a test count, which compares two different corpora and should not have been written. Third, Q149 said the two models "were never being compared on a fixed question". That is wrong and unfair to the work it cites: Q139 and Q143 asked a fixed, controlled question about the unconstrained pipeline — the one that ships — and answered it correctly, which is why the missed, false-alarm and oracle-floor controls agreed there too. What Q149 actually establishes is narrower and still important: the model ranking is conditional on the clustering configuration, and a result true of one configuration does not transfer to another. Fourth, "most of what ReDimNet2 was buying is resistance to over-merging that the constraint now supplies" is a mechanism interpretation, not a measurement. What was measured is that the constraint is worth 5.13 points to WeSpeaker on held-out test and 0.68 to ReDimNet2, and that the dev grid crosses over between 0.50 and 0.60. The mechanism is a plausible reading of that asymmetry and is not established by it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b788ef2
 
 ## Q151 — diarization/07 — gate-resolution
 
@@ -1870,7 +1870,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** AMI dev, both embeddings, constrained merge 0.10, the eight floors 0.30 to 0.95 crossed with margins 0.00, 0.08, 0.15 and 0.25 — 32 configurations per model, the shipped pair among them by assertion. Inference once per meeting per model, then every configuration replays those same observations onto its own fresh store, gallery and anchor state, with production contamination on and the full persist lifecycle; a new floor applied to a gallery another floor had already contaminated would measure neither. The floor and margin are arguments to the same `resolve` and `persist` production runs, through `resolve_with` and `persist_with`, so this exercises the shipped rules rather than a copy that could drift. Validity first: zero `unattributed:unexpected` in all 64 configurations, and the scored denominators are identical across every one of them and equal to the unconstrained replay's — 22182.515s returning, 7816.070s new — which is the check that the reference denominator never moved with the configuration. The shipped point is dominated. WeSpeaker at 0.62/0.08 returns 14030s correct and 2204s wrong; 0.70/0.08 returns the same correct with 2117s wrong, and beats it on newcomers too, 7641s correct-new with zero false attachment against 7578s and 62s. ReDimNet2 at 0.62/0.08 is dominated the same way by 0.70/0.08 and 0.80/0.08. Newcomers turn out to be the easy population: several configurations reach the maximum correct-new with false attachment at exactly zero, so newcomer false attachment is not a trade at all on this split — it is available for free at any margin of 0.15 or more, and for WeSpeaker at 0.08 once the floor is 0.70. Returning is where the shape is, and the margin is the knob. Under the constraint the mint floor has stopped mattering — 2s for WeSpeaker, 0s for ReDimNet2, against 1858s and 1039s unconstrained — because the constraint produces few large clusters and they all clear it. What replaces it is abstention by an enrolled person: 5283s for WeSpeaker at the shipped point, 24% of all returning time, where somebody the gallery already knew was given a fresh identity instead. Moving to 0.80/0.00 converts about 4500s of that into roughly 4090s correct and 440s wrong, which is a far better exchange than anything the embedding choice offered, and it is the same lever for both models: ReDimNet2's abstain-enrolled falls 2943s to 1087s over the same move. At matched configurations the two embeddings are close on recognition as they now are on DER — 0.80/0.00 gives WeSpeaker 18120s correct against 2646s wrong and ReDimNet2 17926s against 2505s. Limits. Dev only; no held-out sweep was run and none should be. This is a diagnostic grid, not a policy: nothing here is adopted, no correct-against-wrong weighting is assigned, and the nondominated sets are reported for both populations separately precisely because collapsing them needs a weighting that is the user's to give. The grid is coarse and its rungs are the only points measured. Everything inherits the replay's standing limits — declared order across series and within IB, reference-derived boundaries with no ASR, contamination on by design, and a shared cascading history that makes these configurations dependent rather than independent trials. Held-out evaluation points should be declared from these curves before any test run.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** aabe8b2
 
 ## Q152 — diarization/07 — deviation
 
@@ -1880,7 +1880,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Supersedes:** Q151 — four claims in its wording. Its measurements, validity gate and nondominated sets stand.
 **Justification:** Raised by the advisor, each one re-checked against `/tmp/grid/dev-*.events` before anything was written here. First, Q151 said newcomer false attachment reaches zero "at any margin of 0.15 or more". That is true of ReDimNet2 and false of WeSpeaker, which still carries 36.670s of it at margins of 0.15 for every floor from 0.30 to 0.62; it reaches zero only once its floor is 0.70. The supportable statement is narrower: some configurations attain zero newcomer false attachment, they differ by model, and their returning outcomes still have to be compared before any of them means anything. The error was reading a pattern off one model's column and generalising it to both. Second, Q151 described the move from WeSpeaker 0.62/0.08 to 0.80/0.00 in returning seconds only — +4089.440 correct and +441.430 wrong — and omitted that the same move loses 144.400s of correct-new and adds exactly 144.400s of newcomer false attachment. A configuration change is a change to both populations and reporting one of them is reporting half the result. Third, Q151 called that a "far better exchange than anything the embedding choice offered". Ranking +4089 correct against +441 wrong and +144 false attachment requires a rate of exchange between them, and that rate is exactly the product decision still outstanding; it is not the measurement's to assume. Fourth, Q151 said the two embeddings are "close on recognition at matched configurations". They are close at 0.80/0.00, where correct returning differs by 193.130s, and they are not close at the other measured points: 2183.830s apart at 0.62/0.08, 0.70/0.08 and 0.80/0.08, which is 9.84 points of the 22182.515s returning denominator, and 1598.260s apart at 0.80/0.15. Closeness is a property of specific configurations here, not of the models. Q151 also wrote that moving the threshold "converts about 4500s of abstention into roughly 4090s correct and 440s wrong". Aggregate ledgers cannot establish which seconds became which; that needs paired per-segment transitions, which were not measured. The net changes are what the grid supports and the only thing that should be said. This is the third entry correcting the same class of error — a mechanism or a preference stated in the voice of a measurement — after Q146 and Q150. The rule the ADR has to inherit: measurements, mechanism hypotheses and utility judgements stay separately labelled, and a sentence that ranks two outcomes is a utility judgement no matter how it is phrased.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 317d9c0
 
 ## Q153 — diarization/07 — gate-resolution
 
@@ -1889,7 +1889,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** AMI test, 16 meetings, constrained merge 0.10, configurations declared before any held-out matcher number was looked at: WeSpeaker at 0.62/0.08, 0.70/0.08, 0.80/0.00 and 0.80/0.15; ReDimNet2 at 0.62/0.08, 0.80/0.08, 0.80/0.00 and 0.80/0.15, its 0.80/0.08 replacing 0.70/0.08 because on dev the two tie on correct returning while 0.80 is better on the other three. Inference once per model, a fresh store per configuration, contamination on, the same lifecycle. Validity: zero `unattributed:unexpected` and zero duplicate rows in all eight configurations, with scored denominators identical across every one and equal to the earlier held-out replay's, 25538.370s returning and 5175.554s new. The transfer result is the negative one and it belongs first. Each model's point was declared because on dev it improved its own shipped point on all four quantities with correct returning not lowered. On held-out that last part fails for both: WeSpeaker 0.70/0.08 loses 281.180s of correct returning against its shipped point and ReDimNet2 0.80/0.08 loses 280.550s. The other three move as dev predicted — wrong returning down 18.780s and 95.080s, correct-new up 11.080s and 26.270s, newcomer false attachment down 11.080s to 2.250s and 26.270s to zero. So the dev frontier's fine structure did not survive the split, while its coarse direction did; a dev tie is not a held-out tie. Whether trading roughly 280s of correct returning for those three gains is worth it is a rate of exchange, and that remains the user's. The comparison needs no such rate, because it is a dominance and not a trade. At the declared primary points — WeSpeaker 0.70/0.08 against ReDimNet2 0.80/0.08 — ReDimNet2 is better on every one of the four: correct returning 18998.020s against 16758.720s, a gap of 2239.300s or 8.77 points of the returning denominator; wrong returning 3906.650s against 4309.370s; correct-new 4960.354s against 4958.104s; newcomer false attachment zero against 2.250s. The same dominance holds at their shared shipped point, 19278.570s against 17039.900s correct with 4001.730s against 4328.150s wrong, and at 0.80/0.00, so it is not an artefact of the recalibration. It does not hold at 0.80/0.15, where WeSpeaker has 479.660s more correct returning and 691.890s more wrong — a trade, not a dominance. Newcomers are saturated on this split for both models, 95.8% correct-new with false attachment at or near zero, and discriminate nothing. This leaves the two halves of ticket 06 disagreeing, which is the finding: under the constraint, in-meeting DER slightly favours WeSpeaker by 0.43 points on this same split, while cross-meeting recognition favours ReDimNet2 by a margin that needs no weighting to read. They measure different things and there is no reason they must agree. Limits. Four declared points per model and nothing else; no held-out sweep ran and no point may now be added or retuned having seen these. Net changes only — the ledgers cannot say which abstaining seconds became correct or wrong ones, and no paired transition was measured. Closeness and dominance are properties of the specific configurations named, not of the models in general. The replay's standing limits carry over: declared order across series and within IB, reference-derived boundaries with no ASR, contamination on by design, and configurations that share a cascading history rather than being independent trials. Nothing here authorises a production threshold, clusterer or model change, and the two reserved product decisions remain unanswered.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 71a1295
 
 ## Q154 — diarization/04 — gate-resolution
 
@@ -1908,7 +1908,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Supersedes:** Q154 — the batch-level filter it describes. Everything else in it stands.
 **Justification:** Raised by the advisor with a reproducer, which was checked against the code before anything was changed. The guard's own comment asserted that every cluster in a call comes from one pass, and nothing enforced it: the space came from the first cluster, the seeds were filtered once against it, and then every cluster was scored against those seeds. So clusters 0 and 1 in models A and B with a model-A seed would have had the B cluster scored against the A seed — and worse, because the tie went to the later cluster, the B cluster would have taken the mutual-best and the A cluster that legitimately matched would have resolved to `New`. That is the exact comparison the guard exists to refuse, reached through the guard. The fix is to test the pair rather than the batch: the score map now holds an entry only where the seed and the cluster agree on both model and version, `ranked` is built from the entries that exist, and `best_cluster_for` skips clusters with no entry. An absent entry is a non-candidate everywhere, which is what makes the second half of the reproducer impossible as well as the first. `a_mixed_batch_does_not_let_the_first_clusters_space_speak_for_the_rest` covers a model mixture and a version mixture and asserts both halves — that the out-of-space cluster is `New`, and that the in-space cluster still gets its own match. Model and version are separate columns and a check on one is not a check on the other, which is why both mixtures are there. Production is unaffected either way, since it resolves one pass at a time; the point is that the invariant is now enforced rather than asserted in a comment.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 13f7708
 
 ## Q156 — diarization/05 — deviation
 
@@ -1918,7 +1918,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Supersedes:** the "superseded" audit finding recorded in NOTES.md. The factual half — that main's lazy path exists and that neither ticket landed here — stands.
 **Justification:** Raised by the advisor and correct on the point of method: an implementation existing is not a policy being replaced, and the earlier note treated the one as the other. ADR-0037 rejected re-embedding the old exemplars' stored sample offsets for a stated reason that nothing measured since has touched — those offsets are the *old model's* choice of cuts, where the Operator's naming is a statement about a whole cluster, which is why 05 and 12 together specify rebuilding from attributed whole clusters with corrections on top. Main's lazy path (Q115, ADR-0035 as amended) does precisely what was rejected, and it rebuilds evidence while never re-running attribution, so an already-diarized Meeting keeps the old model's turns. A second claim in that note was also stronger than the evidence: "recognition already survives a model change" is not supported, because the rebuild has never been exercised against a real model change on a populated History — only through its seams — and a Speaker whose exemplars have no window or whose Meeting is gone loses its Voiceprint under it, at a rate nobody has measured. What genuinely changed for the tickets is narrower and is what the rewrites carry: 05 must now assert that `stale_exemplars` is empty after the wipe, so the lazy path cannot reintroduce the old cuts behind it, and 12 can no longer justify `claims` with "there is no vector left to seed with" as a standing fact, because it is a consequence of 05 rather than of the code as it stands. 12's blockers also shrink to 05 alone: 08, 09, 10 and 11 have landed here and 06 gates activation rather than the work. Both tickets are written but not activated, and the activation dependencies are stated exactly: the user's model decision, 05 before 12, and for 12 an end-to-end exercise that needs the models and about an hour of audio per Meeting. The case for the lazy path replacing the policy is real and is recorded at the end of the 05 ticket as a proposal, explicitly not adopted; taking it would close both tickets and replace them with one measurement of how many exemplars have no window on a real History.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 13f7708
 
 ## Q157 — diarization/06 — deviation
 
@@ -1927,7 +1927,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Raised by the advisor, each checked in the source or the journal first. First, ADR-0037's first amendment said the model-change policy "stands and has shipped", which contradicts the audit in the same document: 14 migrations here against the branch's 15, no `store::rerun`, no `claims`, no `relearn`, no `diarize/rerunCancel`. What shipped is the queue the re-run would use (Q133, ticket 08). The recipe shipped; the policy did not, and the amendment now says so. Second, "cross-meeting EER ≤ 1% was derived from the same broken bake-off" was being used as though it showed the bar unreachable. It shows the bar unsupported — a statement about its derivation — and nothing about whether ≤ 1% is attainable. Third, the oracle floor was described as an embedding ceiling and as showing segmentation to be the cause of the DER shortfall. It is neither: `oracle_relabel` relabels the *hypothesis* spans, so missed speech and false alarm survive it and only labelling error is removed, which makes it conditional on this segmentation and this reconstruction and licenses only "something upstream of the embedding has to move". NOTES additionally called it the metric that matters most, which flatters recognition badly, since its centroids are one per person per whole meeting — minutes of speech — where production mints a Speaker from as little as `MIN_SPEAKER_MS`, ten seconds; a separability measured at whole-meeting duration says nothing about a ten-second cluster. Fourth, the 4.02-point held-out gap was labelled the gap for the pipeline that ships. It is the gap for the existing unconstrained path with each model at its own dev-selected merge threshold: production runs 0.60 for whatever model is loaded, and WeSpeaker was given 0.65 there. Three smaller repairs went with them. The fragmentation explanation lost "purely" and "trivially match themselves" and now reports the co-movement — nearest-voice-right 33.3% to 72.4% while DER goes 37% to 86% — with fragmentation named as the available reading rather than the established mechanism, and the trial-count disparity (2.28M against 50k) as the part that is certain. The replay figures are stated as net bucket changes rather than as one bucket buying another, per Q152. And the reserved decisions were restored to the two that are actually the user's — whether ≥ 2.0 points of DER is the adoption bar, and whether to pursue split models — with the correct-against-wrong rate of exchange named as separately unresolved rather than as a substitute for the split question; the decoupled hybrid run is conditional on that question being reopened and is not a prerequisite for keeping one model, which is what the build does today. Fifth, in the reproduction table: `EVERTRANSCRIPT_MERGE_SWEEP` is a comma-separated numeric list, so `=1` scores the single threshold 1.0 rather than enabling a sweep, and `EVERTRANSCRIPT_REPLAY_PAIR` takes two event-file paths and joins ledgers that already ran rather than naming two meetings. Both verified in `tests/diarization_accuracy.rs`. No corpus run was needed for any of this and none was made.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 13f7708
 
 ## Q158 — diarization/06 — deviation
 
@@ -1937,7 +1937,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Supersedes:** Q157 — two of its repairs, which were themselves repairs. Its other claims stand.
 **Justification:** Raised by the advisor and both checked in the journal before anything was written. First: Q147 reports "2.28 million trials against 50 thousand" about **WeSpeaker unconstrained against WeSpeaker constrained** — the arms of the cannot-link experiment, whose cluster counts are 2214 and 112 across the same 18 dev meetings. Q157 moved that figure into ADR-0037 and NOTES as though it described the *two embedding models*, which is a different comparison that was never made. The figure is now gone from both documents rather than re-labelled, because the sentence it was supporting — that two arms which fragment differently are not being asked the same question — is true of the trial count being a function of the partition, and does not need a number that belongs to another comparison to say so. Second: "the bar is unreachable without changing something upstream of the embedding" is an inference the floor cannot carry. Reconstruction is downstream of the embedding, not upstream, and the floor is conditional on the hypothesis spans actually scored — `oracle_relabel` relabels those spans, so missed speech and false alarm survive and only labelling error is removed. What the number licenses is exactly this: these fixed spans cannot reach 18.8% by oracle relabelling alone. Which stage would have to change to move them is a separate question the floor does not answer, and both documents now stop there. This is the same class of error as Q146, Q150 and Q152 in a new costume — a mechanism claim wearing a measurement's clothes — arrived at this time by carrying a correction one step further than the evidence.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 204ecea
 
 ## Q159 — diarization/05 — gate-resolution
 
@@ -1946,7 +1946,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `schema::PENDING_MODEL_CHANGE_WIPE` is two statements — every exemplar deleted, every Voiceprint column nulled — and no schema change, so everything else survives by construction rather than by restoration. Registering it is the whole of activating it, and doing that accidentally would clear Voiceprints on the next Core start with no swap behind it, so `the_pending_wipe_is_not_registered` makes the gate a test rather than a comment. Two file-backed tests share one fixture: a named Speaker with a Voiceprint and both signs of evidence, the Operator, a Speaker forgotten after it had evidence, an attributed segment and a correction hint over it. `opening_a_current_history_leaves_its_voiceprints_alone` is the control — closed, reopened and migrated, both Voiceprints still there and `stale_exemplars` empty — without which the wipe test could be measuring an ordinary open. `the_pending_wipe_takes_every_vector_and_keeps_the_record` wipes, closes, reopens and checks the name, `confirmed`, the Operator flag, `forgotten`, the machine's attribution and the correction hint all survive while exemplars and Voiceprint columns are gone. `stale_exemplars` is asserted empty for the current identity **and for a hypothetical next model**, since the claim that matters is that no model can find anything to re-embed — that is what stops the lazy Q115 path reintroducing the old model's cuts behind the wipe, which is the thing ADR-0037 rejected. And `relearnable` still names the right Speakers afterwards, which is only true because the wipe kept the names and the mark. One judgement the ticket did not settle: **`confirmed` survives.** Naming is confirmation (ADR-0008 as amended) and the name survives, so clearing it would leave a named Speaker unconfirmed for a reason nothing in the Operator's experience explains, and would make ticket 12 hand it a Voiceprint ranking below an unconfirmed one having been vouched for. `clear_voiceprint` does clear it, but that is a recomputation whose evidence yielded nothing, which is a different event. **05 is not done.** The Registry messaging remains — the protocol already carries `has_voiceprint`, `forgotten` and `voiceprint_model`, so the shape is there and the wording is not, and writing it now would describe a state the product cannot reach. Activation remains: the user's model decision, and ticket 12 existing, because a wipe with no re-run is a History nobody is recognized in.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 204ecea
 
 ## Q160 — diarization/12 — gate-resolution
 
@@ -1955,7 +1955,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `claims` reads who owned each segment before the run overwrites it and hands a cluster whose segments a relearnable Speaker already owned to that Speaker outright. It adds no table, no migration, no protocol method and nothing that runs on its own, so it can be built and tested against a fixture database without approaching activation — unlike `store::rerun`'s backlog row, which needs a migration, or the `diarize/status` block and `diarize/rerunCancel`, which need the protocol. It must read through `store::speakers::attributed_speaker` rather than `speaker_id`, or it treats a correction the Operator made as though it had been ignored. Two traps checked in the old branch's source. First, `begin_if_the_model_changed` returns `None` only when the stored `diarize_rerun` row *matches* the current model; with no row at all — which is every History today — it falls through and enqueues every audio-bearing Meeting. Absent metadata is not evidence of a model change, and wiring that trigger into the unchanged current build would start a multi-hour re-run of all of History on the next Core start. The first start after the feature lands must record the current identity and enqueue nothing. Second, `store::speakers::relearnable` selects `forgotten = 0 AND (display_name IS NOT NULL OR is_operator = 1)`, so it includes the Operator — correctly for its own purpose, since a re-run does give the Operator a Voiceprint back. But ticket 12 rebuilds the Operator by ADR-0029's three channel rules alone and never from the previous model's attributions, and those attributions are exactly what `claims` reads. `claims` must exclude the Operator explicitly; using `relearnable` unfiltered would seed it from the old model's guesses about whose voice was whose, which is what ADR-0029 as amended was rewritten to stop.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 204ecea
 
 ## Q161 — diarization/12 — tradeoff
 
@@ -2027,7 +2027,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Q163 (unanimity replaces the plurality) and Q165 (withdraw `relearn`) were both prompted by advisor review, and I recorded them as `Decided-by: human` because the correction arrived from outside. That is the wrong reading of the field. An advisor's technical review is not the user making a product decision — it is a better argument about a technical call that was always the agent's to make, and both were settled by evidence in this repository rather than by anyone's preference. The distinction matters here specifically: this workstream has exactly two decisions that are the user's, the ≥2.0-point DER bar and whether to pursue split models, and marking technical corrections `human` inflates that list and makes the two real ones harder to see. The journal is append-only except for renumbering, so the two headers are untouched and this entry is the correction; a reader of Q163 or Q165 should read `agent` for `Decided-by`. Their `Chosen`, `Justification` and `Outcome` are unaffected.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 66e4fb8
 **Supersedes:** Q163 and Q165 — their `Decided-by` line only; the decisions themselves stand.
 
 ## Q168 — diarization/12 — gate-resolution
@@ -2048,7 +2048,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** human
 **Justification:** Re-clustering the identity model's vectors would change the partition, the turns and the ledger at once, and no ledger movement afterwards could be attributed to identity. Substituting under the clustering model's own canonical map is what makes the comparison a comparison: `split_clustered` calls `provisional_of`, `agglomerate_with`/`agglomerate_constrained` and `assemble` — the calls `cluster_observed` makes, in its order — over the clustering pass's vectors, so a diagonal cell *is* the run already on record and every cell sharing a partition emits byte-identical turns. The driver asserts that: within an arm, each cell's four DER tallies must equal its clustering control's, and a difference is reported as the splice leaking into the partition, not as a model difference. Alignment is a check, not a search, because segmentation is the same model in both passes: observations are matched on `(window, local)` with channel and both run lists asserted equal, and a `window`/`local` pair only one pass produced is named and fatal rather than skipped — an embedding drops an observation whose front end yields no features, and positional matching would then slide every later observation onto a neighbour's vector, which nothing downstream could catch. The identity vectors carry the identity model's real stamp, so `seeds`, the enrolled-before set and everything `persist_with` writes are read in that model's space and not in a borrowed one. Two clustering arms, each model at the threshold its own sweep fixed — unconstrained WeSpeaker 0.65 and ReDimNet2 0.60, constrained both 0.10 — and the merge threshold is not swept again; the driver refuses `EVERTRANSCRIPT_MERGE_SWEEP` and `EVERTRANSCRIPT_CANNOT_LINK` for that reason. Inference runs once per meeting per embedding and every cell, threshold and matcher point replays those same observations onto its own fresh store, gallery and anchor state, with contamination on and the full persist lifecycle, exactly as the single-model replay does. Choice rule, printed by the driver before any number: one cell beats another only by being at least as good on all four ledger quantities and strictly better on one; equal on four is no preference; anything else is a trade with no rate of exchange assumed; a split pays only where an off-diagonal dominates *both* controls of its arm, and otherwise the answer is that it does not pay. Dev only. Four offline tests pin the mechanism without a corpus: the diagonal reproduces `clustered` turn for turn under both arms, a split cell keeps the turns and moves the vectors and the stamp, and each direction of a missing observation panics by name.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7718be7
 
 ## Q170 — diarization/rig — irreversible-action
 
@@ -2058,7 +2058,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `~/Library/Application Support/EverTranscript/models` did not exist here, and the ReDimNet2 export was on no machine in the fleet, so the authorised measurement had nothing to run. The standing instruction forbids new network calls and corpus fetches, so upstream was out. WeSpeaker and the pyannote segmentation came from macbook-pro-nickel over the tailnet — a host-to-host copy of artifacts this project already had, not a fetch — and WeSpeaker's sha256 is `3955447b…fcbb`, the registry hash NOTES.md records, while segmentation is 5,986,908 bytes as recorded. ReDimNet2 was rebuilt offline: the upstream repository is in the torch hub cache at `PalabraAI_redimnet2_v1.0.0` and the `b3-vox2-lm` checkpoint beside it, the uv environment is cached, and `scripts/export-redimnet2.py` survives on the `diarization-pyannote-redimnet2` branch, so `uv run --offline` reproduced it with no network at all. It came out at 18,045,013 bytes — the size on record to the byte — 34 operators with no STFT node, and the script's own check gives cosine 1.0000 against PyTorch at both 3 s and 6 s. The risk being managed is a plausible vector of the wrong thing: a model file that loads and returns numbers is not evidence that it is the model the earlier measurements used, which is why each artifact is tied back to a figure recorded before this session rather than to the fact that it ran. Nothing in the checkout changed; the script was read out of git into `/tmp` and the models live outside the repository where production expects them.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 7718be7
 
 ## Q171 — diarization/06 — gate-resolution
 
@@ -2068,7 +2068,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** AMI dev, 18 meetings, eight cells: each model's partition crossed with each model's vectors, in both clustering arms — unconstrained at WeSpeaker 0.65 and ReDimNet2 0.60, constrained at 0.10 for both — each cell replayed across the 32-point matcher grid, 256 replays over two inference passes. Validity first. The scored denominators are 22182.515s returning and 7816.070s new in every one of the eight cells, identical to the figures Q151 recorded for this split, and `unattributed:unexpected` is zero everywhere. Every cell's four DER tallies equal its clustering control's exactly, which is the premise the grid rests on: the identity vectors never reach turn placement. The controls reproduce the record — 29.13% and 26.01% unconstrained, and at constrained 0.80/0.00 WeSpeaker 18120s correct returning and ReDimNet2 17926s/2505s, the same numbers Q151 has. One caveat is measured rather than assumed: the two passes disagree about nine observations out of 12,649, all WeSpeaker-only and all 84–85ms, 0.8s of voiced time or 0.0012%, because ReDimNet2's waveform front end yields no features for a span that WeSpeaker's fbank accepts. A track only one pass produced has no counterpart to wear, so every cell including the controls runs on the tracks both produced; that restriction leaves three of the four control DERs unmoved and takes WeSpeaker-constrained from 22.48% to 22.46%, and accounts for the 13s by which WeSpeaker's wrong-returning time differs from Q151's. The result. Over 128 off-diagonal comparisons against both controls there is exactly one dominance: constrained, floor 0.30 margin 0.00, WeSpeaker clustering with ReDimNet2 identity at 18120/2749/7363/277 against controls at 16131/4414/6047/1593 and 16681/4129/7231/411. That is a corner where both controls are badly calibrated — WeSpeaker's own best at this arm is 18120/2633 — so it is a dominance over two poorly-chosen configurations and not over either model at its best. Everywhere else, 63 trades per arm and one cell dominated by both. At each arm's best point the split is inert. Constrained 0.80/0.00: holding WeSpeaker's partition and swapping to ReDimNet2's vectors leaves correct returning identical and trades 43s more wrong for 10s more correct-new and 10s less false attachment; holding ReDimNet2's partition and swapping to WeSpeaker's vectors loses 60s correct and 28s wrong. Changing the partition instead moves correct returning by 193–253s and wrong by 156–171s. Unconstrained 0.45/0.00 is starker: the identity swap moves correct returning by 4s under WeSpeaker's partition and by nothing at all under ReDimNet2's — all four quantities identical to the second — while the partition swap moves correct returning 307–311s and wrong 510s. So the two columns of ticket 06 disagreeing does not resolve into a hybrid that takes both: on this split the identity embedding is close to inert once the partition is fixed, and what the recognition ledger is measuring is mostly the partition underneath it. Mechanism hypothesis, labelled as such and not measured here: the gallery is seeded from cluster centroids, so the matcher is asked about clusters the partition defined — if the partition is right both embeddings identify it and if it is wrong neither can. Limits. Dev only, and the second inference pass costs about as much as the first (594s and 603s for these 18 meetings), which is a real cost against benefits measured in tens of seconds. The grid is coarse and its rungs are the only points measured. Everything inherits the replay's standing limits — declared order across series and within IB, reference-derived boundaries with no ASR, contamination on by design, a shared cascading history rather than independent trials. Nothing here authorises a model, threshold, clusterer or architecture change, and the ≥2.0-point DER adoption bar remains the user's and remains unanswered.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4f9d8bf
 
 ## Q172 — diarization/06 — tradeoff
 
@@ -2078,7 +2078,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Q153's finding was that a dev frontier's fine structure does not survive the split even where its coarse direction does, so a held-out sweep would only recreate the selection problem it exposed. Three points, chosen for what each can falsify rather than for what it might win. Constrained 0.80/0.00 is where all four cells reach their dev best on correct returning, and where the split is a trade of 43s wrong against 10s correct-new and 10s false attachment — if the split has any value it has to appear as something better than that here. Constrained 0.30/0.00 is the single point in 128 comparisons where a split dominated both controls; if that is real it must transfer, and if it does not then the split claim has no support anywhere on dev, which makes it the sharpest of the three. Unconstrained 0.45/0.00 is a declared null: the identity swap moved correct returning by 4s under one partition and by nothing at all under the other, and a null that reproduces is worth more than another trade. Not proposed, deliberately: the rest of both grids, and the unconstrained arm's other points, since no split came within a dominance of a control at any of them. This is a technical checkpoint for review before the held-out cells run, not a request for a measurement choice; the two decisions reserved to the user are unchanged.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 4f9d8bf
 
 ## Q173 — diarization/rig — gate-resolution
 
@@ -2088,7 +2088,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Q170 says the models "were gone from this machine" and that ReDimNet2's export "was on no machine in the fleet". Both are too broad. The search behind them was a `find` rooted at the home directory, which does not descend into `/tmp`, and `/tmp/et-models-ab` is exactly where an earlier session had staged them for the A/B. Advisor review caught it and checked the artifacts rather than the story: sha256 `dcecdce7d52bbd4739b24d0874359ec564d43f4b3a392f0104f505593b566d41` for ReDimNet2, `3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb` for WeSpeaker and `057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25` for the segmentation model, each matching the restored file in the default directory exactly. Independently reproduced here. So the restore was unnecessary rather than wrong, and what it produced is the same bytes the earlier measurements ran on — the offline ReDimNet2 rebuild is now corroborated by a hash of the artifact it was rebuilt from, which is stronger evidence than the size and cosine checks Q170 relied on. Nothing needs restoring again, and the standing ban on network fetches was never actually load-bearing here. What is worth keeping from Q170 is the discipline, not the premise: an artifact that loads and returns numbers is still not evidence that it is the right artifact.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 55bb6bd
 **Supersedes:** Q170 — its premise that the models were absent from this Mac and from the fleet is false; the restore happened and is verified, but it was not needed.
 
 ## Q174 — diarization/06 — deviation
@@ -2099,7 +2099,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The restriction was reported as harmless and is not. It is a different experiment: nine observations of 12,649 are WeSpeaker-only, and dropping them changes what WeSpeaker's clusterer sees, so its partition moves. Measured against the original single-model grid at constrained 0.62/0.08, wrong-returning time falls 63.960s, correct-new rises 28.650s and false attachment falls 29.240s; at 0.80/0.00 wrong moves 12.370s and false attachment 4.430s; 212 per-event differences across the constrained WeSpeaker control grid once the two abstention subtypes are combined. Advisor review found it and the figures reproduce here exactly. The earlier claims that the restriction "moved nothing" and that the controls "reproduce the record" were true only of the two figures then printed — 18120s correct returning and DER to two places — and not of the ledger, and even the DER moves 0.02. The left join is expressible because production already has the path: `cluster::centroid` filters on `!vector.is_empty()`, so an empty `Vec<f32>` is no contribution rather than a direction, and `assemble`'s `filter_map` leaves a cluster with no usable vectors out of `Diarization::embeddings` while keeping its turns, which the scorer already reads as `unattributed:no-embedding` and not as the `unattributed:unexpected` the validity gate watches. Nothing is padded, fabricated as a zero vector, borrowed from a neighbour or aligned via RTTM. Turn geometry is vector-independent — `assemble` builds `held`, `covers` and `clean` from runs and windows alone — so a split cell's turns stay byte-identical to its clustering control's even where identity support is thin, and the DER-equality premise survives. Which half of the existing grid survives follows from the asymmetry: all nine differences are WeSpeaker-only, so ReDimNet2's tracks are a subset and the intersection is ReDimNet2's own track set. **The ReDimNet2-clustering row ran on complete original inputs and stands as measured**; its control matches the recorded totals once the abstention subtypes are combined. **The WeSpeaker-clustering row is retained as a labelled diagnostic**, including the grid's one dominance at constrained 0.30/0.00, which is therefore unverified. Coverage is now reported per model as that pass's own matched fraction: the 0.0012% figure summed both passes into its denominator and so double-counted every common track. Three offline tests pin it — an unequal-support fixture, a partially covered cluster that keeps its turn and lends no vector, and a cluster with no identity vector at all that is left without an embedding while its turns survive. The two `should_panic` tests that enforced the old fatal-on-missing rule are deleted; nothing panics now.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 55bb6bd
 **Supersedes:** Q169 — its alignment clause made a track only one pass produced fatal, and Q171's grid took the shared-track restriction instead; both are replaced by the left join. Q171 — half its cells ran on a restricted WeSpeaker partition.
 
 ## Q175 — diarization/06 — tradeoff
@@ -2110,7 +2110,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Two inference passes over AMI dev cost 594s and 603s, and this turn's correction is the second evaluator repair that would have re-bought them. The snapshot is written immediately after inference and before anything scores, so a repair reuses the pass it is repairing. It is deliberately not a cache framework — no eviction, no index, no sharing between machines, nothing reachable from production code — because the failure mode a cache invites here is worse than the cost it saves: silently replaying a pass made from different inputs would move numbers with no visible cause. Hence the guard is the whole design. The first line records corpus directory, meeting, both model files, the embedding's model and version, the front end and the window step, and a file whose line does not match byte for byte is ignored out loud and the meeting re-inferred. Identifying the models by content rather than by path is the point: a ReDimNet2 export once sat under WeSpeaker's filename in this project, and a name-keyed snapshot would have compared a model with itself. The digest is FNV-1a over the bytes rather than sha256 because `sha2` is a normal dependency of the crate and not a dev-dependency, so an integration test cannot reach it and no public hashing helper is exported; adding a dependency edge to fingerprint a scratch file is more than the problem is worth, and the threat here is an accident, not an adversary. It is labelled in the code as not cryptographic so nobody promotes it later. The format is hand-rolled and little-endian, which is a real cost, so it has its own round-trip test covering the parts easy to lose: the channel byte, runs that differ from clean runs, an empty vector — the left join's own case — and a refusal when the stamp differs.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 55bb6bd
 
 ## Q176 — diarization/06 — deviation
 
@@ -2120,7 +2120,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The rule Q169 declared and Q171 applied reads a failure to dominate as an answer, and it is not one. The four quantities it ranks — correct returning, wrong returning, correct-new, newcomer false attachment — are the recognition column alone. They do not carry the DER column, which is the other half of the question ticket 06 asks; they do not carry the cost of a second inference pass, measured at about the same price as the first; and they do not carry the cost of shipping two models and holding two vector spaces. A configuration that trades on those four while gaining DER could still be worth having, and the rule as written would call it a non-result. Dominating both same-model controls remains sufficient evidence of a recognition benefit, which is what makes it useful to declare in advance; it is not necessary for the split to be worthwhile. The driver now prints this before any number, defines DOMINATES, TIE and TRADE as reported facts about named configurations, and states that a recommendation is a separate statement from a measurement. The user kept the ≥2.0-point DER adoption bar undecided and authorised the measurement only, so the journal should not be recording a product verdict on their behalf. What the dev grid does support, narrowly and only from the half Q174 retains: under ReDimNet2's partition the identity embedding is close to inert — at most 60s of 22182.515s at constrained 0.80/0.00 and nothing at all at unconstrained 0.45/0.00, all four quantities identical to the second — while swapping the partition moves correct returning by 193–311s. Separately, the grid's label "(control: what ships)" is renamed "(same-model control)": neither 0.65 nor constrained 0.10 is a shipped configuration, and the cannot-link constraint is harness-only.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 55bb6bd
 **Supersedes:** Q169 — its choice rule treated non-dominance as a verdict. Q171 — its conclusion that no split pays overreaches what the four recognition quantities can establish.
 
 ## Q177 — diarization/06 — gate-resolution
@@ -2131,7 +2131,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Q172 picked its three matcher points for what each could falsify, and two of the three arguments rest on the half of the grid Q174 withdraws. Constrained 0.30/0.00 was chosen because it held the grid's only dominance — a WeSpeaker-clustering cell, so unverified. Constrained 0.80/0.00 was chosen for a 43s-against-10s trade that is likewise a WeSpeaker-partition figure. Only the unconstrained 0.45/0.00 null survives intact, being a ReDimNet2-partition result. Freezing points is worth doing precisely because it stops the selection being retuned after the answer is visible, and that discipline is what would be broken by carrying forward points calibrated on a partition that has since changed. No held-out cell has run, so nothing is contaminated by keeping them open. The corrected dev pass has not been run either — this turn was bounded to code and offline checks by review — so the re-choice is the next step and not this one.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 55bb6bd
 **Supersedes:** Q172 — two of its three points were calibrated on the withdrawn WeSpeaker-clustering half.
 
 ## Q178 — diarization/06 — deviation
@@ -2142,7 +2142,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Three faults, all found by advisor review, and the first is the one that matters: the stamp recorded the corpus directory and the meeting name but never the audio's contents, so a WAV re-cut in place — the ordinary way a corpus gets fixed — would have been replayed from stale observations with nothing to show for it in the numbers. The audio is now hashed into the stamp. Second, `fingerprint` memoized by path, which is exactly backwards for a thing whose only job is to notice that a file changed: within one process it would have answered for the file that used to be there. The memo is gone, and hashing 140MB per meeting-pass costs a few seconds against an inference pass that costs ten minutes. Third, Q175's stated reason for hand-rolling the format is simply false. An integration test is a target of its package and Cargo passes it the package's regular dependencies as well as its dev-dependencies; `sha2`, `serde` and `serde_json` are all direct dependencies of `evertranscript-core`, two sibling tests already use `serde_json`, and a three-line probe confirmed all of it compiles and runs. So the FNV digest and the unchecked little-endian reader existed to route around a constraint that was never there, and both are deleted — no dependency was added to remove them. The reader was also the wrong shape for its job: it indexed straight into the buffer, so a truncated file was a panic rather than a miss, and `save` wrote to the final path, so an interrupted run left exactly the half-file the next run would panic on. Now `serde_json::from_slice` returns an error for anything malformed or truncated, which is reported and treated as a miss, and `save` writes a `.partial` file and renames it. The stamp computation moved out to a free `provenance` so it can be tested without setting an environment variable, which under edition 2024 is `unsafe` and racy against parallel tests. Three focused tests: the round trip, a file truncated to half, emptied, and reduced to a bare stamp, and audio rewritten in place under the same name.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** dde6469
 **Supersedes:** Q175 — its justification for a hand-rolled format rests on a false claim about what an integration test can import, and its stamp omitted the audio.
 
 ## Q179 — diarization/06 — deviation
@@ -2153,7 +2153,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Stated without its point, the claim is false, and the same grid contains the counterexamples. Under ReDimNet2's partition, substituting WeSpeaker's identity vectors costs at most 60s of correct returning time at constrained 0.80/0.00, but 1325.430s at 0.62/0.08 — 16213.960s against 14888.530s — and 1086.060s at 0.80/0.15. So "at most 60s" describes one well-calibrated point and is not a bound over the grid; quoting it as one would have made the identity model look irrelevant when at two other points it is worth over a thousand seconds. The claim that survives unscoped is narrower: the null at unconstrained 0.45/0.00, where all four quantities are identical to the second. Three smaller corrections in the same pass. The restriction's figures are net bucket changes between two runs' totals, not measured transitions, and are now worded that way — no paired per-second accounting was done, so nothing establishes that particular wrong seconds became abstaining ones. The adoption bar is described as deliberately held open by the user rather than unanswered: they were asked and chose to leave it undecided, which is a decision and should not be recorded as a gap. And a split does not entail two persisted identity spaces per Speaker — clustering vectors can remain meeting-local and never be stored against a Speaker — so the measured cost is two models and two inference passes, which is what the reading rule and the cost paragraphs now say.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** dde6469
 **Supersedes:** Q174, Q176 — both summarised the ReDimNet2 row's identity swap without the configuration it holds at, and Q176's cost clause overstated what a split entails.
 
 ## Q180 — diarization/06 — gate-resolution
@@ -2164,7 +2164,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** AMI dev, 18 meetings, eight cells over the 32-point matcher grid, 256 replays on two inference passes, now with each cell a left join onto its clustering pass's own observations. Validity, checked before any result was read: both diagonals are **event-for-event identical** to the standalone single-model ledgers — 6738 events for WeSpeaker-constrained and 6573 for ReDimNet2-constrained, against 212 differences under the withdrawn restriction — so the controls reproduce the record exactly rather than nearly. Denominators are 22182.515s returning and 7816.070s new in all eight cells at all 32 points, with `unscorable` 1560.070s excluded; no duplicate rows; `unattributed:unexpected` zero everywhere. The rig asserts all four DER millisecond tallies equal within a clustering row and it held. DER returns to the recorded values: unconstrained 29.13% and 26.01%, constrained 22.48% — the restriction's 22.46% is gone — and 23.79%. Coverage is per pass: ReDimNet2 supplies vectors for 6320 of WeSpeaker's 6329 observations (99.858%, 9 unvectored, 0.8s, which keep their turns and their cluster), WeSpeaker for all 6320 of ReDimNet2's, and 9 WeSpeaker observations have no place in ReDimNet2's partition. The restriction's damage is now scoped exactly: **only the constrained WeSpeaker row moved**, both its cells at all 32 points; the unconstrained WeSpeaker row and all four ReDimNet2 cells are identical before and after, which is 64 of 256 replays affected and not the whole grid. Results, each with its configuration. **The identity embedding is not close to inert, and the earlier summary saying so was an artefact of quoting one point.** At the shipped matcher point, constrained 0.62/0.08, holding WeSpeaker's partition and substituting ReDimNet2's identity vectors moves correct returning from 14030.130s to 16006.440s, **+1976.310s**, 8.9% of the denominator, against wrong +128.000s, correct-new −53.750s and false attachment +53.750s — a trade, and a large one in the direction that matters most. At the same point ReDimNet2-clustering with WeSpeaker identity **dominates the WeSpeaker control** on all four (14888.530 against 14030.130 correct, 2165.625 against 2204.195 wrong, 7589.680 against 7578.540 correct-new, 50.720 against 62.410 false attachment) while trading against the ReDimNet2 control. **The single dominance over both controls survives and is no longer a diagnostic**: constrained 0.30/0.00, WeSpeaker clustering with ReDimNet2 identity, 18119.570/2801.145/7361.380/279.570 against a WeSpeaker control of 16130.530/4426.535/6042.470/1598.480 and a ReDimNet2 control of 16680.550/4128.995/7231.080/411.180. It remains the only one in 128 off-diagonal comparisons, and both controls are still badly calibrated there — WeSpeaker's own best correct returning across the constrained arm is the same 18119.570 — so it is a dominance over two poorly chosen configurations, which is a fact about those configurations and not about the models. **The exact null is real and is a property of ReDimNet2's unconstrained partition**: ReDimNet2 clustering with WeSpeaker identity ties its control on all four quantities to the second at 0.80/0.00, 0.62/0.08, 0.45/0.00 and 0.80/0.15 — four points, not one. Under the constraint the same swap costs 1325.430s at 0.62/0.08, so the null belongs to the arm and not to the partition in general. Three small dominances of WeSpeaker-clustering/ReDimNet2-identity over the WeSpeaker control appear unconstrained at 0.80/0.00, 0.62/0.08 and 0.80/0.15, each worth tens of seconds and each a trade against the ReDimNet2 control. No recommendation is drawn and none follows from these four quantities alone: they are the recognition column, and the measured cost of a split is two models and two inference passes — 1597s of wall clock for this grid — while the DER column is a separate reading and the adoption bar is deliberately held open by the user. Held-out candidates are predeclared in Q181 and have not been run.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** dde6469
 **Supersedes:** Q171 — its grid ran half on a restricted partition and its conclusion that no split pays is not what the corrected data show. Q179 — the "at most 60s" scoping was drawn from the withdrawn half; the corrected figure at the shipped point is +1976.310s under WeSpeaker's partition, and the null is ReDimNet2's unconstrained arm at four points.
 
 ## Q181 — diarization/06 — tradeoff
@@ -2175,7 +2175,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Q172's set was calibrated on the withdrawn WeSpeaker half, so it is re-chosen rather than carried. Each point is picked for what it can falsify. Constrained 0.30/0.00 is the one dominance over both controls in 128 comparisons and is now measured on complete inputs; if it is real it has to transfer, and if it does not then no split dominates anywhere, which makes it the sharpest of the three. Constrained 0.62/0.08 is the shipped matcher point and is where the identity embedding does the most work — +1976.310s of correct returning under WeSpeaker's partition, and a four-way dominance of ReDimNet2-identity over the WeSpeaker control — so it is the point where a recognition benefit, if there is one, should be least deniable, and it is the one the product would actually run at. Unconstrained 0.80/0.00 carries two claims at once: a small dominance of WeSpeaker-clustering/ReDimNet2-identity over its own control, and the exact tie of ReDimNet2-clustering/WeSpeaker-identity with its control; a null that reproduces is worth as much as a win, and a small dominance that evaporates is worth knowing before anyone prices a second model. Not proposed, deliberately: constrained 0.45/0.00, despite holding three of four cells' best correct-returning point, because a best-of-grid point selected on dev is exactly what Q153 showed does not transfer; and every remaining point of both grids. Dev-only calibration, held-out untouched. This is a predeclaration for review, not a run.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** dde6469
 **Supersedes:** Q172, Q177 — the points are re-chosen from corrected dev curves; two of Q172's three arguments rested on the withdrawn half.
 
 ## Q182 — diarization/06 — tradeoff
@@ -2186,7 +2186,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Q181 named the right points and read them against the wrong thing. Advisor review supplied the case, and it checks out here: the split's one dominance over both controls — constrained 0.30/0.00, WeSpeaker clustering with ReDimNet2 identity, 18119.570/2801.145/7361.380/279.570 — is itself **dominated on dev by a single model calibrated properly**, WeSpeaker doing both jobs at constrained 0.80/0.00, which has the same 18119.570s correct returning with less wrong (2645.625 against 2801.145), more correct-new (7434.140 against 7361.380) and less false attachment (206.810 against 279.570). So winning at a badly calibrated setting cannot by itself establish an architectural advantage over calibrating one model, and a held-out design that only compares a split to its own arm's controls at its own point cannot see that. Running all three points across both arms fixes it for 24 replays and no new machinery. The points have distinct jobs and are labelled with them: **0.80/0.00 is the main comparison**, a common operating point where every cell is competitively calibrated; **0.62/0.08 is the shipped matcher comparison**, the setting production actually runs; **0.30/0.00 is a secondary low-floor diagnostic**, carried because it is where the only dominance appeared and not because it is a candidate. Three corrections to how Q181 argued, all of which overreached. First, "if it is real it must transfer, and if not then no split dominates anywhere" is too strong: a held-out failure would fail to replicate that one configuration on this split and this corpus, which is not a statement about every configuration. Second, Q153's single failed transfer does not establish that dev-best points generally fail to transfer, and it was not a reason to exclude a competitive control — that exclusion is reversed here. Third, describing the +1976.310s correct / +128.000s wrong trade as "large in the direction that usually matters most" assigns a utility the user has not chosen, and M3's own catalogue says a wrong attribution is worse than an unnamed one; the trade is reported as a trade with both numbers and no ranking. One measurement correction in the same pass: the 1597s attributed to the dev grid is the whole harness walk, not the cost of two models. Inference was 583s and 606s, 1189s together, and the remaining 408s is downstream replay work that a production split would not repeat. A production split could also share one segmentation pass between the two embeddings, so 1189s is a harness figure and an upper bound rather than the architecture's cost.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** b6f7b9e
 **Supersedes:** Q181 — its held-out set read each split only against its own arm's controls, so it could not have seen that a well-calibrated single model already dominates the split's best dev point.
 
 ## Q183 — diarization/06 — gate-resolution
@@ -2197,7 +2197,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The 24 configurations of Q182, run on AMI test's 16 meetings through `EVERTRANSCRIPT_MATCHER_POINTS`, every merge threshold as dev fixed it, fresh store and gallery per configuration, its own snapshot directory and event prefix. Validity first. Denominators are 25538.370s returning and 5175.554s new, fixed across all eight cells and all three points; no duplicate keys; `unattributed:unexpected` zero. `unattributed:no-embedding` is also zero — 4 of WeSpeaker's 5666 observations are unvectored (0.3s) but no cluster lost every vector, so the abstention path built for that case exists and was not exercised on this corpus, which is worth saying plainly rather than reporting as if it had been tested. Coverage: ReDimNet2 supplies 5662 of WeSpeaker's 5666 (99.929%), WeSpeaker all 5662 of ReDimNet2's, and 4 WeSpeaker observations have no place in ReDimNet2's partition. Six exact checks against saved standalone test ledgers are all identical — both constrained diagonals at 0.62/0.08 and 0.80/0.00, both unconstrained diagonals at 0.62/0.08 — and DER is unchanged from the record at 28.64%, 24.62%, 23.51% and 23.94%, equal on all four millisecond tallies within each clustering row. Results. **The dev dominance did not replicate**: constrained 0.30/0.00, WeSpeaker clustering with ReDimNet2 identity, which dominated both controls on dev, is on test a trade against the WeSpeaker control (correct −113.790, wrong +120.910, correct-new +56.130, false attachment −56.130) and dominated by the ReDimNet2 control (correct −2272.550, wrong +1920.600). That is a failure to replicate this configuration on this split and this corpus, and says nothing about configurations not run. **Zero of the twelve splits dominate both same-model controls of their arm and point**, against one in 128 on dev; against own-partition control, which is the DER-neutral comparison, two dominate, one ties exactly, two are dominated and seven trade. **What replicated and grew stronger is the shipped matcher point.** Constrained 0.62/0.08, holding WeSpeaker's partition — the best DER measured anywhere here, 23.51% — and substituting ReDimNet2's identity vectors dominates its own-partition control on all four: 18116.280 / 4108.840 / 4960.354 / 0.000 against 17039.900 / 4328.150 / 4947.024 / 13.330, so correct +1076.380, wrong −219.310, correct-new +13.330, false attachment −13.330, at identical DER because the partition and turns are the same. On dev the same cell moved correct +1976.310 but wrong +128.000; on test both moved the helpful way. It still only trades against the ReDimNet2 control. The exact null replicated at unconstrained 0.80/0.00, where ReDimNet2 clustering with WeSpeaker identity ties its control on all four to the second. At constrained 0.80/0.00 the split is dominated by both controls, so it is not uniformly helpful. **No split dominates every measured same-model configuration** — the best manages 6 of 12 — so nothing here shows a split beating a single model calibrated properly, which was the specific thing the both-arms design was added to be able to see. The tension the split does not resolve: at 0.62/0.08, unconstrained ReDimNet2 alone has 2512.080s more correct returning and 1181.760s less wrong than the best split cell, for 1.11 more DER points and 282.970s less correct-new. Ranking those requires the adoption bar the user is deliberately holding open and a rate of exchange between a correct and a wrong attributed second that nobody has chosen, so no ranking is made and no new scalar is introduced. Inference was 651s and 558s over 16 meetings, snapshots retained; this is harness timing, and a production split could share one segmentation pass.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b6f7b9e
 
 ## Q184 — diarization/05 — gate-resolution
 
@@ -2207,7 +2207,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Nothing needed building: `voiceprintLabel` (`clients/electron/src/renderer/App.tsx`) already separates the three states and already reads the stamp for the middle one — `!hasVoiceprint && voiceprintModel` selects `registry.voiceprint.cleared`, and all three keys exist in `i18n.ts` in both locales. Its comment names the intent outright, that the model outlives the vector for exactly this sentence. The defect was the wipe: nulling the stamp made every Speaker it cleared select `registry.voiceprint.none`, the sentence for a voice never enrolled, which reads as data loss with no explanation. Keeping the stamp is only safe if it cannot become evidence again, so that was verified by reading every one of the twelve `voiceprint_model` sites in `store/speakers.rs` rather than assumed. The matcher gallery, `voiceprints`, selects `voiceprint IS NOT NULL AND voiceprint_model = ?1 AND voiceprint_model_version = ?2`, so a stamped row with no vector cannot seed or match. The lazy re-embed query, `speakers_with_stale_voiceprint`, selects `voiceprint IS NOT NULL AND (voiceprint_model IS NOT ?1 OR ...)`, so it cannot resurrect one — and with every exemplar deleted there is nothing to re-embed regardless. `has_voiceprint` on the wire is `voiceprint IS NOT NULL`, independent of the stamp, so the label's own first branch is unaffected. `relearnable` reads only `forgotten` and the name. `set_voiceprint` overwrites all three columns together, so re-enrolment leaves no stale pairing. The deliberately-forgotten state is untouched either way, because `delete_voiceprint` sets `forgotten = 1` and the label tests that first. Tests follow the same three-state shape rather than asserting an empty column: the fixture gains a fourth Speaker, named and never enrolled, and `the_pending_wipe_takes_every_vector_and_keeps_the_record` now asserts the sentence each of Alice, the Operator, the forgotten Speaker and the newcomer selects — cleared, cleared, forgotten, none — plus the two gating queries returning nothing. Reverting the SQL to the old three-column null makes that assertion fail with `left: "none", right: "cleared"`, so the check tests the thing it is for. Both migrations stay out of `MIGRATIONS`; no History was touched.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 3d65e16
 
 ## Q185 — diarization/06 — gate-resolution
 
@@ -2217,7 +2217,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** human
 **Justification:** Advisor review, each point checked against `/tmp/test-split.events.*` and `/tmp/dev-split-leftjoin.events.*` here before writing. First, "at constrained 0.80/0.00 the split is dominated by both controls" hides which split: it is **We-clustering/Re-identity** (wrong +141.500s against We/We with the other three identical, correct −731.300s / wrong +338.520s against Re/Re). **Re-clustering/We-identity** at the same point goes the other way — it dominates We/We by +687.520s correct and −283.880s wrong, and trades against Re/Re, giving up 43.780s of correct returning for 86.860s less wrong. Correct-new is 4960.354s and false attachment 0.000s in all four cells there, so that point is a two-quantity comparison and "the split" is not a subject that has one behaviour. Second, "no split dominates every measured same-model configuration, so nothing here shows a split beating a single model calibrated properly" is a non-sequitur, and the conclusion is false on this grid: unconstrained 0.80/0.00, We-clustering/Re-identity has 2401.140s wrong returning against We/We's 2436.900s at the same point, 35.760s less, with correct returning, correct-new and false attachment identical — and the same cell dominates the same control on dev (wrong −15.550s, correct-new +6.890s, false attachment −7.590s, correct returning identical). That is the one gain in this work that replicated: small, one point in one arm, and not evidence about any other cell. No cell is called a best split without naming the metric, since the four quantities do not agree on an order. Third, Q183 called the shipped point "what replicated and grew stronger". The dev cell there was a **trade** (+1976.310s correct, +128.000s wrong) and the test cell is a **dominance**; there was no dominance at that point to replicate, so the dominance itself did not replicate. What carried across is only the direction of correct returning. Combined with the low-floor diagnostic, whose dev dominance became a test trade, no dominance replicated anywhere in this grid except the small unconstrained one above. Statements stay local to their setting. Fourth, treating the ≥ 2.0-point DER bar and the threshold choice as one blocked condition was a logical error: choosing a recognition threshold does not require a number for the bar. The open choices are which model and configuration to adopt and which recognition outcome to prioritise, the second of which needs a rate of exchange between a correct and a wrong attributed second. The bar is a field the user deliberately left empty, not a mandatory one.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 3d65e16
 **Supersedes:** Q183 — its measurements stand unchanged; its characterisation of them named no cells, called a changed trade a replication, and drew a general conclusion its own grid contradicts.
 
 ## Q186 — diarization/05 — tradeoff
@@ -2228,7 +2228,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Found while auditing the twelve `voiceprint_model` readers for the wipe change. `clear_voiceprint` (`store/speakers.rs`) nulls the vector and both stamp columns, clears `confirmed`, sets no `forgotten` mark and keeps the exemplars — a fourth way to hold no Voiceprint, distinct from the three the Registry has sentences for, and it currently selects the never-enrolled one. It is pre-existing and unrelated to the model change: the wipe fix neither causes nor worsens it. The turn was bounded to the smallest coherent pending-wipe and message fix, and widening it to a second call site with its own semantics is the kind of scope creep that turns a verifiable change into an unreviewable one. Deferred rather than dropped: it wants either the same stamp retention or a fourth state, and that is a choice about what the Registry should say when a recomputation comes back empty, which nobody has been asked yet.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 3d65e16
 
 ## Q187 — diarization/12 — gate-resolution
 
@@ -2238,7 +2238,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Three things were traced before anything was written, and each ruled an option out. A guard only before starting is insufficient: a recording that begins during an inference pass would leave the backlog holding the machine for the length of a Meeting, so the same question is asked again on every progress span. `diarize/cancel` cannot be the mechanism, because it deletes the queue row itself — pausing through it would lose the work it was standing aside from, which is the opposite of what a pause means. And a second runner is unnecessary: one worker already makes "at most one run at a time" a property of the shape. What was actually missing was that `Ok(0)` carried three unrelated answers — nothing to attribute, no models, the Operator cancelled — and the worker took the Meeting out of the line for all three; there is no count that can say whether work is still owed. Hence the outcome enum, with one rule each: `Wrote` finishes the row, `Paused` leaves it because it is owed, `Cancelled` leaves it because `diarize_cancel` already deleted it. Only `Back` yields (`yields_to_recording`): a Meeting that just ended or one the Operator asked for keeps its turn, since somebody is waiting for it and Auto-Record opening the next call is not a reason to make them wait longer. The pause reads an `AtomicBool` rather than the `recorder` mutex because the models run on a `spawn_blocking` thread that cannot await an async lock; `is_recording` now answers from that flag and the two lines that install and take the recorder are its only writers, so it is the same fact and not a second opinion. Stopping is the existing cooperative `Cancel` token, so the blocking task's cleanup is still awaited — the `spawn_blocking` is never detached — and the run returns before the transaction, which is what makes "an interrupted run writes nothing" structural rather than a promise. `peek` now answers the priority with the id, since the worker cannot otherwise tell which kind of work it is looking at. The worker waits on the existing `diarize_wake` select after a pause so it does not spin, and `stop_meeting` already queues the ended Meeting, which fires that wake — so the ordinary end of a recording resumes the backlog at once rather than after the 30-second timer. One imprecision accepted deliberately: an Operator cancelling a `Back` run *during* a recording is reported as `Paused`, because both answers leave the same queue — `diarize_cancel` has already removed the row — and the only difference is a bounded wait before the next peek. Offline checks in `tests/diarize_queue.rs`, no models and no network: a recording leaves a `Back` Meeting owed, the same backlog without a recording is worked (the control, without which the first passes on a worker that runs nothing), `Front` work is not stood down, the pair resumes with the just-ended Meeting first, and a stood-down Meeting survives a restart. Removing the before-start guard fails three of them; making the worker finish the row on `Paused` fails the same three independently. What they cannot reach is the interrupt landing in the middle of an inference pass, which needs the ONNX models; the decision behind it is asserted directly instead. Not touched: no startup trigger, no registered migration, no protocol or Registry surface, no seeding.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 8002e67
 
 ## Q188 — diarization/06 — irreversible-action
 
@@ -2248,7 +2248,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** human
 **Justification:** NOTES was headed "the 24 predeclared configurations" and then reported six or seven of them, so the claim and the evidence did not match, and every subtraction quoted in the write-up was unverifiable once `/tmp` was cleared. The table carries arm, clustering model, identity model, merge threshold, matcher point, DER and the four ledger quantities per row — enough to re-derive any comparison in NOTES, the ADR or the journal by subtracting two rows. Aggregated from the already-saved events; no measurement was re-run, and the arrival of the table cross-checks the prose, since the rows reproduce the figures quoted for constrained 0.62/0.08 and 0.30/0.00 exactly. The raw events are 300KB of per-meeting per-speaker rows whose only consumer is this aggregation, so they stay out. DER repeats within a clustering row by construction and is written on every row rather than normalised away, because a reader comparing a split to its control should see at a glance that the DER column did not move.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 8002e67
 
 ## Q189 — diarization/journal — deviation
 
@@ -2258,7 +2258,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `Decided-by: human` is meant to record that a person chose, including where an agent surfaced the options. An advisor agent is not a person, and neither the transport — the user's terminal — nor which pane had focus changes whose judgement it was. Q167 corrected the same slip earlier in this journal and the pattern is followed rather than reinvented: the entries are not edited, and this append is the record. The distinction matters for reading the journal back, because the reserved decisions are the ones that gate activation, and inflating the count of human calls makes it look as though more of this work had been signed off than has been. Q185 is a separate case and stands as `human`: it is a correction of published claims, and the user's own instruction in the same turn directed it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 3c34c1e
 
 ## Q190 — diarization/12 — deviation
 
@@ -2268,7 +2268,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Advisor review found the claim "an interrupted run writes nothing" false as shipped in `8002e67`, and it checks out in the source: `LiveDiarizer::observe` polls `cancel` only at window starts, and `Diarizer::diarize` runs `cluster_observed`, calls the final progress tick and then returns `Ok(result)` unconditionally — so the progress callback that cancels for a recording is followed by a success, which `diarize_meeting` matched and carried into a transaction that adopts rebuilt Voiceprints, mints Speakers, moves attributions and marks the Meeting diarized. Polling more often inside `observe` would not have fixed it: the gap is between the run producing an answer and the caller writing it, and no polling frequency closes that. Making the run abortable is a larger change than the defect needs. So the token outlives the blocking task and is read again at the one place where writing begins, which is also after every other stage that could have set it. The second defect was independent and mine: deciding `Paused` against `Cancelled` by re-reading `is_recording` after the run asks the wrong question, because a recording can start and end inside one pass — and then a stood-down run reports an Operator cancellation that never happened, losing the fact that the Meeting is owed. The reason is now written beside the token by the same function that sets it, so nothing is inferred later. Two expensive stages that run before the first progress tick, `runner::decode` and `runner::rebuild`, now check as well; the rebuild re-reads and re-embeds a window of kept audio per stale exemplar. Consequently the "within one span" latency I offered is withdrawn: model load, decode, the rebuild and the clustering pass all sit between consecutive checks, and the guarantee is that nothing is written, not that the stop lands inside a window. One behaviour is deliberately made consistent rather than preserved as-was: an explicit `diarize/cancel` landing in that same late window now also writes nothing, where before it wrote. Every other cancel path already wrote nothing, and `DiarizeOutcome::Cancelled` means exactly that. The advisor was also right that this is testable without ONNX — `finish_run` takes the run's result as an argument, so a synthetic successful `Diarization` drives the real transaction. `server::tests::a_stop_that_arrives_after_a_successful_pass_writes_nothing_and_stays_owed` asserts no attribution, no Speaker and no diarized mark for a stood-down run whose recording has already ended, `Cancelled` for a stop with no recording behind it, the queue row still owed, and — as the control without which all of that passes on a `finish_run` that never writes — the same result unstopped writing. Removing the boundary check makes it fail with `Wrote(1)`: the defect, reproduced. Replacing the recorded reason with live recording state makes it fail with `Cancelled` against `Paused`. And `worker_until` in `tests/diarize_queue.rs` now asserts its join instead of discarding it, so a worker that ignores shutdown cannot run on against the next test's directory; `shutdown.cancel()` wakes both of the worker's waits, so the extra notify it was doing was unnecessary.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 3c34c1e
 **Supersedes:** Q187 — its persistence-boundary claim did not hold, and its `Paused`/`Cancelled` decision read live state instead of the recorded reason. Its queue rules are unchanged.
 
 ## Q191 — diarization/journal — deviation
@@ -2279,7 +2279,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The advisor states that the instruction Q189 credited to the user was its own prompt, stored in its session, and that every prompt reaching this loop is advisor direction. That is checkable against what Q189 actually claims and it is not: Q189 reasoned from the transport — that the instruction "arrived in the same turn" — which is the precise thing it had just finished saying does not determine provenance. So the exemption was manufactured by the argument it contradicts, and the correction is the same append-not-edit shape Q167 and Q189 used. The human decisions on this workstream remain exactly the two Q189 named: split-model evaluation is authorized, and the ≥ 2.0-point DER adoption bar is deliberately undecided. No other entry is re-examined; this is a correction to one sentence, not a journal audit.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** ef3a9f1
 **Supersedes:** Q189 — only its last two sentences, which exempted Q185. Its correction of Q187 and Q188 stands.
 
 ## Q192 — diarization/12 — deviation
@@ -2290,7 +2290,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** It is not the boundary, and the source says so: `Store::write` sends the closure to one writer thread over a channel and awaits a oneshot, so a check before that call precedes an unbounded wait — everything already queued has to finish first. Three things followed from getting this wrong. A recording starting while the closure waited was seen by nobody, because the eligibility handle had been moved into the inference closure and dropped with it; so it is cloned before that move and carried through completion. An explicit `diarize/cancel` could not reach the run either, because the job handle was cleared before completion ran; completion now runs first and the handle is cleared after it on every path, errors included, which also required the `JoinError` to stop being a `?` early return. And the wording "immediately before the transaction" was inaccurate in the doc, the ticket and Q190, so all three now say the writer closure and say plainly that nothing interrupts a commit already under way — the choice is made before one begins. Two offline regressions hold it. `a_recording_that_starts_while_the_write_waits_stops_it_before_the_transaction` occupies the writer with a barrier, polls completion exactly once so its closure queues behind that barrier while nothing is recording, then starts the recording and releases the writer; moving the check back to the calling side — not deleting it — makes it fail with `Wrote(1)`. `a_stop_that_arrives_after_a_successful_pass_writes_nothing_and_stays_owed` gained a case where nothing has cancelled anything and completion itself must notice the recording, so the latch is exercised rather than supplied as a premise, plus the resumed path; removing only the re-evaluation and keeping the token check makes both tests fail. Neither test covers `spawn_blocking` cleanup and neither claims to: a direct call to `finish_run` does not reach it, and that remains covered by inspection of the guard's `_slot` move and by `runner::run_guarded`'s own tests. The barrier is a channel rather than a sleep, and the arrival signal is a tokio oneshot because `#[tokio::test]` is single-threaded and a blocking receive on the test thread deadlocks the spawned holder — which it did, once, before the advisor read it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** ef3a9f1
 **Supersedes:** Q190 — its persistence-boundary claim was on the wrong side of the writer's queue, and it left the cancel handle unreachable across completion. Its reason-latching and withdrawn-latency findings stand.
 
 ## Q193 — diarization/12 — gate-resolution
@@ -2301,7 +2301,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Ticket 12's own seam list called this out as worth settling before a reader was written rather than inside one, and the reader is now written. "Read it only after activation" makes the status call depend on a flag that does not exist and would have to be invented. Matching the error text ties the code to a SQLite message and would swallow a corrupt page or a locked file as "no re-run", which is exactly the failure a status pane must not hide. Asking by name is one cheap query and says what it means. The half-installed case — the row table present, the backlog table not — deliberately still errors, because that is a broken install and not an absence. Above it, `Core::rerun_block` degrades a failed read to no block with a warning rather than failing the whole status call, the same degradation `queued` already takes: a Client that cannot be told about the backlog should still be told what is running.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 59d3b68
 
 ## Q194 — diarization/12 — tradeoff
 
@@ -2311,7 +2311,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `begin_if_the_model_changed` writes a row on first start recording which embedding the History is in and asks for nothing, because an absent row is every History today and reading it as a model change would enqueue all of History after an ordinary update. That row is metadata, not a backlog, and reporting it as a re-run of zero Meetings would put a progress bar in front of every Operator who never triggered one. So two cases have to encode byte-identically to the old shape and both are asserted: no tables at all, and a baseline row. `cancelled` is in the predicate so that stopping a backlog with nothing left in it is still a re-run that was stopped rather than one that never existed. The four quantities stay apart — `done`, `remaining`, `abandoned`, `cancelled` — with `paused_for_recording` separate again, because a recording is a wait and the Meetings are still owed; folding abandoned into done would tell an Operator who stopped at one of forty that forty were walked. Removing the suppression makes the wire-shape test fail; hard-coding the pause false makes the progress test fail.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 59d3b68
 
 ## Q195 — diarization/12 — tradeoff
 
@@ -2321,7 +2321,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The first two were ruled out by what they destroy: `diarize_cancel` takes a Meeting out of the line whatever put it there, so applying it widely would throw away the catch-up pass and anything an Operator is waiting for, and clearing `Back` wholesale does the same more bluntly. What remains is an ordering argument, and it holds because `Store::write` is one sequential writer: a job that has not reached its writer closure finds the token already cancelled and writes nothing, so its Meeting is genuinely abandoned; a job past it has committed, and the queue row it still holds is not evidence that it has not been walked, because the worker removes that row in a later write. `julianday` rather than a string compare, since both stamps are local-time RFC 3339 and two offsets do not sort — checked against the four shapes `chrono::Local::now().to_rfc3339()` produces. Eligibility is the same rule `cancel` applies, asked about one Meeting by `owns_bulk_work`: a Meeting promoted to `Front` keeps running because somebody is waiting for it, and the catch-up pass was never this job's. One window is left open knowingly: the worker can sit between reading the head of the queue and registering the job, so that one Meeting is walked after the stop. It is bounded at one — the next pass finds nothing of this backlog's — the Meeting keeps what the walk concluded, and closing it would mean holding a lock across an entire multi-minute run. Four mutations falsify the four guards; the fourth, dropping the priority filter from `owns_bulk_work`, passed until the promoted-job assertion was added, so that rule was untested when first written.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 59d3b68
 
 ## Q196 — diarization/12 — deviation
 
@@ -2331,7 +2331,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The comparison does not work and the advisor's counterexample shows it in one line: `julianday` of `2026-09-16T17:00:00.100100-07:00` and of `...100200-07:00` are both 2461300.5000011576, so `>=` holds and cancelling a re-run that has processed nothing marks a Meeting walked before it began as walked by it. Higher precision would not save it either, because a wall clock can be adjusted under two events in both directions and a stamp is not a completion identity — it is a coincidence of ordering. Recording completion explicitly was the other offered route and would have meant new columns in the pending schema; closing the gap needs none, and it removes the thing being measured rather than measuring it better. `diarize_queue::finish` now runs against the transaction, beside `set_diarized`, so it rolls back with the evidence it describes. The worker's later removal had to stop being unconditional for the same reason the advisor gave: after a commit the row under that id could be a fresh request somebody made in between, and deleting it would drop work nobody cancelled. `DiarizeOutcome::Skipped` carries the one case that still needs an outside removal — no audio, no models, a run that failed on its own recording, none of which reached a transaction and none of which would go differently next pass. `Wrote(0)` used to mean both that and "committed, attributed nobody", which is exactly the conflation `DiarizeOutcome` was introduced to end. Removing the in-transaction removal and restoring the unconditional one makes `a_committed_run_leaves_the_line_in_the_same_transaction` fail; that test carries the advisor's two stamps as its fixture, so the old discriminator is refuted by the suite rather than only in prose.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 6913dcb
 **Supersedes:** Q195 — its `julianday` discriminator cannot establish which run committed, and the window it accepted as bounded is closed rather than tolerated. Its rejection of routing the bulk stop through `diarize_cancel` or clearing `Back` stands.
 
 ## Q197 — diarization/12 — deviation
@@ -2342,7 +2342,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Accepting the first was wrong on its own terms: the sequence is not a wasted walk but a stop that removes a row and counts the Meeting abandoned, after which the run commits new evidence — so the record disagrees with the count, which is the failure the whole outcome type exists to prevent. Neither fix needs a lock across model inference, which was the objection that made me accept it. Registration already took the job lock; doing the queue check under that same lock makes the two sides race cleanly, since a stop must take the lock to reach a running job — either the job is registered and the stop finds its handle, or the row is gone and the run returns `Cancelled` before claiming a slot. The second race was mine and worse: `owns_bulk_work` ran on a pooled read connection and matching only `meeting_id` afterwards revalidated nothing, so a promotion committing in between meant stopping a job somebody was by then waiting for. The eligibility is now computed inside the same transaction that empties the queue, and the token is set on the writer thread before it takes other work, which also keeps the ordering the stop depends on. `owns_bulk_work` is deleted rather than fixed, since its answer has no correct place outside the mutation. The promotion test is built rather than timed: the closure occupying the writer performs the promotion itself just before returning, so it is guaranteed to commit after the stop has started and before the stop's own transaction runs — an answer read on entry is stale by then, and both that test and the fixture one fail when eligibility is taken from outside.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 6913dcb
 **Supersedes:** Q195 — its acceptance of the peek-to-registration window, and its placement of the eligibility read outside the mutation.
 
 ## Q198 — diarization/12 — gate-resolution
@@ -2353,7 +2353,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** A warning plus an absent block tells the Client something false in the one shape it cannot question — a backlog that is running, reported as none at all — and the Client has no way to distinguish that from the ordinary absence. An unreadable state on the wire would need a new variant every Client must learn in order to say what an RPC error already says, so the error goes back the way every other failure does. The three successful absences are unchanged and still encode byte-identically. The second half was a bug I introduced with `requested()`: `begin_if_the_model_changed` records the embedding on first start with `total` zero, and `cancel` set `cancelled` on it, after which `requested()` reported a stopped re-run that had never existed — manufacturing a backlog out of metadata, which is exactly what the suppression was written to prevent. `cancel` now reads the row first and returns without writing for all three cases, and the test asserts the serialized status is unchanged across the call in both the no-tables and the baseline forms. A read that fails for any other reason stays an error there too.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 6913dcb
 **Supersedes:** Q193 — its degradation of an unexpected read failure to an absent block. Its `sqlite_master` guard stands and is now shared with `cancel`.
 
 ## Q199 — diarization/12 — deviation
@@ -2364,7 +2364,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** This was a regression I introduced and did not check. Before Q196, `Wrote(0)` was what took a row out, so the `Err` arm was correct as written; after it, `Wrote` means "the commit removed its own row" and an errored run has no commit, so the row stayed at the head. The loop then read the same Meeting, failed the same way and never reached the work behind it — a spin rather than a retry, and worse than the drop the outcome type was introduced to prevent, because nothing else ever runs. The regression drives the worker for real over a queue whose head is a row with no Meeting behind it, which is the shape of every failure that happens before the run: `diarize_meeting` bails, the arm sees an `Err`, and the Meeting queued behind it must be reached. Written with the foreign key briefly off, because the cascade exists to stop exactly that row existing — what is under test is the arm that handles a failure, not how one arises. Restoring `Wrote(0)` there makes it fail by never draining.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 78634bf
 **Supersedes:** Q196 — it changed what `Wrote` obliges without changing this sibling arm to match.
 
 ## Q200 — diarization/12 — deviation
@@ -2375,7 +2375,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Three faults, all the same faults the bulk stop had, and fixing only the bulk path left the sibling wrong. A run could register between the token check and the delete and go on to write after the Operator had been told it stopped; registration already takes the job lock and re-reads the queue, so holding that lock across both makes whichever side arrives first win cleanly, and no inference happens under it because the run is spawned after registration with the lock released. The swallowed error is now returned, which the method's new `Result` made possible. And the bookkeeping was the arithmetic lie: the queue row left while the membership stayed, so `remaining` fell, `abandoned` did not, and `done` counted a Meeting nobody had walked. `rerun::give_up` does both in one transaction and **gates on the queue row having been removed by this call** — so cancelling twice counts once, and a run that already committed, which took its own row out inside its commit, is left as walked rather than re-described as abandoned afterwards. Unlike the bulk stop it ignores priority: an Operator asking for one Meeting to stop means it, promoted or not. It writes nothing to the re-run when the tables, the row or a backlog are absent, so a cancel on an installation that never had one cannot manufacture a baseline. Four mutations falsify: the `Err` arm, the bare queue delete, dropping the queue-row gate, and re-adding the worker's removal after a commit. The last of those needed the rule pulled into `leaves_the_line_afterwards` to have anywhere to fail — it passed everything until then, so the protection Q196 relied on was itself untested.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 78634bf
 
 ## Q201 — diarization/12 — gate-resolution
 
@@ -2385,7 +2385,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The audit, once: a committed run removes its own row inside the commit; a run that never reached a transaction is removed by the worker; the Operator cancels one Meeting; `cancel` stops the backlog; and deleting a Meeting cascades the queue row and the membership away together. The two deliberate give-ups are the ones an Operator would call abandonment and both now raise `abandoned`, which `done` subtracts — that was the missing half and is fixed in Q200. The other two are not abandonment by anyone: a Meeting with no Kept Audio or no models on disk has nothing to rebuild and would have nothing next pass, and a deleted Meeting was not stopped, it is gone. Counting either as given up would need a trigger on `meetings` and a new meaning for a number that already reads correctly once said plainly, and the ticket's instruction was the minimum schema change. So the honest reading is stated on the method — with the five paths listed, so the next reader audits from the doc rather than from the queue — and `done` is not offered as a count of Voiceprints rebuilt. The wire field keeps its name; its meaning is the one the Registry will have to render, and a bar labelled "walked" over "processed or no longer processable" is accurate for every path that reaches it.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 78634bf
 
 ## Q202 — diarization/12 — deviation
 
@@ -2395,7 +2395,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** My Q201 audit checked what each removal path does to `done` and missed what none of them does to membership. `finish` removes only the queue row, so after a walk the membership stayed, and `state`'s join matched it against any *new* row under that id: enqueue a walked Meeting again by hand and `remaining` rose, `done` fell, cancelling it raised `abandoned` for a walk that had already happened, and a bulk stop would have deleted a request the re-run never made. What membership marks is a queue row as the re-run's, not a Meeting as forever the re-run's — so it belongs to the queue row, and the foreign key says so structurally instead of every completion path remembering. That makes retirement atomic by construction rather than by discipline: it happens in whatever transaction removed the row, including the attribution commit, with no code in the hot path and no generation counter. The cascade chains, so deleting a Meeting still clears both. Two call sites had to read before they delete rather than after — `give_up` asks whether the row is owned before removing it, and `cancel` already named its rows first — and `state`'s join collapses to a count, because a member is queued by construction now. Promotion is untouched: a `Front` row keeps its queue row, so it keeps its membership and stays counted in `remaining`. Falsified by reverting the reference to `meetings(id)`, which fails six tests including the new one.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4d403d7
 
 ## Q203 — diarization/12 — tradeoff
 
@@ -2405,7 +2405,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `done` is processed-or-no-longer-processable (Q201), so every word that implies a result is a claim the number cannot support: a Meeting with no models on disk is in it, and so is one deleted while it waited. "Gone through" is what it can carry. `abandoned` stays a separate count for the same reason — folding it in would let a re-run stopped at 1 of 40 read as 40 handled. The bar measures what has left the line, which is the one thing a bar can say honestly, and the words underneath tell walked and given-up apart because it cannot. The case with teeth is a stopped re-run that still has `remaining`: the bulk stop deliberately leaves promoted work alone, so the bar is near full, the state is "stopped", and a row is still owed — drawn as "still queued, because it was asked for on its own. Stopping the update does not cancel that", so Stop is not read as having failed or as covering somebody else's request. The block reports and stops; there is no begin and no endpoint for one. Polling rather than a notification, because `diarize/status` has none and adding one is a protocol change for a screen that is open for a minute; the interval is the Registry's and is cleared on unmount. Answers are applied in the order they were asked for, so a poll that left before Stop cannot land after Stop's answer and redraw a re-run the Operator has just stopped. A failed read keeps the counts already drawn and shows the error rather than blanking them into an apparent finish. The lines are decided in a plain-TypeScript module because the component cannot be compiled by the test config — the repo's existing reason for splitting renderer logic out — and the five sentences are pinned there.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4d403d7
 
 ## Q204 — diarization/12 — gate-resolution
 
@@ -2415,7 +2415,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Checked the sibling before choosing, as directed. `correct_segment` → `feed_correction` writes against the same Meeting: a positive for the Speaker a segment moved *to* and a negative against the one it moved *from*, both `operator`, both carrying `meeting_id`. So a segment corrected away from somebody and then back leaves a negative behind that nothing retracts. A replacement confined to rows this path wrote would re-derive the positive from the latest hint and leave that stale negative standing, and the Speaker would hold evidence for and against the same audio — which is exactly the accumulation the instruction warned about. Replacing everything the Meeting has to say about an eligible Speaker fixes it without a column, because the corrections themselves are untouched: they live in `attribution_hints`, which is the record, and an exemplar is derived from them. Deriving it again from the newest hint is the whole operation. A new hint UUID as the scope was rejected for the reason given: it leaves the prior hint's evidence behind. `from_operator` still distinguishes a range a correction put where it is from one standing attribution put there, so the strength of the evidence survives; what is not distinguished is which *writer* produced the row, and the replacement does not need to know, because it replaces both together. A test falsifies it: narrowing the delete to `source = 'machine'` leaves the stale negative and fails.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b554fe0
 
 ## Q205 — diarization/12 — deviation
 
@@ -2425,7 +2425,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `claims` answers unanimity over a whole cluster, which is what assigning a cluster to a Speaker needs. Re-teaching a voice needs something else: the ranges that are actually this Speaker's. Gating on unanimity would drop a named Speaker's own usable ranges whenever the cluster around them came out mixed — one contested segment in thirty discarding the other twenty-nine, which is the opposite of what corrections are for. Its own doc already says a claim is "a fact about who owned some words, to be used by a path that re-embeds those words"; this is that path, and the words are in the transcript. Three sources are refused: cluster centroids, because a cluster vector is built before reconciliation and carries speech no segment covers (the same doc); the old model's saved sample cuts, per ADR-0037; and pseudonyms, forgotten Speakers and the Operator, the last because ADR-0029 as amended gives the Operator to the three channel rules alone. Revalidation is the whole plan re-read inside the transaction and compared, rather than field-by-field checks: embedding runs unlocked, and one comparison catches a correction, a deletion, a forgetting, a rename and a lost recording together — a narrower check is a list of the races somebody thought of. The reader is a parameter beside the model, which is what lets a test assert the exact stretches requested rather than infer them; it also sidesteps this build's symphonia having no WAV reader, so no fixture file is needed at all. Three mutations falsify: narrowing the delete, dropping the re-read, and recomputing only for Speakers that got ranges — the last being the former owner whose evidence disappeared.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** b554fe0
 
 ## Q206 — diarization/12 — deviation
 
@@ -2435,7 +2435,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Two defects in one branch, found by auditing the callers rather than the call site that exposed them. `delete_voiceprint` is the only thing in the codebase that sets `forgotten`, and that mark is what `relearnable` consults — so a Speaker that merely ran out of evidence was being recorded as one the Operator deliberately forgot, excluded from every future re-run, and shown in the Registry as deleted by them. It also removed *every* exemplar the Speaker had, from every Meeting, which was harmless only because it ran when there were none; under the new caller it would not have been. `clear_voiceprint` already existed for exactly this, documented for it, and was already used at one call site as a stale-space workaround. Separately, the all-negative arm did nothing, on the reasoning that there was nothing to recompute *from* — but there is something to recompute *away*: correcting a Speaker's last positive segment to somebody else left the old vector standing, still offered to every future match, with nothing behind it that agrees. A third state was rejected as a column for a distinction nothing reads. The fix is in the shared function, not the new caller: five call sites route through it and four are the existing pipeline, so the defect was never only the new path's. Three reseed tests falsify the forget, one falsifies the all-negative clear.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 04c9de6
 
 ## Q207 — diarization/12 — tradeoff
 
@@ -2445,7 +2445,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Each of the three was a way for a complete evidence set to be destroyed and the call to report success. An unenforced comment: almost every test called it in autocommit, so the rollback the atomicity rests on was never exercised — the old rollback test dropped a transaction that had already succeeded. A `zip` over `vectors` and `ranges`: an empty batch for a non-empty plan silently truncated, so the delete ran and nothing replaced it. And errors collapsed to absence: a reader that could not open the recording and a model that died were indistinguishable from "too short to embed", so `commit` deleted the old set and wrote a partial one. The length check runs before the delete rather than after, because the ordering is the guarantee. A runtime check was rejected: `&Transaction` is free, and it is the shape `finish_run` will pass anyway. Cost: every test now opens a real transaction, which is the point. Falsified by mutation — removing the length guard, and restoring `.ok().flatten()`, each fail exactly one test; the rollback test now installs a trigger that aborts the insert after the delete and proves the prior exemplars and the Voiceprint both survive.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 04c9de6
 
 ## Q208 — diarization/12 — deviation
 
@@ -2455,7 +2455,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `correct_attribution` records `replaced_speaker_id` from `transcript_segments.speaker_id` — the machine's column — not from the prior hint. With the machine saying Alice throughout, Alice → Bob → Alice ends with a hint whose replacement is Alice herself, which the `owner == replacement` rule then suppresses. So the fabricated helper's expectation of a fresh Bob negative was testing a writer that does not exist: production leaves Bob with nothing, because nothing in the record ever says the voice was his. The fabricated version would have passed against code that mishandles the real shape. Driving the writer also brings its `feed_correction` side effects into the test, which is the point — those are the stale rows the `(speaker_id, meeting_id)` scope of Q204 exists to sweep. Two further corrections came with it: `from_operator` now keys on a hint *existing* rather than on `replaced_speaker` being non-null, because attributing a previously unattributed segment is still the Operator's act, and `plan` reads owner and replacement once with `?` instead of repeated queries with `.ok()` swallowing an error.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 04c9de6
 
 ## Q209 — diarization/12 — deviation
 
@@ -2465,7 +2465,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Grepped every reader of `is_negative` outside tests. There are three, and none scores against a negative: `centroid` filters them out, `sample_source` filters them out, and `feed_correction` filters them out when choosing which exemplars to flip. `seeds` never sees a row at all — it reads the positive Voiceprint column. So the negative is inert as a repellent, and promising otherwise would have a reader believe a correction prevents a future match when what prevents it is the Speaker's vector being cleared. What the negative genuinely does is withhold the range from the centroid, and survive as the record of the correction so the next rebuild does not hand it back as a positive. Written that way instead. A sentence I had just added to `refresh_voiceprint` — that a later recomputation "will weigh it" — was the same overclaim and is gone: `centroid` excludes it unconditionally. The reader-injection seam is now documented for what it tests (range arithmetic and the sign of each range) and what it does not (decoding), since this build's symphonia carries no WAV reader and a synthesized fixture could not have covered that either.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 04c9de6
 
 ## Q210 — diarization/03 — gate-resolution
 
@@ -2475,7 +2475,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Applying the rule fixed in the plan before any number arrived: oracle floor improves ≥ 2 points at 1 s and the slide pays; under 1 point and the step stays. Measured 19.82% at 10 s against **19.32% at 1 s — 0.50 points**, so the rule says keep. Six AMI dev meetings spanning the observed oracle-floor range, WeSpeaker throughout, step the only variable, on the subset symlinked at `~/ami-dev6`. Validity first: a real pre-Step-A build (`9381f57^`, which has no step variable at all) scores the same six at DER 29.86% and oracle floor 19.88% against today's 10 s pass at 29.85% and 19.82% — per-meeting DER identical to the decimal, oracle floor within 0.06 pooled and 0.2 on three meetings from the 10 ms grid. So the reconstruction is the no-op at `step == window` it was landed as, and the comparison is against unmoved behaviour. This also retires my own earlier worry: the 0.2 offsets I first saw were against figures quoted in the plan (16.0/19.8/24.7/30.7), not against measured pre-change behaviour, which is 15.9/19.6/24.6/30.5. **The rule's metric did not capture the largest effect, and that is reported rather than used to move the rule.** End-to-end DER falls hard — 29.85% at 10 s, 24.30% at 2 s, 23.84% at 1 s — but almost entirely through confusion (15.65 → 8.63 → 8.69) while the oracle floor stays flat until 1 s. Confusion is clustering, not turn placement: overlapping windows yield several embeddings per voice per stretch, and the centroids improve. That is a real end-to-end gain and it is not the thing ticket 03 proposed to buy, so it does not satisfy a criterion written about placement, and retuning the criterion after seeing it is exactly what fixing it in advance was for. It costs 9.3× the segmentation inference (176.9s → 1643.8s for 3.0 hours of audio, 0.02× → 0.15× real time), which on an hour-long meeting is roughly 70 s of background work becoming 9 minutes. Two further findings. **2 s is the better operating point of the two slides if one is ever taken** — DER within 0.46 of 1 s, better cross-meeting EER (30.14% against 31.23%) and better nearest-voice-right (25.1% against 24.7%), at half the compute — which is what the plan's tie-break already said. And **the watch item fired**: same-window pairs merged anyway go 0.47% → 5.42% → 10.21% as windows overlap, so the cannot-link constraint built in `86655fe` and measured in Q142, currently off by default, becomes roughly twenty times more load-bearing under a slide than it is today. All of this is dev-only, one embedding, one merge threshold, six meetings; Q153 is the standing reason not to treat a dev figure as transferred.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 59a6f4f
 
 ## Q211 — diarization/03 — deviation
 
@@ -2485,7 +2485,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Two real defects, both found by review and both confirmed here. **`assemble` counted observations in its numerator and windows in its denominator.** Where one window holds two local tracks that clustering later maps to the same voice and their runs overlap, that one window voted twice: with three windows covering a cell and the other two silent, two-of-three carried it on a single window's opinion. Votes are now deduplicated per (channel, source window, canonical voice, cell) using `Observation.window`, which `observe` has recorded all along, with the observations sorted by window so the guard only has to remember the last one — a fixture in window order 0,1,0 falsifies dropping that sort. **`same_window_merges` and `cannot_link_of` inferred the source window geometrically**, from the first window containing an observation's first run. Under a slide several windows contain it and the earliest is returned, which is generally not the window that produced the vectors; `cannot_link_of` went further and asserted that windows tile, refusing the sliding case outright — for a reason that stopped being true when `window` and `local` were recorded. Both now group by the recorded window, validate that the window's channel matches the observation's, and pair only distinct local tracks. Overlap in audio does not make the source ambiguous. **The fixtures were part of the defect**: `observation()` stamped `window: cluster`, so the three repeated cluster-0 rows in the minority test all claimed window 0 and the tiled cannot-link fixture put two same-window tracks in different windows. Provenance is now named at every call site. Rescored over the same cached observations, same scorer, **merge threshold 0.6** (`MERGE_THRESHOLD`, sweep unset), WeSpeaker, no re-inference. **The tiled output is unchanged**: 10 s stays DER 29.85%, oracle 19.82%, same-window 4 of 858 — which is what a fix that only bites under overlap must do. DER and oracle move by at most 0.04 at the sliding steps: DER 24.33% at 2 s and 23.88% at 1 s, oracle 19.86% and 19.34%. So **the decision stands** — oracle floor improves 19.82% → 19.34%, **0.48 points** against a 2-point bar and under the 1-point floor, and `SEGMENT_STEP` stays `SEGMENT_WINDOW`. Three of Q210's claims are withdrawn. The same-window rate was badly wrong: **0.47% → 0.89% → 1.08%**, not 0.47% → 5.42% → 10.21%, and the pair denominators fall too (4503 → 4173, 10285 → 8419) because the geometric grouping invented pairs across windows. The constraint roughly doubles in load under a slide; "twenty times" was the broken diagnostic and is retracted. The ranking of 2 s over 1 s on cross-meeting EER and nearest-voice-right is withdrawn outright: those are the fragmentation-confounded metrics already set aside, and Q210 should not have resurrected them to order two configurations. And "the centroids improve" is a mechanism hypothesis, not something the DER decomposition measures; what is measured is that confusion falls, and why is untested.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 2ce10a7
 
 ## Q212 — diarization/03 — deviation
 
@@ -2495,7 +2495,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The plan's gate is per meeting, to within 0.1 point. IB4003 is 0.2 (15.1 → 14.9) and so are ES2011a, TS3004b and TS3004d on the plan's own figures; quoting the pooled 0.06 answered a different question, and calling that "the gate passed" moved a criterion to fit the result, which is the same error Q210 was written to avoid elsewhere. Measured rather than argued, and over the cached observations rather than another old-build inference: rebuilding with `GRID_MS = 1` and rescoring the same 10 s snapshots reproduces the pre-Step-A build **exactly** — DER 29.86%, oracle floor 19.88%, IB4003 oracle 15.1% — against 29.85%, 19.82% and 14.9% at the shipped 10 ms. So the vote and the union agree instant for instant where windows tile, and the whole difference is where turn edges land once they are quantized. The honest statement is therefore narrower than "no-op": **the reconstruction changes no decision at `step == window`, and it moves turn edges by up to half a cell, worth up to 0.2 points of oracle floor on one meeting and 0.06 pooled.** That is small, it has the sign rounding predicts (unbiased, and it happens to read slightly better here), and it is a cost of the grid rather than of the step — but it is not zero and should not have been described as zero. The step comparison remains valid because every column of it is scored on the same grid; what was invalid was the claim that the 10 s column is bit-identical to the pipeline before Step A.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 2ce10a7
 
 ## Q213 — diarization/03 — deviation
 
@@ -2506,7 +2506,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Rounding a turn's edges to the nearest 10 ms cell is not the end of the pipeline. `merge_adjacent` joins same-voice runs separated by less than `MERGE_GAP_MS` (400 ms), so moving edges changes the gaps that rule reads, and a gap that straddles the threshold flips. `[0, 1000)` and `[1404, 2000)` are 404 ms apart and stay two turns; rounded to the grid they are 400 ms apart and become one. So quantization can change *which turns exist*, not merely where a surviving edge sits, and "changes no decision" was a stronger claim than the evidence supports — it happened to hold on the 10 s pass measured, which is not the same as holding generally. Nothing else in Q212 changes: the gate as written was still not met, the difference is still real and small (0.06 pooled, 0.2 on IB4003), and `GRID_MS = 1` still reproduces the pre-Step-A build exactly, which pins the *cause* to quantization even though it does not license a universal no-op claim. No production change follows; the correction is to what we assert, not to what runs.
 **Outcome:** applied
 **Supersedes:** Q212 — only the "changes no decision at `step == window`" guarantee inside its justification; its question, choice and figures stand.
-**Ref:** (pending)
+**Ref:** f68a95e
 
 ## Q214 — diarization/03 — gate-resolution
 
@@ -2516,7 +2516,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Six AMI dev meetings, WeSpeaker, `GRID_MS = 10`, merge threshold **0.60 set explicitly**, rescored from the cached 10 s / 2 s / 1 s observations with no re-inference. Constrained against unconstrained at each step: DER **29.85% → 30.28%** at 10 s, **24.33% → 26.12%** at 2 s, **23.88% → 29.58%** at 1 s, with IB4003 at 1 s going 15.1% → 31.6%. The 10 s constrained control is what separates a general constraint effect from a step interaction, and it shows both: the constraint costs something even where windows tile (+0.43), and the cost grows with the slide (+1.79, +5.70). Oracle floor barely moves (19.82→19.73, 19.86→20.04, 19.34→19.36), as it must, since it is a property of the reference partition and the observations rather than of clustering — a useful check that the two arms differ only where intended. The constraint does exactly what it promises: violations go to **0 of 858, 0 of 4173, 0 of 8419**. **Its premise is what fails.** The premise is that two local tracks of one window are different people by construction. Counting the same-window pairs the reference calls *one* person — segmentation splitting a voice in two — gives **369 of 1227 (30.1%) at 10 s, 1913 of 6086 (31.4%) at 2 s, 3770 of 12189 (30.9%) at 1 s**. About a third of what the constraint forbids ought to happen. At 1 s it prevents 91 wrong merges by forbidding 3770 right ones, 41 to 1 against, and the extra confusion is where the DER goes. That ratio, not the violation rate, is the number to decide on, which is why the counter now prints beside it. **Limits, explicitly.** This measures how the constraint interacts with the step. It does not show that better centroids caused the slide's gain, and it does not separate "more observations" from "temporal voting" as the reason confusion falls under a slide; both remain untested. The all-pairs EER and nearest-voice figures in these transcripts are fragmentation-confounded and were not used — the harness now says so in its own output. Evidence: `.scratch/diarization-independent/{step-sweep,cannot-link}-{10000,2000,1000}.txt`, six cells from three cached snapshot sets. `EVERTRANSCRIPT_CANNOT_LINK` stays a harness switch; nothing in production changes.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** f68a95e
 
 ## Q215 — diarization/12 — tradeoff
 
@@ -2526,7 +2526,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `reseed::plan` reads `transcript_segments.speaker_id` with the newest correction on top — the attribution the *previous* model left. The run overwrites that column, and after 05's wipe it overwrites it with fresh pseudonyms, there being no Voiceprints left to resolve against. So seeding after the run would find a named owner only where a correction happened to survive, and `commit` would refuse the rest as `Refused::Moved` — the run having moved the very record the revalidation compares against. Every bulk Meeting would be refused, and the failure would look like a race rather than an ordering error. Run first, seeding relearns the named voices from what the Operator already said, and the run that follows has real Voiceprints to match its new clusters to; that is the mechanism by which a name survives a model change at all. The call therefore sits between the slot claim and the stale-exemplar read — before that read too, since seeding replaces this Meeting's exemplars and a list read earlier would hand the rebuild rows it has just superseded. **This contradicts the module's own doc on `commit`**, which said its eventual place was inside `finish_run`'s writer closure; that closure belongs to the run, and seeding cannot both precede the run and commit inside it. The doc's stated reason for taking a `Transaction` — that the delete, the inserts and the recomputation are one change — is satisfied by any transaction, and still is. **The cost, stated rather than hidden:** a Core killed between the seeding commit and the attribution commit leaves the Meeting walked but not re-seeded, and the Speaker loses that Meeting's contribution. That is the same outcome as a `Moved` refusal, which the design already tolerates, but reached by a crash rather than by a decision; it is recorded on the ticket as the one gap, and closing it is a contained follow-up rather than a reason to take the ordering that does not work. **Inertness is structural, not a flag.** The gate is `rerun::is_bulk_work` — `installed()` and a row in `diarize_rerun_backlog` — extracted from the copy `give_up` was already computing inline so the two cannot drift, and false on every History in the field because the tables are not in `MIGRATIONS`. `a_history_in_the_field_is_never_reseeded` offers it a Meeting with Kept Audio and a named Speaker with evidence in it, asserts nothing ran, and points at an empty models directory so that getting past the gate would fail loudly rather than quietly; removing the gate fails it. Nothing is activated: no startup trigger, no registered migration, no model chosen — the model identity is read from the existing constants, and the embedder is loaded only when there is a range to embed.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 948382b
 
 ## Q216 — diarization/03 — deviation
 
@@ -2537,7 +2537,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** **3770 is not 3770 lost merges.** It counts same-window pairs of distinct local tracks whose *dominant reference label* is the same, whether or not the unconstrained run merged them — most were never a merge the constraint had to prevent. 91 counts pairs the unconstrained run did merge. They are not two sides of one decision, so dividing them compares different things; pairs are not independent decisions either, since merging is transitive over a cluster, and a dominant label is a majority over a span that may itself be mixed. The counts stand as descriptions of what segmentation and the reference say; the 41:1 reading and "prevents 91 by forbidding 3770" do not, and neither does attributing the DER rise to that trade — the decomposition shows confusion rose, not why. **The verdict was too wide.** Six meetings at a fixed merge threshold of 0.60 reject *enabling this constraint at these settings*; they do not establish "do not build it", and they do not override the earlier dev-tuned 0.10 and held-out constrained results, which were a different configuration. Q214's own framing of the threshold as fixed is what makes the narrower claim the only available one. Model and configuration adoption remain the user's. **Two more descriptions were wrong.** "Pairs heard talking at once" describes distinct local tracks from one source window, which is what segmentation emitted and not a claim about simultaneous speech. And the oracle floor here is scored from turns reconstructed *after* clustering, so clustering can move it through the vote; Q214's "as it must" asserted an invariance that does not hold, and the small measured differences (19.82→19.73, 19.86→20.04, 19.34→19.36) are what should have been reported without it. The oracle recognition block is a whole-meeting ceiling, not the product's recognition answer. No new measurement: every number here is from the same six cells.
 **Outcome:** applied
 **Supersedes:** Q214 — its ratio, causal explanation, "do not build it" verdict and invariance claim; the measured DER, oracle and violation counts stand.
-**Ref:** (pending)
+**Ref:** 84b6f31
 
 ## Q217 — diarization/12 — deviation
 
@@ -2548,7 +2548,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** `LiveDiarizer`/`run_guarded` produce a `Diarization` and write nothing; `reconcile::reconcile` is a pure mapping; `meetings::segments` is a read. The only thing that overwrites `transcript_segments.speaker_id` is `reconcile::apply`, which runs near the **end** of `finish_run`'s transaction. So the attribution `reseed::plan` reads is still intact for most of that transaction, and `reseed::commit` can revalidate against it there. Q215's "forced choice between an early commit and perpetual `Moved`" was drawn from the wrong boundary — it read "the run" as everything up to the commit, when the overwrite is one of the last statements in it. Matching also happens in that transaction, so `persist` sees the freshly rebuilt seeds without anything being committed early. The separate transaction and the crash window it created are therefore not a tradeoff that had to be taken, and are withdrawn rather than defended. **Moving the commit is not sufficient on its own.** `persist_with` deletes this Meeting's machine exemplars for every Speaker it resolves and installs the whole cluster's centroid — which `live::assemble` builds over every grouped observation, so it carries audio no transcript segment covers. Left alone it erases the bounded evidence re-seeding just wrote and files unvouched audio under a trusted name. The smallest extension that holds is `cluster::Rebuilt`, carrying the claimed clusters and the re-seeded Speakers: a claimed cluster is **assigned and never enrolled**, a re-seeded Speaker keeps its bounded rows and gets no centroid, and an empty `Rebuilt` — every run today — leaves the lifecycle exactly as it was. Ranges are still rebuilt from the segments rather than from claims, so a named Speaker's own audio survives a cluster that came out mixed. **A refusal is no longer a walk.** `Refused::Moved` and a failed embedding return `DiarizeOutcome::Owed`: the transaction is dropped, nothing is written, and the queue row stays. Not `Skipped`, which would count an unrecovered Meeting as walked; not `Paused`, which would report a recording nobody is having. The worker gives it one further pass — a `Moved` is answered by a fresh plan and the correction behind it has landed by then — and treats it as unprocessable after that, which is the existing semantics for work that cannot be done. Membership is re-checked on the writer, so a bulk stop landing during inference cannot have evidence written for a walk nobody is counting.
 **Outcome:** applied
 **Supersedes:** Q215 — its ordering argument, its separate transaction and the crash window it accepted; the bounded-evidence and structural-gate reasoning stand.
-**Ref:** (pending)
+**Ref:** 84b6f31
 
 ## Q218 — diarization/12 — deviation
 
@@ -2559,7 +2559,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** **A count of failed passes is not evidence of unprocessable work.** Two `Moved` refusals are most likely two Operator corrections landing while the model ran, and discarding a Meeting's contribution for having been corrected twice is the opposite of what the backlog exists to do. What Q217 called "one further pass" was a budget, not a bound; the bound that was actually wanted is a rate, and the loop already had one for `Paused`. The way out of genuinely stuck work is the explicit stop the Operator already has. **The wrapper was losing the same work by another route.** `finish_run` returning `Err` — a transaction that failed at the very end, having rolled back the attribution, the re-seeded evidence and the queue removal together — was converted to `Skipped` and the row deleted a few lines later, so a clean rollback became silent data loss on the path with the least information about what went wrong. Asserting that the direct helper had not yet removed the row said nothing about this, which is why the check now runs the real classifier. **Head-of-line blocking is the cost, and it has to be paid explicitly.** Keeping unexpected failures queued means anything that truly cannot be processed must say so itself or it stalls the backlog behind it for ever; the missing-Meeting bail was exactly such a case and is now an explicit skip, alongside no audio, no models and audio gone. `Refused::Gone` is the same class — no later pass grows a recording back — and calling it a changed plan would retry for ever against a permanent refusal. **Also corrects Q217's "one further pass" promise**, which is withdrawn with the budget it described.
 **Outcome:** applied
 **Supersedes:** Q217 — only its retry bound; the ordering, bounded-evidence and `Rebuilt` reasoning stand.
-**Ref:** (pending)
+**Ref:** 188181b
 
 ## Q219 — diarization/12 — deviation
 
@@ -2569,7 +2569,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** **Overriding after the fact let a claim steal a seed.** `resolve_with`'s mutual-best asks each seed which cluster it likes best, and a claimed cluster left in that comparison can answer for a seed it will never be given: a cluster the record already calls Alice whose centroid is an exact match for Bob's seed made an otherwise clean Bob fragment fail mutual-best and come back `New`, after which the claimed cluster was reassigned to Alice regardless. Nobody was recognized as Bob and nothing in the answer said why. Pinned by `a_claimed_cluster_does_not_take_another_speakers_seed` with Bob's fragment at 0.900 against his own seed and 0.436 against Alice's — clear of floor and margin, so only the claim can break it. **The override also sat behind `embeddings.get`,** so a claim was dropped whenever its cluster had no embedding — which `live::assemble` omits when a centroid is unavailable while still keeping the turns. A claim assigns words; it neither needs a vector nor licenses one. **The legacy rebuild is the wrong evidence for a re-run.** `runner::rebuild` re-cuts a window around each stale exemplar's saved offsets — the previous model's guess at where a voice was — which is precisely what a re-run is throwing away. Running it beside the bounded plan would embed the same Speakers twice from two notions of where they spoke, with the legacy one adopting first. `Reseed::Gone` is defensive against the race where the recording is deleted between `get_meeting` and `plan`; the same hazard at the commit end is reachable and covered.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 188181b
 
 ## Q220 — diarization/03 — deviation
 
@@ -2580,7 +2580,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** `same_window_merges` counts a forbidden rejoin from the pair map and the reference labels alone — it never asks the unconstrained clustering whether that pair came out merged. "Most were never a merge the constraint had to prevent" is a plausible reading of why the ratio is invalid, but it is a quantitative claim the counter does not support, and putting it in the reason a ratio was withdrawn repeats the error being corrected. The invalidity stands on what *was* measured: the two counts have different denominators and different questions behind them. No new measurement; the same six cells, read for what they say.
 **Outcome:** applied
 **Supersedes:** Q216 — only its "most were never a merge" clause; every other correction it records stands.
-**Ref:** (pending)
+**Ref:** 188181b
 
 ## Q221 — diarization/12 — gate-resolution
 
@@ -2590,7 +2590,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** **This is the one function of the module a Core calls on every start**, including every installation in the field, where the tables are not in `MIGRATIONS`. The rest of `store::rerun` is allowed to fail there because nothing reaches it without a backlog already existing; this is reached unconditionally, so the gate belongs beside `is_bulk_work`'s rather than in a caller that has to remember it. Pinned by `asking_at_startup_whether_the_model_changed_is_safe_without_the_tables`, which asserts the *answer* — a caller that swallows an `Err` into a startup warning cannot tell the two apart, so "nothing was enqueued" would have passed either way. Nothing is recorded on a bare History either: there is nowhere to keep it, and inventing a row is the half-installed state `installed` exists to refuse. **Awaited rather than spawned**, unlike the catch-up beside it: on every History today it is one `sqlite_master` lookup, and where it does enqueue, its oldest-first order has to be in the queue before the catch-up adds what a previous Core left. Neither starts a model. **Still inert**: the trigger exists and is unreachable, `PENDING_MODEL_CHANGE_RERUN` and `PENDING_MODEL_CHANGE_WIPE` stay out of `MIGRATIONS`, and the schema tests that assert their absence are untouched. Registration and any real wipe remain the user's.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 8c744d5
 
 ## Q222 — diarization/12 — gate-resolution
 
@@ -2600,7 +2600,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Both acceptance criteria are about the queue and the re-run's arithmetic, and both live in the record — no model is involved in either. A walk is `finish_run`, the same completion path a real pass reaches, so the queue row still leaves inside the attribution transaction. **Resume** builds the same backlog twice, walks one Meeting and drops the Core in the second, restarts on the same History, runs the real trigger, and asserts the remaining queue, the re-run block and the evidence counts all equal the uninterrupted run's; a trigger that compared anything but the stored identity re-enqueues the walked Meeting, which the mutation confirms fails it. **Cancel** walks one of three, stops the backlog, and asserts `(3, 1, 0, 2, true)` through `diarize_status` — the Client's own view — then restarts and asserts the stop is not resurrected. `done` is the number that can lie, since cancelled Meetings also leave the queue; dropping the `abandoned` subtraction fails that test. What this does **not** establish is that a real model's vectors recognize the same people after a re-run, which is measurement and still waits on the model decision.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 8c744d5
 
 ## Q223 — diarization/05 — tradeoff
 
@@ -2610,7 +2610,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** I judged the work marginal and said so; the advisor loop selected it anyway, and I did it in full. No person chose — per the advisor the direction began as Claude Code's own ghost-text prompt suggestion, which the advisor agent accepted and submitted as its skill tells it to — so this is `agent`, which this journal distinguishes from a decision a person made. The reasoning I gave still describes the cost and the benefit honestly. **Cost:** a 236-line diff over `schema.rs` for a hazard that registration alone could not trigger, since appending never moves a prefix. **Benefit:** each test now says which upgrade it stands in front of rather than which position, so a migration inserted anywhere but the end leaves them testing what they were written to test. That was demonstrated rather than asserted — inserting a migration at position 0 left all three upgrade-path tests passing and unchanged, where a bare `MIGRATIONS[..9]` would have applied a different set while still reading as a prune test. `every_migration_is_distinct_so_naming_one_is_unambiguous` guards the assumption `before` rests on and pins the order, so a deliberate reordering has to be looked at by a person rather than absorbed silently. **Every one of the fourteen SQL bodies is byte-identical to before**, verified by extracting both and comparing; only the wrapper around each changed, so no History sees a different migration. Ticket 05's open criterion is now met ahead of the registration it was deferred to. Registration itself is untouched: `PENDING_MODEL_CHANGE_WIPE` and `PENDING_MODEL_CHANGE_RERUN` stay out of `MIGRATIONS` and both tests asserting that still pass.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** bca0d69
 
 ## Q224 — diarization/12 — deviation
 
@@ -2621,7 +2621,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** **The two corrections.** There is no `run` in that module; `grep` puts the only call to `rerun_if_the_model_changed` at `lib.rs:89`, and the module's public entry points are `start_daemon` and `run_daemon`. I wrote a plausible name rather than the one in the file. And `Decided-by: human` claimed an authority nobody exercised: the direction arrived as a turn in the advisor loop, which per the advisor began as an accepted ghost-text prompt suggestion. Either way no person chose, and this journal keeps `human` for decisions a person made even when an agent surfaced the options. **The method.** `AGENTS.md`'s `log-decisions` makes this file append-only and sanctions in-place change only for renumbering, so I first appended a superseding entry and said I would edit instead if that was wanted. It was, and this is that edit. The rule's purpose — that a reader can see what the record used to say — is served by this entry rather than by the untouched text, which is why it is rewritten to describe the corrections rather than deleted along with them. The engineering content of Q221 and Q223 is unchanged and still accurate. No code changed by any of this.
 **Outcome:** applied
 **Supersedes:** Q221 and Q223 — as a record of what was corrected in them; the entries themselves now read correctly.
-**Ref:** (pending)
+**Ref:** 555b650
 
 ## Q225 — interactive/land-the-rework-branch — deviation
 
