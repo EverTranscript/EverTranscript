@@ -739,7 +739,10 @@ pub struct Rebuilt {
     /// [`claims`]. **Assignment only.** The cluster is attributed to that
     /// Speaker without being resolved and without its centroid being
     /// enrolled: unanimity among a cluster's segments says who those
-    /// segments belong to, never that the rest of the vector is theirs.
+    /// segments belong to, never that the rest of the vector is theirs. It
+    /// leaves [`resolve_with`] entirely rather than being overridden after
+    /// it, so it cannot take a seed from a cluster that had to earn one, and
+    /// it is honoured whether or not the cluster has an embedding at all.
     pub claimed: BTreeMap<Cluster, String>,
     /// Speakers whose evidence for this Meeting was rebuilt from bounded
     /// ranges in this same transaction. Their exemplars here are left where
@@ -818,22 +821,39 @@ pub fn persist_with(
     if let Some(withheld) = withheld {
         known.retain(|seed| seed.speaker_id != withheld);
     }
-    let resolved = resolve_with(embeddings, &known, floor, margin);
-    let mut assigned = BTreeMap::new();
+    // A claim is the Operator's standing word about whose segments these are,
+    // and it is settled **before** the resolve rather than layered over it.
+    //
+    // Two things go wrong when a claim is an override applied afterwards.
+    // The claimed cluster is still scored, so it can be the argmax for
+    // somebody else's seed and take mutual-best away from the cluster that
+    // seed belongs to — an unclaimed Bob fragment is refused because the
+    // cluster the record already calls Alice looks more like Bob, and is then
+    // reassigned to Alice anyway. Nobody is recognized as Bob and nothing
+    // says why. And the override sits behind `embeddings.get`, so a claim is
+    // lost whenever its cluster has no embedding entry — which `assemble`
+    // leaves out when a centroid is unavailable, while still keeping the
+    // turns. A claim assigns words. It neither needs a vector nor licenses
+    // one, so it is applied from `heard` alone and its cluster leaves the
+    // matching entirely.
+    let mut assigned: BTreeMap<Cluster, String> = rebuilt
+        .claimed
+        .iter()
+        .filter(|(cluster, _)| heard.contains(cluster))
+        .map(|(cluster, speaker_id)| (*cluster, speaker_id.clone()))
+        .collect();
+    let unclaimed: BTreeMap<Cluster, Embedding> = embeddings
+        .iter()
+        .filter(|(cluster, _)| !rebuilt.claimed.contains_key(*cluster))
+        .map(|(cluster, embedding)| (*cluster, embedding.clone()))
+        .collect();
+    let resolved = resolve_with(&unclaimed, &known, floor, margin);
 
     for (cluster, outcome) in resolved {
         let Some(embedding) = embeddings.get(&cluster) else {
             continue;
         };
         if !heard.contains(&cluster) {
-            continue;
-        }
-        // A claim is the Operator's standing word about whose segments these
-        // are, so it settles the attribution outright and the resolve does
-        // not get a say. It settles nothing about the vector, which is why
-        // this `continue`s before a single exemplar is written.
-        if let Some(claimed) = rebuilt.claimed.get(&cluster) {
-            assigned.insert(cluster, claimed.clone());
             continue;
         }
         let speaker_id = match outcome {
@@ -1428,6 +1448,155 @@ mod tests {
         let mut connection = rusqlite::Connection::open_in_memory().expect("open");
         crate::store::schema::migrate(&mut connection).expect("migrate");
         connection
+    }
+
+    /// A claim must not cost somebody else their own voice.
+    ///
+    /// The mutual-best rule is what stops one distinctive voice being handed
+    /// to several clusters at once, and it asks each seed which cluster it
+    /// likes best. A claimed cluster left in that comparison answers for a
+    /// seed it is never going to be given: here the cluster the record
+    /// already calls Alice is an exact match for Bob's seed, so Bob's own
+    /// fragment loses mutual-best to it, comes back `New`, and the claimed
+    /// cluster is then assigned to Alice anyway. Bob is unrecognized, and
+    /// nothing in the answer says a claim did it.
+    ///
+    /// The numbers are chosen so that Bob's fragment passes on its own —
+    /// 0.900 against his seed, 0.436 against Alice's, well clear of both
+    /// floor and margin — and fails only through the claimed cluster.
+    #[test]
+    fn a_claimed_cluster_does_not_take_another_speakers_seed() {
+        use crate::store::meetings;
+        let connection = db();
+
+        // Monday teaches both voices.
+        let monday = meetings::start(&connection, Some("Monday"), None).expect("m1");
+        let first = clusters(&[(0, &[0.0, 1.0]), (1, &[1.0, 0.0])]);
+        let taught = persist(
+            &connection,
+            &monday.id,
+            &first,
+            &heard(&first),
+            None,
+            &Rebuilt::default(),
+        )
+        .expect("persist");
+        let (alice, bob) = (taught[&Cluster(0)].clone(), taught[&Cluster(1)].clone());
+        assert_ne!(alice, bob);
+
+        // Friday: the record already says cluster 0 is Alice, and that
+        // cluster's whole centroid happens to be exactly Bob's seed.
+        let friday = meetings::start(&connection, Some("Friday"), None).expect("m2");
+        let second = clusters(&[(0, &[1.0, 0.0]), (1, &[0.9, 0.435_889_9])]);
+        let rebuilt = Rebuilt {
+            claimed: [(Cluster(0), alice.clone())].into_iter().collect(),
+            reseeded: BTreeSet::new(),
+        };
+        let map = persist(
+            &connection,
+            &friday.id,
+            &second,
+            &heard(&second),
+            None,
+            &rebuilt,
+        )
+        .expect("persist");
+
+        assert_eq!(
+            map.get(&Cluster(1)),
+            Some(&bob),
+            "Bob is still recognized: the claimed cluster was never his rival"
+        );
+        assert_eq!(
+            map.get(&Cluster(0)),
+            Some(&alice),
+            "and the claim is honoured"
+        );
+        assert_eq!(
+            crate::store::speakers::list(&connection)
+                .expect("list")
+                .len(),
+            2,
+            "with no third Speaker invented for a fragment that had an owner"
+        );
+    }
+
+    /// A claim assigns words, so it does not need a vector to be honoured.
+    ///
+    /// `live::assemble` can keep a cluster's turns and still leave it out of
+    /// `embeddings` when no centroid is available for it. Reading the claim
+    /// out of the resolve's answer lost exactly those: the cluster owned
+    /// words, the record named their owner, and the attribution was dropped
+    /// because there was no vector to score.
+    #[test]
+    fn a_claim_is_honoured_for_a_cluster_with_no_embedding() {
+        use crate::store::meetings;
+        let connection = db();
+        let meeting = meetings::start(&connection, Some("Monday"), None).expect("m1");
+        let speaker = crate::store::speakers::create(&connection, false).expect("speaker");
+
+        let embeddings = clusters(&[(0, &[1.0, 0.0])]);
+        let mut owns_words = heard(&embeddings);
+        owns_words.insert(Cluster(1));
+        let rebuilt = Rebuilt {
+            claimed: [(Cluster(1), speaker.id.clone())].into_iter().collect(),
+            reseeded: BTreeSet::new(),
+        };
+
+        let map = persist(
+            &connection,
+            &meeting.id,
+            &embeddings,
+            &owns_words,
+            None,
+            &rebuilt,
+        )
+        .expect("persist");
+
+        assert_eq!(
+            map.get(&Cluster(1)),
+            Some(&speaker.id),
+            "the words are attributed even with no centroid to score"
+        );
+        assert!(
+            crate::store::speakers::exemplars(&connection, &speaker.id)
+                .expect("exemplars")
+                .is_empty(),
+            "and nothing was enrolled for a claim that carried no vector"
+        );
+    }
+
+    /// The claim is assignment, never enrollment — restated at the boundary
+    /// the previous test cannot reach, where the cluster *does* have a
+    /// centroid.
+    #[test]
+    fn a_claimed_clusters_centroid_is_never_enrolled() {
+        use crate::store::meetings;
+        let connection = db();
+        let meeting = meetings::start(&connection, Some("Monday"), None).expect("m1");
+        let speaker = crate::store::speakers::create(&connection, false).expect("speaker");
+
+        let embeddings = clusters(&[(0, &[1.0, 0.0])]);
+        let rebuilt = Rebuilt {
+            claimed: [(Cluster(0), speaker.id.clone())].into_iter().collect(),
+            reseeded: BTreeSet::new(),
+        };
+        persist(
+            &connection,
+            &meeting.id,
+            &embeddings,
+            &heard(&embeddings),
+            None,
+            &rebuilt,
+        )
+        .expect("persist");
+
+        assert!(
+            crate::store::speakers::exemplars(&connection, &speaker.id)
+                .expect("exemplars")
+                .is_empty(),
+            "the whole-cluster centroid is not evidence the Operator vouched for"
+        );
     }
 
     #[test]

@@ -203,6 +203,32 @@ struct Ran {
 }
 
 /// One Meeting's re-seeding, computed outside any transaction.
+/// What a Meeting owes the bulk re-run, decided before anything is embedded.
+///
+/// Three answers, not two. `Option<Plan>` collapsed the last two, and the
+/// collapse was the bug: a bulk Meeting whose kept audio is gone came back
+/// `None` and was then run as an ordinary one, legacy rebuild and all —
+/// silently walking a Meeting the backlog exists to relearn.
+enum Reseed {
+    /// Not bulk work. The ordinary lifecycle, stale rebuild included.
+    Ordinary,
+    /// Bulk work with ranges to cut. The plan is the source of enrollment.
+    Planned(crate::diarize::reseed::Plan),
+    /// Bulk work whose kept audio is gone, so there is nothing to plan from
+    /// and nothing a later pass could do differently (ADR-0035: the
+    /// attributions it has stand). Genuinely unprocessable, and skipped as
+    /// such — never quietly demoted to an ordinary run.
+    ///
+    /// Defensive, and deliberately so: `plan` answers `None` only for a
+    /// Meeting with no `audio_path`, which `diarize_meeting` has already
+    /// refused above by the time this is read. What is left is the race —
+    /// the recording deleted between those two reads — and the same hazard
+    /// at the other end, where `reseed::commit` answers `Refused::Gone`, is
+    /// reachable and covered by
+    /// `audio_that_went_during_the_run_leaves_the_line_rather_than_staying_owed`.
+    Gone,
+}
+
 struct Prepared {
     plan: crate::diarize::reseed::Plan,
     /// Parallel to `plan.ranges`.
@@ -235,10 +261,20 @@ pub enum DiarizeOutcome {
     /// anything. `diarize/cancel` takes the queue row out itself, so this
     /// answer leaves the row alone rather than deleting what is already gone.
     Cancelled,
-    /// A bulk re-run could not relearn this Meeting's voices — the evidence
-    /// would not embed, or the record moved under it while the model ran —
-    /// and the transaction was dropped rather than committed. **Nothing was
-    /// written, and the Meeting is still owed**, so the row stays.
+    /// This pass wrote nothing and the next one can do better: a bulk re-run
+    /// whose evidence would not embed, a record that moved under the model, or
+    /// a failure nothing here understands. The transaction was dropped rather
+    /// than committed, so **nothing was written and the Meeting is still
+    /// owed** — the row stays.
+    ///
+    /// **Owed work stays owed.** There is no attempt budget, because a count
+    /// of failed passes is not evidence that a Meeting is unprocessable: two
+    /// `Moved` refusals are most likely two Operator corrections landing while
+    /// the model ran, and discarding the Meeting's voices for being corrected
+    /// twice is the opposite of what the backlog is for. What bounds it is a
+    /// rate, not a budget — the worker waits on the same wake-or-thirty-
+    /// seconds as a pause before coming back to it — and what ends it is the
+    /// explicit stop the Operator already has.
     ///
     /// Apart from `Skipped` because the next pass can succeed where this one
     /// did not, and apart from `Paused` because nobody is recording: reported
@@ -246,9 +282,6 @@ pub enum DiarizeOutcome {
     /// that is not happening.
     Owed,
 }
-
-/// Passes a Meeting still owed gets before it is given up on.
-const RESEED_ATTEMPTS: u8 = 2;
 
 /// What the attribution transaction did.
 ///
@@ -260,6 +293,12 @@ enum Committed {
     Wrote(usize),
     Stopped,
     Owed,
+    /// The re-seeding found nothing to plan from — the Meeting's kept audio
+    /// is gone. Distinct from `Owed` because no later pass can grow the audio
+    /// back, and calling it a changed plan would leave the Meeting in the
+    /// queue being retried for ever against a `Refused::Gone` that is now
+    /// permanent.
+    Unprocessable,
 }
 
 /// Whether background Diarization has to stand down right now.
@@ -284,6 +323,35 @@ fn yields_to_recording(priority: crate::store::diarize_queue::Priority, recordin
 /// books settled in the same transaction.
 fn leaves_the_line_afterwards(outcome: DiarizeOutcome) -> bool {
     matches!(outcome, DiarizeOutcome::Skipped)
+}
+
+/// What the queue makes of a run that returned an error rather than an answer.
+///
+/// **Owed, not skipped.** This used to be `Skipped`, on the reasoning that
+/// nothing had reached a transaction so nothing had taken the row out and the
+/// row had to come out or the loop would spin on it. The first half is right
+/// and the second is what a rate does, not what deleting the work does — and
+/// the deletion is silent data loss on exactly the path with the least
+/// information about what went wrong. A transaction that fails at the very
+/// end of `finish_run` arrives here, having rolled back the attribution, the
+/// re-seeded evidence and the queue removal together; answering `Skipped`
+/// would then throw the Meeting away for a failure that rolled back cleanly
+/// and might not recur. A Meeting that genuinely cannot be processed says so
+/// as an explicit `Skipped` — no audio, no models, audio gone — and those
+/// paths are untouched.
+///
+/// Separate from the loop so the classification can be asserted without
+/// running a worker.
+fn outcome_of(meeting_id: &str, result: Result<DiarizeOutcome>) -> DiarizeOutcome {
+    match result {
+        Ok(outcome) => outcome,
+        // Never fatal, and never the Meeting's problem: the record stands
+        // whether or not anyone could be identified in it.
+        Err(error) => {
+            tracing::warn!(meeting = %meeting_id, %error, "Diarization did not complete; the Meeting stays owed");
+            DiarizeOutcome::Owed
+        }
+    }
 }
 
 /// Stops a run because a Meeting is recording, and records *that* as the
@@ -1641,7 +1709,14 @@ impl Core {
         }
 
         let Some(meeting) = self.get_meeting(meeting_id).await?.map(|(m, _)| m) else {
-            anyhow::bail!("no Meeting with id {meeting_id}");
+            // Explicitly unprocessable, not an error. An `Err` here would
+            // leave the row in the queue now that unexpected failures keep
+            // their work, and a row whose Meeting is gone can never succeed —
+            // so it would sit at the head for ever with the backlog behind it
+            // never reached. The same class as a Meeting with no audio: there
+            // is nothing to listen to and nothing a later pass would find.
+            tracing::info!(meeting = %meeting_id, "queued for a Meeting that is not there");
+            return Ok(DiarizeOutcome::Skipped);
         };
         let Some(audio_path) = meeting.audio_path.clone() else {
             // A Meeting whose audio was never written, or was deleted. Not
@@ -1684,31 +1759,57 @@ impl Core {
         // writer trusts is the one `reseed::commit` re-reads inside the
         // transaction, against which this one is only a proposal.
         let wanted = meeting_id.to_string();
-        let plan = self
+        let reseed = self
             .store
             .read(move |connection| {
                 if !crate::store::rerun::is_bulk_work(connection, &wanted)? {
-                    return Ok(None);
+                    return Ok(Reseed::Ordinary);
                 }
-                diarize::reseed::plan(connection, &wanted)
+                Ok(match diarize::reseed::plan(connection, &wanted)? {
+                    Some(plan) => Reseed::Planned(plan),
+                    None => Reseed::Gone,
+                })
             })
             .await?;
+        if matches!(reseed, Reseed::Gone) {
+            tracing::info!(
+                meeting = %meeting_id,
+                "the re-run has no kept audio to relearn this Meeting from"
+            );
+            return Ok(DiarizeOutcome::Skipped);
+        }
+        let bulk = matches!(reseed, Reseed::Planned(_));
+        let plan = match reseed {
+            Reseed::Planned(plan) => Some(plan),
+            Reseed::Ordinary | Reseed::Gone => None,
+        };
 
         // Evidence from a previous model or front end, to be rebuilt from
         // its kept audio before this run reads seeds — otherwise every
         // Speaker History knows would be a stranger to it (ADR-0035,
         // DECISIONS Q115). Read here, re-embedded beside the Meeting below,
         // adopted in the same transaction as this run's own evidence.
-        let stale = self
-            .store
-            .read(|connection| {
-                crate::store::speakers::stale_exemplars(
-                    connection,
-                    diarize::live::EMBEDDING_MODEL,
-                    diarize::live::EMBEDDING_MODEL_VERSION,
-                )
-            })
-            .await?;
+        //
+        // **Not on the bulk path.** That rebuild re-cuts a window around each
+        // stale exemplar's *saved offsets* — the previous model's guess at
+        // where a voice was — and a re-run is precisely the case where that
+        // guess is being thrown away. The bounded plan reads the ranges the
+        // record attributes instead, so running both would embed the same
+        // Speakers twice from two different notions of where they spoke and
+        // let the legacy one adopt first.
+        let stale = if bulk {
+            Vec::new()
+        } else {
+            self.store
+                .read(|connection| {
+                    crate::store::speakers::stale_exemplars(
+                        connection,
+                        diarize::live::EMBEDDING_MODEL,
+                        diarize::live::EMBEDDING_MODEL_VERSION,
+                    )
+                })
+                .await?
+        };
         let history_dir = self.history_dir.clone();
 
         let cancel = diarize::Cancel::new();
@@ -2068,6 +2169,12 @@ impl Core {
                             // without them. Nothing is committed, so the
                             // attribution this run computed goes too: it
                             // would otherwise be the half that landed.
+                            Err(diarize::reseed::Refused::Gone) => {
+                                tracing::info!(
+                                    "this Meeting's kept audio went while it was being relearned"
+                                );
+                                return Ok(Committed::Unprocessable);
+                            }
                             Err(refused) => {
                                 tracing::info!(
                                     ?refused,
@@ -2161,6 +2268,9 @@ impl Core {
             // The transaction was dropped rather than committed, so this run
             // wrote nothing at all and the Meeting is owed a fresh pass.
             Committed::Owed => return Ok(DiarizeOutcome::Owed),
+            // Also nothing written, but nothing a later pass would find
+            // either. Out of the line, attributions intact.
+            Committed::Unprocessable => return Ok(DiarizeOutcome::Skipped),
         };
 
         self.mirror_wake.notify_one();
@@ -2265,11 +2375,6 @@ impl Core {
         self: std::sync::Arc<Self>,
         shutdown: tokio_util::sync::CancellationToken,
     ) {
-        // How many passes a Meeting still owed gets before it is treated as
-        // unprocessable. Local to the worker because the worker is the only
-        // thing that loops: a direct request gets the answer and decides for
-        // itself.
-        let mut owed: std::collections::BTreeMap<String, u8> = std::collections::BTreeMap::new();
         loop {
             let next = self
                 .store
@@ -2296,19 +2401,10 @@ impl Core {
                 break;
             }
 
-            let outcome = match self.diarize_meeting(&meeting_id, priority).await {
-                Ok(outcome) => outcome,
-                // Never fatal, and never the Meeting's problem: the record
-                // stands whether or not anyone could be identified in it.
-                // `Skipped`, because nothing reached a transaction and so
-                // nothing has taken the row out — and it has to come out, or
-                // this loop reads the same head, fails the same way and never
-                // reaches the work behind it.
-                Err(error) => {
-                    tracing::warn!(meeting = %meeting_id, %error, "Diarization did not complete");
-                    DiarizeOutcome::Skipped
-                }
-            };
+            let outcome = outcome_of(
+                &meeting_id,
+                self.diarize_meeting(&meeting_id, priority).await,
+            );
 
             match outcome {
                 DiarizeOutcome::Wrote(0) | DiarizeOutcome::Skipped | DiarizeOutcome::Cancelled => {}
@@ -2318,38 +2414,10 @@ impl Core {
                 DiarizeOutcome::Paused => {
                     tracing::debug!(meeting = %meeting_id, "a recording has the machine; the backlog waits")
                 }
-                DiarizeOutcome::Owed => {}
-            }
-
-            // A Meeting still owed keeps its place at the head of the queue,
-            // so without a bound this loop would re-read it, re-infer and
-            // fail the same way for ever. `Moved` is answered by a fresh plan
-            // and almost always succeeds on the next pass — the correction
-            // that moved it has landed by then — so one retry is what this
-            // buys, and it costs one inference pass rather than an unbounded
-            // number. Beyond that the Meeting is treated as the unprocessable
-            // work it is behaving like, and leaves the line having written
-            // nothing: its words, corrections and names all stand, and what
-            // it loses is this Meeting's contribution to recognizing its
-            // voices, exactly as a Meeting with no Kept Audio does.
-            let outcome = if outcome == DiarizeOutcome::Owed {
-                let attempts = owed.entry(meeting_id.clone()).or_insert(0);
-                *attempts += 1;
-                if *attempts >= RESEED_ATTEMPTS {
-                    tracing::warn!(
-                        meeting = %meeting_id,
-                        attempts = *attempts,
-                        "could not relearn this Meeting's voices; giving up on it"
-                    );
-                    owed.remove(&meeting_id);
-                    DiarizeOutcome::Skipped
-                } else {
-                    outcome
+                DiarizeOutcome::Owed => {
+                    tracing::debug!(meeting = %meeting_id, "this Meeting is still owed a pass")
                 }
-            } else {
-                owed.remove(&meeting_id);
-                outcome
-            };
+            }
 
             if leaves_the_line_afterwards(outcome) {
                 let done = meeting_id.clone();
@@ -2367,10 +2435,14 @@ impl Core {
                 }
             }
 
-            if matches!(outcome, DiarizeOutcome::Paused) {
+            if matches!(outcome, DiarizeOutcome::Paused | DiarizeOutcome::Owed) {
                 // Otherwise this loop spins on a Meeting it has just decided
-                // not to run. `stop_meeting` queues the ended Meeting, which
-                // notifies the wake, so the ordinary end of a recording
+                // not to run, or just failed to write. Both keep their place
+                // at the head of the queue, so the wait is what stops the
+                // re-read from being immediate — a rate rather than a budget,
+                // which is why owed work can stay owed indefinitely without
+                // burning a core. `stop_meeting` queues the ended Meeting,
+                // which notifies the wake, so the ordinary end of a recording
                 // resumes the backlog at once; the timer is the same
                 // belt-and-braces as above.
                 tokio::select! {
@@ -5008,6 +5080,21 @@ mod tests {
             .await;
 
         assert!(outcome.is_err(), "the transaction failed: {outcome:?}");
+        // The row being untouched is only half the answer: what decides
+        // whether the work survives is what the queue makes of that `Err`,
+        // and this used to turn it into `Skipped` and delete the row a line
+        // later. Asserted through the real classifier, not by inspecting the
+        // table the wrapper is about to act on.
+        let outcome = outcome_of(&meeting, outcome);
+        assert_eq!(
+            outcome,
+            DiarizeOutcome::Owed,
+            "an unexpected failure keeps the Meeting, it does not discard it"
+        );
+        assert!(
+            !leaves_the_line_afterwards(outcome),
+            "so nothing afterwards takes the row out"
+        );
         assert_eq!(
             exemplars_of(&core, "alice").await,
             vec![vec![1.0_f32]],
@@ -5016,6 +5103,110 @@ mod tests {
         assert!(
             still_queued(&core, &meeting).await,
             "with the Meeting still in the line"
+        );
+    }
+
+    /// Owed work stays owed, however many times it comes round.
+    ///
+    /// There was an attempt budget here: a second `Owed` became `Skipped` and
+    /// the Meeting left the line having written nothing. Two plan changes are
+    /// not evidence of unprocessable work — they are most likely two Operator
+    /// corrections landing while the model ran — so the bound is the worker's
+    /// wake-or-thirty-seconds wait, and the way out is the stop the Operator
+    /// already has.
+    #[tokio::test]
+    async fn a_meeting_that_stays_owed_is_never_given_up_on() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, _) = reseedable(&core, false).await;
+
+        for pass in 1..=4 {
+            // A fresh plan each pass, as the worker would read, and a fresh
+            // correction landing during each one.
+            let plan = core
+                .store
+                .read(|connection| crate::diarize::reseed::plan(connection, "m1"))
+                .await
+                .expect("plan")
+                .expect("kept audio");
+            let owner = if pass % 2 == 1 { "bob" } else { "alice" };
+            core.store
+                .write(move |connection| {
+                    connection.execute(
+                        "UPDATE transcript_segments SET speaker_id = ?1 WHERE id = 's1'",
+                        rusqlite::params![owner],
+                    )?;
+                    Ok(())
+                })
+                .await
+                .expect("correction");
+
+            let outcome = outcome_of(
+                &meeting,
+                core.finish_run(
+                    &meeting,
+                    run_over(Some(plan), WHOLE_CLUSTER),
+                    &Cancel::new(),
+                    &Arc::new(AtomicBool::new(false)),
+                    None,
+                )
+                .await,
+            );
+            assert_eq!(outcome, DiarizeOutcome::Owed, "pass {pass}");
+            assert!(
+                !leaves_the_line_afterwards(outcome),
+                "pass {pass} must not take it out of the line"
+            );
+            assert!(still_queued(&core, &meeting).await, "pass {pass}");
+        }
+    }
+
+    /// Audio that has gone is not a plan that changed.
+    ///
+    /// `Refused::Moved` is answered by reading a fresh plan, so it stays
+    /// owed. `Refused::Gone` cannot be: no later pass grows the recording
+    /// back, and treating it as a changed plan would keep the Meeting in the
+    /// queue being retried against a refusal that is now permanent. It leaves
+    /// the line with its attributions intact, exactly as a Meeting that never
+    /// kept its audio does (ADR-0035).
+    #[tokio::test]
+    async fn audio_that_went_during_the_run_leaves_the_line_rather_than_staying_owed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, plan) = reseedable(&core, false).await;
+
+        core.store
+            .write(|connection| {
+                connection.execute("UPDATE meetings SET audio_path = NULL WHERE id = 'm1'", [])?;
+                Ok(())
+            })
+            .await
+            .expect("audio gone");
+
+        let outcome = core
+            .finish_run(
+                &meeting,
+                run_over(Some(plan), WHOLE_CLUSTER),
+                &Cancel::new(),
+                &Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .await
+            .expect("finish");
+
+        assert_eq!(
+            outcome,
+            DiarizeOutcome::Skipped,
+            "unprocessable, not owed — and not silently walked either"
+        );
+        assert!(
+            leaves_the_line_afterwards(outcome),
+            "so the worker takes it out rather than retrying for ever"
+        );
+        assert_eq!(
+            exemplars_of(&core, "alice").await,
+            vec![vec![1.0_f32]],
+            "and it wrote nothing: Alice keeps what she had"
         );
     }
 
@@ -5557,11 +5748,14 @@ mod tests {
             .await
             .expect("queue");
 
-        // A queue row whose Meeting is not there. `diarize_meeting` bails on
-        // it, which is the shape of every failure that happens before the
-        // run: the outcome is an `Err`, not an outcome. Written with the key
-        // check off, because the cascade exists to stop exactly this — the
-        // point is the arm that handles it, not how a row got there.
+        // A queue row whose Meeting is not there — unprocessable work that
+        // no later pass can fix, which `diarize_meeting` answers with an
+        // explicit `Skipped`. That distinction is the point: an *unexpected*
+        // failure keeps its place in the line now, so anything that genuinely
+        // cannot be processed has to say so itself or it blocks the backlog
+        // behind it for ever. Written with the key check off, because the
+        // cascade exists to stop exactly this — the point is the arm that
+        // handles it, not how a row got there.
         core.store
             .write(|connection| {
                 connection.pragma_update(None, "foreign_keys", false)?;

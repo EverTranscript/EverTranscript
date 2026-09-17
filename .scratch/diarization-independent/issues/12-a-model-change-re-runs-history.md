@@ -225,13 +225,26 @@ no unanimous claim. An empty `Rebuilt` — every path that is not a bulk re-run 
 leaves the lifecycle exactly as it was. The Operator's channel rules and the
 forgotten/pseudonym exclusions are untouched, being upstream of all of this.
 
-**An unrecovered Meeting stays owed.** A `Refused::Moved` plan or a failed
-embedding returns `DiarizeOutcome::Owed`: nothing written, the queue row kept,
-and the worker allows one further pass before giving up on it. A changed plan
-needs a fresh plan, so retrying reads one. `Gone` and genuinely unprocessable
-work keep the existing skip semantics; what is not allowed is logging a refusal
-and marking the Meeting completed, which would report a partial walk as a
-successful one.
+**An unrecovered Meeting stays owed, and stays owed.** A `Refused::Moved` plan
+or a failed embedding returns `DiarizeOutcome::Owed`: nothing written, the queue
+row kept. There is **no attempt budget** — an earlier version gave up after two
+passes, and a count of failed passes is not evidence that a Meeting is
+unprocessable, since two `Moved` refusals are most likely two Operator
+corrections landing while the model ran. What bounds it is a rate: the worker
+waits on the same wake-or-thirty-seconds select a pause uses before coming back
+to it, with its own reason. What ends it is the explicit stop the Operator
+already has.
+
+An unexpected `Err` out of `diarize_meeting` is owed too, not skipped. A
+transaction that fails at the end of `finish_run` has rolled the attribution,
+the rebuilt evidence and the queue removal back together; converting that to
+`Skipped` deleted the work a few lines later, which is silent loss on the path
+that understands least about what went wrong. The cost of keeping it is
+head-of-line blocking, so anything genuinely unprocessable now says so itself:
+no audio, no models, a queue row whose Meeting is gone, and `Refused::Gone` —
+which is `Skipped` rather than `Owed` because no later pass grows a recording
+back. What is not allowed is logging a refusal and marking the Meeting
+completed, which would report a partial walk as a successful one.
 
 **The gate is structural.** `rerun::is_bulk_work` is `installed() AND a row in
 diarize_rerun_backlog`, extracted from the copy `give_up` was already computing

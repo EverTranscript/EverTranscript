@@ -2549,3 +2549,35 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Supersedes:** Q215 — its ordering argument, its separate transaction and the crash window it accepted; the bounded-evidence and structural-gate reasoning stand.
 **Ref:** (pending)
+
+## Q218 — diarization/12 — deviation
+
+**Question:** What bounds a Meeting the re-run cannot relearn, and what does the queue do with a failure it does not understand?
+**Options considered:** an attempt budget that gives up after N passes / a rate that lets owed work stay owed indefinitely
+**Chosen:** A rate. `RESEED_ATTEMPTS` and its per-Meeting counter are removed; `Owed` now waits on the worker's existing wake-or-thirty-seconds select, the same one a pause uses, with its own reason. An unexpected `Err` out of `diarize_meeting` becomes `Owed` rather than `Skipped`. `Refused::Gone` becomes `Skipped` through a new `Committed::Unprocessable`, distinct from `Moved`. A queue row for a Meeting that is not there is now an explicit `Skipped` rather than a bail.
+**Decided-by:** agent
+**Justification:** **A count of failed passes is not evidence of unprocessable work.** Two `Moved` refusals are most likely two Operator corrections landing while the model ran, and discarding a Meeting's contribution for having been corrected twice is the opposite of what the backlog exists to do. What Q217 called "one further pass" was a budget, not a bound; the bound that was actually wanted is a rate, and the loop already had one for `Paused`. The way out of genuinely stuck work is the explicit stop the Operator already has. **The wrapper was losing the same work by another route.** `finish_run` returning `Err` — a transaction that failed at the very end, having rolled back the attribution, the re-seeded evidence and the queue removal together — was converted to `Skipped` and the row deleted a few lines later, so a clean rollback became silent data loss on the path with the least information about what went wrong. Asserting that the direct helper had not yet removed the row said nothing about this, which is why the check now runs the real classifier. **Head-of-line blocking is the cost, and it has to be paid explicitly.** Keeping unexpected failures queued means anything that truly cannot be processed must say so itself or it stalls the backlog behind it for ever; the missing-Meeting bail was exactly such a case and is now an explicit skip, alongside no audio, no models and audio gone. `Refused::Gone` is the same class — no later pass grows a recording back — and calling it a changed plan would retry for ever against a permanent refusal. **Also corrects Q217's "one further pass" promise**, which is withdrawn with the budget it described.
+**Outcome:** applied
+**Supersedes:** Q217 — only its retry bound; the ordering, bounded-evidence and `Rebuilt` reasoning stand.
+**Ref:** (pending)
+
+## Q219 — diarization/12 — deviation
+
+**Question:** How does a claim reach the attribution, and does the bulk path still run the legacy stale rebuild?
+**Options considered:** override the resolve's answer afterwards (as built) / settle claims before matching and leave their clusters out of it
+**Chosen:** Claims are preassigned from `heard` alone, and claimed clusters are excluded from `resolve_with` entirely. The bulk path skips `stale_exemplars` and its rebuild; `Reseed` is a three-way state so a bulk Meeting with no plan cannot fall through as an ordinary run.
+**Decided-by:** agent
+**Justification:** **Overriding after the fact let a claim steal a seed.** `resolve_with`'s mutual-best asks each seed which cluster it likes best, and a claimed cluster left in that comparison can answer for a seed it will never be given: a cluster the record already calls Alice whose centroid is an exact match for Bob's seed made an otherwise clean Bob fragment fail mutual-best and come back `New`, after which the claimed cluster was reassigned to Alice regardless. Nobody was recognized as Bob and nothing in the answer said why. Pinned by `a_claimed_cluster_does_not_take_another_speakers_seed` with Bob's fragment at 0.900 against his own seed and 0.436 against Alice's — clear of floor and margin, so only the claim can break it. **The override also sat behind `embeddings.get`,** so a claim was dropped whenever its cluster had no embedding — which `live::assemble` omits when a centroid is unavailable while still keeping the turns. A claim assigns words; it neither needs a vector nor licenses one. **The legacy rebuild is the wrong evidence for a re-run.** `runner::rebuild` re-cuts a window around each stale exemplar's saved offsets — the previous model's guess at where a voice was — which is precisely what a re-run is throwing away. Running it beside the bounded plan would embed the same Speakers twice from two notions of where they spoke, with the legacy one adopting first. `Reseed::Gone` is defensive against the race where the recording is deleted between `get_meeting` and `plan`; the same hazard at the commit end is reachable and covered.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q220 — diarization/03 — deviation
+
+**Question:** Does the same-window counter say how many forbidden pairs the unconstrained run would actually have merged?
+**Options considered:** keep Q216's "most were never a merge the constraint had to prevent" / withdraw it as unmeasured
+**Chosen:** Withdrawn. The counts are forbidden pairs counted **whether or not the unconstrained run merged them**; what share of them it would have merged was never measured.
+**Decided-by:** agent
+**Justification:** `same_window_merges` counts a forbidden rejoin from the pair map and the reference labels alone — it never asks the unconstrained clustering whether that pair came out merged. "Most were never a merge the constraint had to prevent" is a plausible reading of why the ratio is invalid, but it is a quantitative claim the counter does not support, and putting it in the reason a ratio was withdrawn repeats the error being corrected. The invalidity stands on what *was* measured: the two counts have different denominators and different questions behind them. No new measurement; the same six cells, read for what they say.
+**Outcome:** applied
+**Supersedes:** Q216 — only its "most were never a merge" clause; every other correction it records stands.
+**Ref:** (pending)
