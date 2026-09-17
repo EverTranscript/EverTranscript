@@ -96,6 +96,17 @@ Nothing here is a default an agent should pick.
    incoherence plainer and keeps the wider band — at the cost of refusing a
    Speaker over rows the mint would never have used.
 
+## Interaction with ticket 14
+
+Ticket 14 changes *which* 32 exemplars the mint sees, so it moves the band
+above. The weakest legitimate control on mean pairwise — the 229-exemplar
+`Ming Chen` row, at 0.6143 — **is** this band's upper bound, and spreading its
+32 across the four Meetings it was heard in drops it to 0.5846. A threshold
+picked at, say, 0.60 would pass that Speaker today and refuse it after 14
+lands. **Whichever of the two lands second must re-measure the band**, and if
+both are wanted, choosing 14's selection rule first costs nothing and settles
+the numbers this ticket's threshold is picked against.
+
 ## Acceptance criteria
 
 Unticked by design: the work has not started, and criterion 1 gates the rest.

@@ -571,6 +571,41 @@ and the weakest control 0.4170 (Q247).
 All of it is one History of ten Meetings: evidence that a workable threshold
 exists, not a measurement of where it generalises.
 
+Ticket **14** below is the companion defect and moves this band: see there.
+
+### The exemplar cap takes a tail, not a sample — ticket 14, buildable
+
+**Q251, 2026-09-17.** The companion defect to 13, in the same mint and
+independent of it. `centroid` takes `.rev().take(32)` over ids that are UUIDv7
+minted at insert, so the cap is a **contiguous tail** — the end of the last
+Meeting that contributed. Ticket file:
+`issues/14-the-exemplar-cap-samples-a-speaker-rather-than-taking-a-tail.md`.
+
+Measured read-only on the real History. Five Speakers exceed the cap, so those
+are the only rows where it binds:
+
+| Speaker | usable | Meetings | tail-32 spans | spread-32 spans |
+|---|---|---|---|---|
+| Jack Ahn | 888 | 7 | **1** | 7 |
+| Ming Chen | 229 | 4 | **2** | 4 |
+| Hong Li | 152 | 4 | **1** | 4 |
+| Ming Chen (dup) | 79 | 1 | 1 | 1 |
+| Marc Ammann | 58 | 2 | 2 | 2 |
+
+**This one needs no threshold** — it is a selection rule, not a policy — so
+unlike 13 it is buildable as soon as the rule is picked. Three findings temper
+that: on this History spreading changes **no** identity (nobody matches anybody
+else at 0.62 under any of the three selections); it **lowers** coherence in
+every case, because breadth means different rooms and microphones; and it
+therefore **narrows ticket 13's band**, because the weakest control — the
+229-exemplar `Ming Chen` at 0.6143, which *is* that band's upper bound — drops
+to 0.5846 when spread. Whichever of 13 and 14 lands second must re-measure.
+
+The Operator is where it mattered, and it recurs: they are attributed 483
+segments across 6 Meetings on the real History today and **the last 32 fall in
+`01a08e16` alone**, the same Meeting whose every window carried double-talk. A
+relearn run now would concentrate on it again.
+
 ## `macbook-pro-nickel`, the host with the real History
 
 The only host with a populated History (`~/Documents/EverTranscript`, 10

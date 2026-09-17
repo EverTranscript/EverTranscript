@@ -1447,6 +1447,85 @@ mod tests {
         assert_eq!(MAX_EXEMPLARS, 32);
     }
 
+    /// Characterization, not approval: this pins what the mint does **today**,
+    /// which is the defect in `.scratch/diarization-independent/issues/13`.
+    ///
+    /// `centroid` tests nothing about whether its exemplars are the same
+    /// voice, so it mints from ones that disagree completely. How bad the
+    /// result is depends on the split: orthogonal groups of size `m` and `n`
+    /// leave the smaller group at `m / sqrt(m² + n²)` against the vector
+    /// filed under their name, which falls under `MATCH_FLOOR` once the
+    /// minority is below about four fifths of the majority. On the real
+    /// History a 4/5 split left the Operator's own exemplars at min 0.5142,
+    /// and the vector matched a different participant at 0.6761 (Q247, Q248).
+    ///
+    /// **When ticket 13's guard lands, this test fails, and that is the
+    /// signal.** Replace the body with `assert!(centroid(&mixed).is_none())`
+    /// — the mint's existing "no vector this Speaker's record supports"
+    /// fall-through — or with whichever subset rule the guard adopts.
+    #[test]
+    fn today_a_centroid_is_minted_from_exemplars_that_disagree_completely() {
+        let minority = vec![1.0_f32, 0.0, 0.0];
+        let majority = vec![0.0_f32, 1.0, 0.0];
+        assert_eq!(
+            cosine(&minority, &majority),
+            0.0,
+            "the premise: these are not the same voice"
+        );
+
+        let mixed: Vec<(Vec<f32>, i64, bool)> =
+            std::iter::repeat_n((minority.clone(), 1_000, false), 3)
+                .chain(std::iter::repeat_n((majority.clone(), 1_000, false), 6))
+                .collect();
+
+        let centre = centroid(&mixed).expect("today it mints regardless of disagreement");
+        assert!(
+            cosine(&centre, &minority) < MATCH_FLOOR,
+            "the minority voice no longer matches its own Voiceprint: {}",
+            cosine(&centre, &minority)
+        );
+        assert!(
+            cosine(&centre, &majority) > MATCH_FLOOR,
+            "while the voice that outnumbered it owns the name: {}",
+            cosine(&centre, &majority)
+        );
+    }
+
+    /// Characterization, not approval: the companion defect, ticket 14.
+    ///
+    /// `.rev().take(MAX_EXEMPLARS)` is a *tail*, not a sample. Exemplars are
+    /// read `ORDER BY id` over UUIDv7 ids minted at insert, so the newest 32
+    /// are the last rows written — the end of the last Meeting that
+    /// contributed any. A Speaker heard in seven Meetings can have an
+    /// identity decided by one of them, which is measured on the real
+    /// History: Jack Ahn's 888 exemplars span 7 Meetings and his tail 32 span
+    /// 1 (Q251).
+    ///
+    /// **When ticket 14's spread lands, this test fails, and that is the
+    /// signal.** The later voice should then no longer own the centroid
+    /// alone.
+    #[test]
+    fn today_the_cap_takes_a_contiguous_tail_rather_than_a_sample() {
+        let early = vec![1.0_f32, 0.0, 0.0];
+        let late = vec![0.0_f32, 1.0, 0.0];
+        let mut history: Vec<(Vec<f32>, i64, bool)> = (0..MAX_EXEMPLARS * 4)
+            .map(|_| (early.clone(), 1_000, false))
+            .collect();
+        history.extend((0..MAX_EXEMPLARS).map(|_| (late.clone(), 1_000, false)));
+
+        let centre = centroid(&history).expect("a centroid");
+        assert!(
+            cosine(&centre, &late) > 0.999,
+            "the tail owns it outright: {}",
+            cosine(&centre, &late)
+        );
+        assert!(
+            cosine(&centre, &early) < 1e-3,
+            "and four times as much earlier evidence contributes nothing: {}",
+            cosine(&centre, &early)
+        );
+    }
+
     #[test]
     fn a_centroid_of_nothing_is_none_rather_than_a_zero_vector() {
         // A Speaker whose only exemplars were negative has no Voiceprint.
