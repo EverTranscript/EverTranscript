@@ -139,16 +139,17 @@ not all belong to one eligible Speaker. Nothing calls either.
    exemplar table carries that today. Writing `Claims::denials` into centroids
    would rebuild the withdrawn writer; so would handing `Claims` to
    `reconcile::apply` and enrolling what it assigns.
-2. ~~The wiring~~ — **done** for the seeding half (Q215, reordered by Q217).
+2. ~~The wiring~~ — **done** (Q215, reordered by Q217; trigger in Q221).
    `diarize_meeting` reads the plan and embeds its ranges with the run's own
-   embedder, and `finish_run` commits them inside the same transaction as the
-   attribution and the queue row. What is left of
-   this item is only the startup trigger: no caller reaches
-   `rerun::begin_if_the_model_changed` — which must, on its first start,
-   record the current identity and enqueue nothing, since a History with no
-   `diarize_rerun` row is every History today and absent metadata is not
-   evidence of a model change. Until that exists the re-run cannot start,
-   resume or report, whatever the store can already express.
+   embedder, `finish_run` commits them inside the same transaction as the
+   attribution and the queue row, and `Core::rerun_if_the_model_changed` runs
+   at every start. The trigger records the current identity and enqueues
+   nothing on its first start, since a History with no `diarize_rerun` row is
+   every History today and absent metadata is not evidence of a model change.
+   It is still unreachable in the field: the gate now lives inside
+   `begin_if_the_model_changed`, which answers `None` rather than failing when
+   the tables are absent, so the one function a Core calls on every boot cannot
+   be reached past an unregistered schema and no caller has to remember that.
 3. The Registry's progress, pause and cancel affordances. Nothing in
    `clients/electron/src` reads a re-run; the existing `rerunSetup` is
    onboarding and unrelated. The wire is ready for it: `DiarizeStatusResponse`
@@ -295,10 +296,18 @@ the gate is about the schema, not about how the row arrived.
       by `server::tests::a_stop_that_arrives_after_a_successful_pass_writes_nothing_and_stays_owed`,
       which drives the real persistence transaction with a synthetic successful
       run and needs no models
-- [ ] Quitting mid-run and restarting resumes rather than restarts, and reaches
-      the same end state as an uninterrupted run
-- [ ] Cancelling stops it, reports honestly how far it got, and leaves every
-      already-processed Meeting correct
+- [x] Quitting mid-run and restarting resumes rather than restarts, and reaches
+      the same end state as an uninterrupted run —
+      `a_backlog_interrupted_by_a_restart_ends_where_an_uninterrupted_one_does`
+      builds the same backlog twice, drops the Core after one Meeting, restarts
+      through the real trigger and compares the queue, the re-run block and the
+      evidence counts against the run nobody interrupted
+- [x] Cancelling stops it, reports honestly how far it got, and leaves every
+      already-processed Meeting correct —
+      `cancelling_the_backlog_keeps_what_it_walked_and_counts_the_rest_given_up`
+      asserts `(total 3, done 1, remaining 0, abandoned 2, cancelled)` through
+      `diarize_status`, that the walked Meeting stays diarized, and that a later
+      start does not resurrect the backlog
 - [x] Progress, pause state and cancellation are observable through the
       protocol, additively (ADR-0028), and drawn in the Registry
 - [x] Renumbered pseudonyms and any named Speaker left without a Voiceprint are
@@ -318,12 +327,16 @@ Same two dependencies as 05, plus one of its own:
 2. Ticket 05 has landed, since this re-runs into the state its wipe leaves.
 3. **A real end-to-end exercise needs the ONNX models and roughly an hour of
    audio per Meeting**, which is why the branch's version shipped with that
-   admittedly untested. Driving `claims`/`persist`/`relearn` directly covers
-   the seams either side; the middle stays uncovered until someone runs it on a
-   populated History, and that is a deliberate gap to state rather than hide.
+   admittedly untested. The seams either side are driven directly, and the
+   queue-and-arithmetic half is now driven through the real completion path
+   offline (Q222) — an interrupted backlog is compared whole against an
+   uninterrupted one, and a cancelled one against what the Client is told. What
+   stays uncovered is whether a real model's vectors recognize the same people
+   afterwards, which is measurement, not wiring, and waits on (1).
 
 No part of this may be run against a real History before (1) and (2). Writing
-and testing it is safe; adding the trigger is not.
+and testing the trigger is safe and is done; **registering the schema is what
+makes it fire**, and that stays out of `MIGRATIONS`.
 
 ## Built: `cluster::claims` and `store::rerun` (`058bcad`, `c72bb74`, `8dd6781`)
 

@@ -82,6 +82,12 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
     // open and blocking the next one.
     core.reconcile_after_restart().await;
 
+    // What a model change owes, before the catch-up below, so the re-run's
+    // oldest-first order is in the queue before anything else joins it. On
+    // every History in the field this reads one row of `sqlite_master` and
+    // returns: the re-run tables are not in `MIGRATIONS`.
+    core.rerun_if_the_model_changed().await;
+
     // The other thing a previous run can leave half done, and the one that
     // used to leave no trace at all: a detached Diarization the Core was
     // stopped inside. Spawned, not awaited — booting must not wait for two

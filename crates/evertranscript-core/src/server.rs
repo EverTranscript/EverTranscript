@@ -2482,6 +2482,57 @@ impl Core {
         self.diarize_wake.notify_one();
         Ok(added)
     }
+    /// Starts the bulk re-run a model change owes, or records which embedding
+    /// this History is in.
+    ///
+    /// Called on every start, and safe there because the stored identity is
+    /// both the trigger and the guard: a Core restarted halfway through a
+    /// backlog finds its own model recorded, asks for nothing, and lets the
+    /// queue it left behind carry on. Resume is therefore a property of the
+    /// queue living in the record rather than of anything this does.
+    ///
+    /// **Inert in the field, and inert by construction.** The re-run tables
+    /// are not in `MIGRATIONS`, so `begin_if_the_model_changed` answers `None`
+    /// on every History that exists today without reading a model identity at
+    /// all. A History that does have them and has never seen this code gets
+    /// its identity written down and no work enqueued — an absent row is not
+    /// evidence of a model change, and reading it as one would re-run all of
+    /// History after an ordinary update.
+    ///
+    /// Awaited rather than spawned, unlike
+    /// [`Self::finish_interrupted_diarization`]: on every History in the field
+    /// this is one `sqlite_master` lookup, and where it does enqueue, it has
+    /// to establish its oldest-first order before the catch-up adds whatever
+    /// a previous Core left. Neither one starts a model.
+    pub async fn rerun_if_the_model_changed(&self) {
+        let enqueued = self
+            .store
+            .write(|connection| {
+                crate::store::rerun::begin_if_the_model_changed(
+                    connection,
+                    crate::diarize::live::EMBEDDING_MODEL,
+                    crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                )
+            })
+            .await;
+        match enqueued {
+            Ok(None) => {}
+            Ok(Some(meetings)) => {
+                info!(
+                    meetings,
+                    model = crate::diarize::live::EMBEDDING_MODEL,
+                    "the embedding changed; re-running History to earn its Voiceprints back"
+                );
+                // The worker may already be waiting on an empty queue.
+                self.diarize_wake.notify_one();
+            }
+            // Never fatal. A History that cannot be asked about its model is
+            // one where every other read is about to fail too, and refusing to
+            // boot over it would turn a re-run nobody asked for into an
+            // unusable product.
+            Err(error) => warn!(%error, "could not check whether the embedding changed"),
+        }
+    }
 
     /// Puts the Meetings a previous Core never diarized back in line.
     ///
@@ -5103,6 +5154,319 @@ mod tests {
         assert!(
             still_queued(&core, &meeting).await,
             "with the Meeting still in the line"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // The startup trigger, and the two acceptance checks that hang off it.
+    //
+    // Every one of these is offline: a "walk" is `finish_run` over a synthetic
+    // run, which is the same completion path a real pass reaches, and no model
+    // is loaded anywhere in the file. What they are about is the queue and the
+    // re-run's arithmetic, both of which live in the record.
+    // -----------------------------------------------------------------------
+
+    /// Walks one Meeting the way a committed run does — through `finish_run`,
+    /// so the queue row leaves inside the attribution transaction.
+    async fn walk(core: &Arc<Core>, meeting_id: &str) {
+        let outcome = core
+            .finish_run(
+                meeting_id,
+                run_over(None, WHOLE_CLUSTER),
+                &Cancel::new(),
+                &Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .await
+            .expect("finish");
+        assert!(
+            matches!(outcome, DiarizeOutcome::Wrote(_)),
+            "{meeting_id} was walked: {outcome:?}"
+        );
+    }
+
+    /// The re-run as a Client reads it: total, done, remaining, abandoned,
+    /// cancelled.
+    async fn rerun_seen(core: &Arc<Core>) -> Option<(i64, i64, i64, i64, bool)> {
+        core.diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .map(|rerun| {
+                (
+                    rerun.total,
+                    rerun.done,
+                    rerun.remaining,
+                    rerun.abandoned,
+                    rerun.cancelled,
+                )
+            })
+    }
+
+    /// Pretends the History was last walked with a different embedding, which
+    /// is the only thing a model change leaves behind for the next start to
+    /// find.
+    async fn last_walked_with_another_model(core: &Arc<Core>) {
+        core.store
+            .write(|connection| {
+                connection.execute(
+                    "UPDATE diarize_rerun SET model = 'some-previous-embedding' WHERE id = 1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .await
+            .expect("previous model");
+    }
+
+    /// The trigger is unreachable on every History that exists today.
+    ///
+    /// It runs on every start, so this is the assertion that matters most:
+    /// the tables are not in `MIGRATIONS`, and the gate is inside
+    /// `begin_if_the_model_changed` rather than in this caller, so no caller
+    /// can forget it. Meetings with Kept Audio are present precisely so that
+    /// getting past the gate would enqueue something visible.
+    #[tokio::test]
+    async fn a_history_in_the_field_is_not_re_run_at_startup() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+
+        core.rerun_if_the_model_changed().await;
+
+        assert!(
+            core.diarize_status()
+                .await
+                .expect("status")
+                .queued
+                .is_empty(),
+            "nothing was enqueued"
+        );
+        assert_eq!(rerun_seen(&core).await, None, "and no re-run is reported");
+        assert!(
+            !core
+                .store
+                .read(|connection| Ok(connection
+                    .query_row(
+                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'diarize_rerun'",
+                        [],
+                        |_| Ok(())
+                    )
+                    .optional()?
+                    .is_some()))
+                .await
+                .expect("read"),
+            "and the schema was not installed on the way past"
+        );
+    }
+
+    /// With the tables present, the first start writes down which embedding
+    /// this History is in and asks for nothing.
+    ///
+    /// An absent row is every History predating the feature. Reading it as a
+    /// model change would re-run all of History after an ordinary update, so
+    /// the baseline is recorded rather than acted on — and `requested()` keeps
+    /// it out of the Client's sight, because a backlog of zero reported to an
+    /// Operator who never asked for one is a bug they cannot dismiss.
+    #[tokio::test]
+    async fn the_first_start_records_the_model_without_asking_for_a_re_run() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+
+        core.rerun_if_the_model_changed().await;
+
+        assert!(
+            core.diarize_status()
+                .await
+                .expect("status")
+                .queued
+                .is_empty(),
+            "the first start asks for nothing"
+        );
+        assert_eq!(
+            rerun_seen(&core).await,
+            None,
+            "and shows an Operator no backlog"
+        );
+        let state = core
+            .store
+            .read(crate::store::rerun::state)
+            .await
+            .expect("state")
+            .expect("a row");
+        assert_eq!(
+            state.model,
+            crate::diarize::live::EMBEDDING_MODEL,
+            "but the identity is written down, so the next start can compare"
+        );
+
+        // And a second start with nothing changed is the ordinary case.
+        core.rerun_if_the_model_changed().await;
+        assert!(
+            core.diarize_status()
+                .await
+                .expect("status")
+                .queued
+                .is_empty(),
+            "an unchanged model asks for nothing either"
+        );
+    }
+
+    /// A start that finds a different embedding recorded walks all of History,
+    /// oldest first.
+    ///
+    /// Oldest first is not cosmetic: a named Speaker earns its new Voiceprint
+    /// from the Meetings it was corrected in, so Meetings after those can
+    /// recognize it by voice. Newest first reaches the same end state having
+    /// recognized almost nothing on the way.
+    #[tokio::test]
+    async fn a_start_after_the_model_changed_re_runs_history_oldest_first() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+        core.rerun_if_the_model_changed().await;
+        last_walked_with_another_model(&core).await;
+
+        core.rerun_if_the_model_changed().await;
+
+        assert_eq!(
+            core.diarize_status().await.expect("status").queued,
+            vec!["m1".to_string(), "m2".to_string(), "m3".to_string()],
+            "all of History, oldest first"
+        );
+        assert_eq!(
+            rerun_seen(&core).await,
+            Some((3, 0, 3, 0, false)),
+            "three owed, none walked, none given up on"
+        );
+    }
+
+    /// Quitting mid-backlog and starting again resumes it, and reaches the
+    /// same end state as a run nobody interrupted.
+    ///
+    /// The trigger is what makes that a claim worth checking: it runs on every
+    /// start, and a version of it that compared anything other than the stored
+    /// identity would re-enqueue the Meetings already walked and count them
+    /// twice. Both halves are built here and compared as whole states rather
+    /// than field by field, so a difference anywhere shows up.
+    #[tokio::test]
+    async fn a_backlog_interrupted_by_a_restart_ends_where_an_uninterrupted_one_does() {
+        let uninterrupted = {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let core =
+                Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+            with_rerun_tables(&core).await;
+            meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+            core.rerun_if_the_model_changed().await;
+            last_walked_with_another_model(&core).await;
+            core.rerun_if_the_model_changed().await;
+            for meeting in ["m1", "m2", "m3"] {
+                walk(&core, meeting).await;
+            }
+            (
+                rerun_seen(&core).await,
+                core.diarize_status().await.expect("status").queued,
+                core.store.read(evidence).await.expect("evidence"),
+            )
+        };
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let history_dir = dir.path().join("History");
+        {
+            let core = Core::with_history_dir_acknowledged(history_dir.clone()).expect("core");
+            with_rerun_tables(&core).await;
+            meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+            core.rerun_if_the_model_changed().await;
+            last_walked_with_another_model(&core).await;
+            core.rerun_if_the_model_changed().await;
+            walk(&core, "m1").await;
+            // And the Core is gone, mid-backlog, with two Meetings owed.
+        }
+
+        let restarted = Core::with_history_dir_acknowledged(history_dir).expect("core");
+        restarted.rerun_if_the_model_changed().await;
+        assert_eq!(
+            restarted.diarize_status().await.expect("status").queued,
+            vec!["m2".to_string(), "m3".to_string()],
+            "the restart resumed rather than starting over: m1 stays walked"
+        );
+        assert_eq!(
+            rerun_seen(&restarted).await,
+            Some((3, 1, 2, 0, false)),
+            "and the arithmetic came through the restart intact"
+        );
+
+        for meeting in ["m2", "m3"] {
+            walk(&restarted, meeting).await;
+        }
+        assert_eq!(
+            (
+                rerun_seen(&restarted).await,
+                restarted.diarize_status().await.expect("status").queued,
+                restarted.store.read(evidence).await.expect("evidence"),
+            ),
+            uninterrupted,
+            "the same end state as the run nobody interrupted"
+        );
+    }
+
+    /// Cancelling the backlog stops it, says honestly how far it got, and
+    /// leaves every Meeting it already walked alone.
+    ///
+    /// `done` is the number that can lie here. The Meetings cancelling threw
+    /// away also leave the queue, so counting "total minus remaining" as
+    /// walked would credit the re-run with work nobody did — which is why
+    /// giving up is counted separately and subtracted.
+    #[tokio::test]
+    async fn cancelling_the_backlog_keeps_what_it_walked_and_counts_the_rest_given_up() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+        core.rerun_if_the_model_changed().await;
+        last_walked_with_another_model(&core).await;
+        core.rerun_if_the_model_changed().await;
+        walk(&core, "m1").await;
+
+        core.diarize_rerun_cancel().await.expect("cancel");
+
+        assert_eq!(
+            rerun_seen(&core).await,
+            Some((3, 1, 0, 2, true)),
+            "one walked, two given up on, and it says it was stopped"
+        );
+        assert!(
+            core.diarize_status()
+                .await
+                .expect("status")
+                .queued
+                .is_empty(),
+            "with nothing left in the line"
+        );
+        assert_eq!(
+            core.store.read(evidence).await.expect("evidence").2,
+            1,
+            "and the Meeting it did walk is still marked diarized"
+        );
+
+        // A start after the stop must not quietly begin it again: the model
+        // recorded is the one the backlog was for.
+        core.rerun_if_the_model_changed().await;
+        assert!(
+            core.diarize_status()
+                .await
+                .expect("status")
+                .queued
+                .is_empty(),
+            "a restart does not resurrect a backlog the Operator stopped"
+        );
+        assert_eq!(
+            rerun_seen(&core).await,
+            Some((3, 1, 0, 2, true)),
+            "and the books are where the stop left them"
         );
     }
 

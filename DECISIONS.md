@@ -2581,3 +2581,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Supersedes:** Q216 — only its "most were never a merge" clause; every other correction it records stands.
 **Ref:** (pending)
+
+## Q221 — diarization/12 — gate-resolution
+
+**Question:** Where does the bulk re-run's startup trigger live, and what keeps it from firing on a History that never asked for one?
+**Options considered:** a caller that checks the schema before asking / the gate inside `begin_if_the_model_changed`, with the caller unconditional
+**Chosen:** The gate moved into `begin_if_the_model_changed`, which now answers `Ok(None)` on a History without the re-run tables instead of failing. `Core::rerun_if_the_model_changed` is awaited in `lib.rs::run` before the never-diarized catch-up, and swallows errors into a warning.
+**Decided-by:** agent
+**Justification:** **This is the one function of the module a Core calls on every start**, including every installation in the field, where the tables are not in `MIGRATIONS`. The rest of `store::rerun` is allowed to fail there because nothing reaches it without a backlog already existing; this is reached unconditionally, so the gate belongs beside `is_bulk_work`'s rather than in a caller that has to remember it. Pinned by `asking_at_startup_whether_the_model_changed_is_safe_without_the_tables`, which asserts the *answer* — a caller that swallows an `Err` into a startup warning cannot tell the two apart, so "nothing was enqueued" would have passed either way. Nothing is recorded on a bare History either: there is nowhere to keep it, and inventing a row is the half-installed state `installed` exists to refuse. **Awaited rather than spawned**, unlike the catch-up beside it: on every History today it is one `sqlite_master` lookup, and where it does enqueue, its oldest-first order has to be in the queue before the catch-up adds what a previous Core left. Neither starts a model. **Still inert**: the trigger exists and is unreachable, `PENDING_MODEL_CHANGE_RERUN` and `PENDING_MODEL_CHANGE_WIPE` stay out of `MIGRATIONS`, and the schema tests that assert their absence are untouched. Registration and any real wipe remain the user's.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q222 — diarization/12 — gate-resolution
+
+**Question:** How are "resume rather than restart" and "cancel reports honestly how far it got" checked without models or real audio?
+**Options considered:** wait for a real corpus run / drive the real completion path with synthetic runs and compare whole end states
+**Chosen:** Offline, through `finish_run` over a synthetic run, comparing an interrupted backlog's final state against an uninterrupted one field for field in a single assertion.
+**Decided-by:** agent
+**Justification:** Both acceptance criteria are about the queue and the re-run's arithmetic, and both live in the record — no model is involved in either. A walk is `finish_run`, the same completion path a real pass reaches, so the queue row still leaves inside the attribution transaction. **Resume** builds the same backlog twice, walks one Meeting and drops the Core in the second, restarts on the same History, runs the real trigger, and asserts the remaining queue, the re-run block and the evidence counts all equal the uninterrupted run's; a trigger that compared anything but the stored identity re-enqueues the walked Meeting, which the mutation confirms fails it. **Cancel** walks one of three, stops the backlog, and asserts `(3, 1, 0, 2, true)` through `diarize_status` — the Client's own view — then restarts and asserts the stop is not resurrected. `done` is the number that can lie, since cancelled Meetings also leave the queue; dropping the `abandoned` subtraction fails that test. What this does **not** establish is that a real model's vectors recognize the same people after a re-run, which is measurement and still waits on the model decision.
+**Outcome:** applied
+**Ref:** (pending)

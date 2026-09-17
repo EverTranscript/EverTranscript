@@ -261,11 +261,22 @@ pub fn begin(connection: &Connection, model: &str, model_version: &str) -> Resul
 /// therefore records the identity and asks for nothing. A transition that
 /// genuinely needs the walk calls [`begin`], which does not consult the row
 /// at all.
+///
+/// **Answers `None` on a History with no re-run tables**, rather than failing
+/// the way the rest of this module does. This is the one function a Core calls
+/// on every start, including the ones in the field where the tables are not in
+/// `MIGRATIONS` — so the gate belongs here, beside [`is_bulk_work`]'s, and not
+/// in a caller that has to remember it. Nothing is recorded either: a History
+/// without the schema has nowhere to record it, and inventing a row would be
+/// the half-installed state [`installed`] exists to refuse.
 pub fn begin_if_the_model_changed(
     connection: &Connection,
     model: &str,
     model_version: &str,
 ) -> Result<Option<usize>> {
+    if !installed(connection)? {
+        return Ok(None);
+    }
     let stored: Option<(String, String)> = connection
         .query_row(
             "SELECT model, model_version FROM diarize_rerun WHERE id = 1",
@@ -543,6 +554,42 @@ mod tests {
         assert!(
             !is_bulk_work(&connection, "m1").expect("ask"),
             "no re-run tables, so nothing can be the re-run's"
+        );
+    }
+
+    /// The one function a Core calls on every start answers rather than fails
+    /// on a History that has never had the tables.
+    ///
+    /// Everything else in this module is allowed to fail there, because
+    /// nothing reaches it without a backlog already existing. This is
+    /// different: it runs at every boot on every installation in the field, so
+    /// the gate is here rather than in the caller, which cannot be relied on
+    /// to remember it. An `Err` would be swallowed into a startup warning and
+    /// look identical to the right answer, which is why this asserts the
+    /// answer and not merely that nothing was enqueued.
+    #[test]
+    fn asking_at_startup_whether_the_model_changed_is_safe_without_the_tables() {
+        let mut connection = Connection::open_in_memory().expect("open");
+        crate::store::schema::configure(&connection).expect("configure");
+        crate::store::schema::migrate(&mut connection).expect("migrate");
+        meetings(
+            &connection,
+            &[("m1", "2024-01-01T00:00:00Z", Some("a.wav"))],
+        );
+
+        assert_eq!(
+            begin_if_the_model_changed(&connection, "some-embedding", "1").expect("ask"),
+            None,
+            "no tables, so nothing is owed and nothing is an error"
+        );
+        assert_eq!(
+            state(&connection).expect("state"),
+            None,
+            "and no identity was invented on a History with nowhere to keep it"
+        );
+        assert!(
+            diarize_queue::peek(&connection).expect("peek").is_none(),
+            "with nothing enqueued"
         );
     }
 
