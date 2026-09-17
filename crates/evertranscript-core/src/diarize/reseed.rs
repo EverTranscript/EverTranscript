@@ -23,8 +23,11 @@
 //! the row or never see it. What it does is withhold: the range stops
 //! contributing to that Speaker's centroid, and where it was the last usable
 //! evidence, the Voiceprint is cleared and the Speaker is not a candidate at
-//! all. **Clearing the vector is what withdraws recognition; the negative is
-//! what keeps a later rebuild from handing the range back.**
+//! all. **Clearing the vector is what withdraws recognition.** The negative
+//! does not drive the next rebuild either: [`plan`] derives both signs from
+//! the latest hint in `attribution_hints`, never from what is already in
+//! `speaker_exemplars`. It is retained as evidence, and current matching
+//! ignores it.
 //!
 //! Three things are deliberately not sources:
 //!
@@ -583,19 +586,51 @@ mod tests {
         speaker(&connection, "bob", Some("Bob"));
         segment(&connection, "s1", 1, (1000, 2000), "alice");
 
+        // Alice is taught first, so the correction below has something to
+        // work from: `feed_correction` copies the *existing* exemplars of
+        // the Speaker a segment is taken from, and against an empty History
+        // it writes nothing at all.
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+        assert_eq!(held(&connection, "alice").len(), 1);
+
         speakers::correct_attribution(&connection, "s1", "bob").expect("away");
+        // The sibling writer's own additions, which are the rows this
+        // replacement has to own: Alice's vector copied to Bob as a
+        // positive, and turned against Alice as a negative.
+        let contradicted = held(&connection, "alice");
+        assert_eq!(
+            contradicted.len(),
+            2,
+            "Alice now holds evidence both for and against the same audio"
+        );
+        assert!(contradicted.iter().any(|exemplar| !exemplar.is_negative));
+        assert!(contradicted.iter().any(|exemplar| exemplar.is_negative));
+        assert_eq!(held(&connection, "bob").len(), 1, "and Bob holds a copy");
+
         assert_eq!(
             rebuild(&mut connection, dir.path()),
             Ok(2),
             "Bob's, not Alice's"
         );
-        assert_eq!(held(&connection, "alice").len(), 1);
-        assert!(held(&connection, "alice")[0].is_negative);
+        let alice = held(&connection, "alice");
+        assert_eq!(
+            alice.len(),
+            1,
+            "the contradiction is resolved, not added to"
+        );
+        assert!(alice[0].is_negative);
 
-        // And back. `feed_correction` fires again here and writes against
-        // the rows the rebuild just left, which is what leaves a stale
-        // negative behind for a narrower replacement to miss.
+        // And back — which writes nothing, because `correct_attribution`
+        // reads `transcript_segments.speaker_id` for what was replaced and
+        // that column still says Alice, so `feed_correction` sees
+        // `from == to` and returns early. The hint is recorded all the same,
+        // and the hint is what the rebuild derives from.
         speakers::correct_attribution(&connection, "s1", "alice").expect("back");
+        assert_eq!(
+            held(&connection, "alice").len(),
+            1,
+            "the correction itself added nothing"
+        );
         assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
 
         let alice = held(&connection, "alice");

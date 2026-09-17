@@ -11,7 +11,12 @@ ADR-0037.
 **Blocked by:** 05, and nothing else. The branch listed 06, 08, 09, 10 and 11;
 08–11 have all landed here, and 06 gates *activation* rather than the work.
 
-**Status:** ready, not started. Not activated — see *Activation* below.
+**Status:** groundwork implemented, activation outstanding. The backlog and
+its state, the queue worker's pause and ordering, the protocol surface, the
+Registry block, and the bounded seeding writer (`diarize::reseed`) are all
+written and tested. What is not done is activation: nothing calls the writer,
+`begin` and `begin_if_the_model_changed` are unreachable, and the schemas stay
+unregistered — see *Activation* below.
 
 ## What to build
 
@@ -401,18 +406,27 @@ reintroduce the one-at-a-time question the single worker answers.
    then back leaves a negative behind — replacing only this path's rows would
    re-derive the positive and leave that negative standing.
 
-   **What a rebuilt negative does, exactly.** It is stored and rebuilt, and
-   that is what keeps the next rebuild from handing the range back as a
-   positive. It is not a repellent: `centroid` filters negatives out and
-   `seeds` reads the positive Voiceprint column, so nothing scores against
-   one. What withdraws recognition is the vector going — which `commit` now
-   does through `clear_voiceprint`, never `delete_voiceprint`, so a
-   recomputation cannot leave a Speaker marked as one the Operator forgot.
+   **What a rebuilt negative does, exactly.** It is retained and rebuilt as
+   evidence, and that is all: current matching ignores it. `centroid` filters
+   negatives out, `sample_source` filters them out, and `seeds` reads the
+   positive Voiceprint column rather than the rows — so nothing scores
+   against one. Nor does the stored negative drive the rebuild: `plan`
+   derives both signs from the latest hint in `attribution_hints`, not from
+   what is already in `speaker_exemplars`. What withdraws recognition is the
+   vector going — which `commit` does through `clear_voiceprint`, never
+   `delete_voiceprint`, so a recomputation cannot leave a Speaker marked as
+   one the Operator forgot.
 
-   What is left for activation is the caller: the worker has to run `plan` →
-   `embed_ranges` → `commit` inside the attribution transaction, with a real
-   `Embedder`. Whether a real model's vectors recognize the same person again
-   is measurement, not a test, and waits on the model decision.
+   What is left for activation is the caller, and the split across the write
+   transaction is the part to get right. `plan` reads, and `embed_ranges`
+   decodes audio and runs the model — minutes of work per Meeting, and both
+   belong **outside** any transaction, or a re-run holds a write lock over
+   History for as long as it takes to embed. Only `commit` runs inside one:
+   it re-reads the plan, compares it to the one the vectors were computed
+   from, and refuses (`Refused::Moved`) if anything moved while embedding.
+   Revalidation and replacement are the transactional part; reading and
+   embedding are not. Whether a real model's vectors recognize the same
+   person again is measurement, not a test, and waits on the model decision.
 
 ## Two traps in the old branch's version, checked against this code
 
