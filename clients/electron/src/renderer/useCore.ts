@@ -18,6 +18,8 @@ import type { SettingsSetParams } from "@protocol/SettingsSetParams";
 import type { BriefingResponse } from "@protocol/BriefingResponse";
 import type { CalendarAccessResponse } from "@protocol/CalendarAccessResponse";
 import type { PostureResponse } from "@protocol/PostureResponse";
+import type { DiarizeRerun } from "@protocol/DiarizeRerun";
+import type { DiarizeStatusResponse } from "@protocol/DiarizeStatusResponse";
 import type { SpeakerDetailResponse } from "@protocol/SpeakerDetailResponse";
 import type { SpeakerListResponse } from "@protocol/SpeakerListResponse";
 import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
@@ -339,7 +341,89 @@ export function useRegistry() {
     return `data:${response.sample.mimeType};base64,${response.sample.audioBase64}`;
   }, []);
 
-  return { speakers, error, rename, forgetVoice, meetingsFor, sampleFor };
+  // The bulk re-run a model change owes, while the Registry is open.
+  //
+  // Polled, which the rest of this file is not: `diarize/status` carries no
+  // notification, and a background job that reprocesses History is exactly
+  // the thing the Registry exists to make visible rather than let somebody
+  // discover from a hot fan. The interval is the Registry's — it starts when
+  // this hook mounts and is cleared when it unmounts, so nothing runs behind
+  // a screen nobody is on.
+  const [rerun, setRerun] = useState<DiarizeRerun | null>(null);
+  const [rerunError, setRerunError] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
+  // Which request each answer belongs to. A poll that left before Stop can
+  // land after Stop's own answer, carrying the counts from before it — and
+  // applying that would redraw a running re-run over one the Operator has
+  // just stopped. Answers are applied in the order they were *asked for*,
+  // and a late one is dropped.
+  const asked = useRef(0);
+  const applied = useRef(0);
+
+  const readRerun = useCallback(async () => {
+    const mine = ++asked.current;
+    try {
+      const status = await window.evertranscript.request<DiarizeStatusResponse>(
+        "diarize/status",
+        {},
+      );
+      if (mine <= applied.current) return;
+      applied.current = mine;
+      // Absent for every installation that has never had one, which is what
+      // hides the block — there is no flag to read (ADR-0028).
+      setRerun(status.rerun ?? null);
+      setRerunError(null);
+    } catch (cause) {
+      if (mine <= applied.current) return;
+      // The counts already drawn are left alone: they were true when they
+      // arrived, and blanking them would turn a failed read into a claim
+      // that the re-run had finished.
+      setRerunError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void readRerun();
+    const timer = setInterval(() => {
+      void readRerun();
+    }, 2000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [readRerun]);
+
+  const stopRerun = useCallback(async () => {
+    const mine = ++asked.current;
+    setStopping(true);
+    setRerunError(null);
+    try {
+      const status = await window.evertranscript.request<DiarizeStatusResponse>(
+        "diarize/rerunCancel",
+        {},
+      );
+      if (mine > applied.current) {
+        applied.current = mine;
+        setRerun(status.rerun ?? null);
+      }
+    } catch (cause) {
+      setRerunError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setStopping(false);
+    }
+  }, []);
+
+  return {
+    speakers,
+    error,
+    rename,
+    forgetVoice,
+    meetingsFor,
+    sampleFor,
+    rerun,
+    rerunError,
+    stopping,
+    stopRerun,
+  };
 }
 
 /**

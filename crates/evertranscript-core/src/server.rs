@@ -229,6 +229,10 @@ pub enum DiarizeOutcome {
 /// is not a reason to make them wait longer. `Back` work is the overnight
 /// re-run and the catch-up of what a previous Core left, and neither has
 /// anybody waiting.
+fn yields_to_recording(priority: crate::store::diarize_queue::Priority, recording: bool) -> bool {
+    recording && matches!(priority, crate::store::diarize_queue::Priority::Back)
+}
+
 /// Whether the worker still has to take the Meeting out of the line.
 ///
 /// Only for a run that never reached a transaction. A committed one removed
@@ -239,10 +243,6 @@ pub enum DiarizeOutcome {
 /// books settled in the same transaction.
 fn leaves_the_line_afterwards(outcome: DiarizeOutcome) -> bool {
     matches!(outcome, DiarizeOutcome::Skipped)
-}
-
-fn yields_to_recording(priority: crate::store::diarize_queue::Priority, recording: bool) -> bool {
-    recording && matches!(priority, crate::store::diarize_queue::Priority::Back)
 }
 
 /// Stops a run because a Meeting is recording, and records *that* as the
@@ -2381,11 +2381,14 @@ impl Core {
     /// Stops a running Diarization, keeping whatever attribution completed.
     pub async fn diarize_cancel(&self, meeting_id: &str) -> Result<DiarizeStatusResponse> {
         // The running job holds a full id, so a short one would never match
-        // and `cancel` would silently do nothing.
-        let meeting_id = match self.resolve_meeting(meeting_id).await {
-            Ok(Some(resolved)) => resolved,
-            _ => meeting_id.to_string(),
-        };
+        // and `cancel` would silently do nothing. An id that resolves to
+        // nothing is passed through as typed — the queue is asked about it
+        // and answers honestly — but a store that could not be read is an
+        // error, not a reason to go on with a possibly-short id.
+        let meeting_id = self
+            .resolve_meeting(meeting_id)
+            .await?
+            .unwrap_or_else(|| meeting_id.to_string());
         {
             // The token and the removal under one hold of the job lock, the
             // same shape the bulk stop takes and for the same reason: apart,
@@ -5096,14 +5099,17 @@ mod tests {
         );
     }
 
-    /// A run registering into the single cancel's window must not write.
+    /// A run that starts after a cancel has finished finds nothing to claim.
     ///
-    /// The token check and the queue removal are one hold of the job lock,
-    /// and registration takes that lock and re-reads the queue. So a run that
-    /// arrives while a cancel is in flight either registers first, and the
-    /// cancel finds its handle, or arrives after and finds no row.
+    /// The half of the ordering a test can pin deterministically: cancel runs
+    /// to completion, *then* the run starts, and registration's re-read of
+    /// the queue turns it away before it claims anything. The other half —
+    /// that the token check and the removal are one hold of the job lock, so
+    /// a run arriving mid-cancel either registers first and is found, or
+    /// arrives after and finds no row — is a property of the lock's lifetime
+    /// and rests on reading `diarize_cancel`, not on this test.
     #[tokio::test]
-    async fn a_run_registering_into_a_cancel_finds_the_work_already_gone() {
+    async fn a_run_registering_after_a_cancel_finds_the_work_already_gone() {
         use crate::store::diarize_queue::Priority;
 
         let dir = tempfile::tempdir().expect("tempdir");

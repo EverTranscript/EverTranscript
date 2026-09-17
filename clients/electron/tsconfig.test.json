@@ -14,7 +14,9 @@
     "src/renderer/summary-markdown.ts",
     "src/renderer/summary-markdown.test.ts",
     "src/renderer/i18n.ts",
-    "src/renderer/i18n.test.ts"
+    "src/renderer/i18n.test.ts",
+    "src/renderer/rerun-progress.ts",
+    "src/renderer/rerun-progress.test.ts"
   ],
   "exclude": []
 }

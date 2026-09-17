@@ -521,6 +521,18 @@ pub const PENDING_MODEL_CHANGE_WIPE: &str = r#"
 /// job. Production already enqueues at `Back` for Meetings that were never
 /// diarized, so counting the whole backlog would report that catch-up work as
 /// re-run progress and cancelling would delete it.
+///
+/// It hangs off `diarize_queue` rather than off `meetings`, because what it
+/// marks is a *queue row* as the re-run's, not a Meeting as forever the
+/// re-run's. A row leaves the line once — walked, skipped, cancelled, or its
+/// Meeting deleted — and the cascade retires the membership with it, in
+/// whatever transaction removed the row. Hung off `meetings` instead, the
+/// membership outlived the work: a Meeting the backlog had finished, enqueued
+/// again by hand, would be joined back onto the old membership and counted
+/// still owed; cancelling that fresh request would then raise `abandoned` for
+/// a walk that had already happened, and a bulk stop would delete a request
+/// the re-run never made. The chain through `diarize_queue` still reaches
+/// `meetings`, so deleting a Meeting clears both.
 pub const PENDING_MODEL_CHANGE_RERUN: &str = r#"
     CREATE TABLE diarize_rerun (
         id             INTEGER PRIMARY KEY CHECK (id = 1),
@@ -534,7 +546,7 @@ pub const PENDING_MODEL_CHANGE_RERUN: &str = r#"
 
     CREATE TABLE diarize_rerun_backlog (
         meeting_id TEXT PRIMARY KEY NOT NULL
-                   REFERENCES meetings(id) ON DELETE CASCADE
+                   REFERENCES diarize_queue(meeting_id) ON DELETE CASCADE
     ) STRICT;
 "#;
 

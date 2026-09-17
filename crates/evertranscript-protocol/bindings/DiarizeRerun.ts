@@ -19,7 +19,14 @@ model: string, modelVersion: string,
  */
 total: number, 
 /**
- * Meetings it has walked.
+ * Meetings the backlog is through with: `total` less `remaining` less
+ * `abandoned`.
+ *
+ * **Not "Meetings whose Voiceprints were rebuilt."** It counts a run
+ * that committed, a run that could not start at all — no Kept Audio, no
+ * models on disk — and a Meeting deleted while it waited. What it leaves
+ * out is the two kinds of giving up, which are `abandoned`. So a Client
+ * may say processed or finished; it may not promise the walk succeeded.
  */
 done: number, 
 /**
@@ -27,7 +34,8 @@ done: number,
  */
 remaining: number, 
 /**
- * Meetings cancelling gave up on.
+ * Meetings cancelling gave up on — this Meeting's own cancel, or the
+ * bulk stop. Kept apart from `done` on purpose: nothing was walked.
  */
 abandoned: number, 
 /**

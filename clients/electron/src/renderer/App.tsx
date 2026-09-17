@@ -6,9 +6,11 @@ import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 
 import { isMessageKey, plural, t } from "./i18n";
 import { parseSpans, parseSummary } from "./summary-markdown";
+import { rerunLines } from "./rerun-progress";
 import type { Speaker } from "@protocol/Speaker";
 import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
 import type { SpeakerJoinPreview } from "@protocol/SpeakerJoinPreview";
+import type { DiarizeRerun } from "@protocol/DiarizeRerun";
 import {
   useAudioCheck,
   useCalendarAccess,
@@ -821,6 +823,71 @@ function SettingsPanel({
 }
 
 /**
+ * What the bulk re-run is doing, drawn only while there is one.
+ *
+ * A multi-hour background job that reprocesses every meeting is, from
+ * outside, indistinguishable from the product misbehaving — so it says so,
+ * in the screen that describes what the installation holds.
+ *
+ * **It reports and it stops; it does not start anything.** There is no
+ * begin here and no endpoint for one: a re-run is what a model change
+ * causes, not a button.
+ */
+function RerunProgress({
+  rerun,
+  error,
+  stopping,
+  onStop,
+}: {
+  rerun: DiarizeRerun;
+  error: string | null;
+  stopping: boolean;
+  onStop: () => void;
+}): React.JSX.Element {
+  const { state, counts, through } = rerunLines(rerun);
+
+  return (
+    <section className="mb-6 rounded border border-line p-4">
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <h2 className="font-display text-sm font-semibold">{t("registry.rerun.title")}</h2>
+        <button
+          type="button"
+          onClick={onStop}
+          // Already stopped is nothing to stop, and a second click while the
+          // first is in flight would ask again for what is already happening.
+          disabled={rerun.cancelled || stopping}
+          className="push"
+        >
+          {t("registry.rerun.stop")}
+        </button>
+      </div>
+
+      <p className="mb-2 text-xs text-ink-muted">{t("registry.rerun.hint")}</p>
+
+      {rerun.total > 0 ? (
+        <progress
+          value={through}
+          max={rerun.total}
+          aria-label={t("registry.rerun.progress")}
+          className="mb-2 w-full"
+        />
+      ) : null}
+
+      <p className="text-sm">{state}</p>
+
+      <p className="mt-1 text-xs text-ink-muted">{counts}</p>
+
+      <p className="mt-2 text-xs text-ink-muted">{t("registry.rerun.names")}</p>
+      {/* The same sentence a row without a Voiceprint carries, so the two
+          places agree word for word. */}
+      <p className="mt-1 text-xs text-ink-muted">{t("registry.voiceprint.cleared")}</p>
+
+      {error ? <p className="mt-2 text-sm text-recording">{error}</p> : null}
+    </section>
+  );
+}
+
+/**
  * The Voice Registry (stories 30-32).
  *
  * ADR-0008 accepted storing biometric identifiers for people who never
@@ -839,8 +906,18 @@ function RegistryPanel({
   onClose: () => void;
   onOpenMeeting: (meetingId: string) => void;
 }): React.JSX.Element {
-  const { speakers, error, rename, forgetVoice, meetingsFor, sampleFor } =
-    useRegistry();
+  const {
+    speakers,
+    error,
+    rename,
+    forgetVoice,
+    meetingsFor,
+    sampleFor,
+    rerun,
+    rerunError,
+    stopping,
+    stopRerun,
+  } = useRegistry();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -936,6 +1013,19 @@ function RegistryPanel({
       <p className="mb-4 text-xs text-ink-muted">
         {t("registry.hint")}
       </p>
+
+      {/* Absent for every installation that has never had a re-run, and
+          absent is how it stays hidden — there is no flag to consult. */}
+      {rerun ? (
+        <RerunProgress
+          rerun={rerun}
+          error={rerunError}
+          stopping={stopping}
+          onStop={() => {
+            void stopRerun();
+          }}
+        />
+      ) : null}
 
       {error ? (
         <p className="mb-4 text-sm text-recording">{error}</p>

@@ -142,15 +142,15 @@ pub fn state(connection: &Connection) -> Result<Option<Rerun>> {
     let Some((model, model_version, total, abandoned, cancelled)) = row else {
         return Ok(None);
     };
-    // Its own Meetings that are still in line, rather than the whole
-    // backlog: `Back` is a scheduling class, and the catch-up pass for
-    // Meetings that were never diarized uses it too.
-    let remaining: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM diarize_rerun_backlog backlog \
-           JOIN diarize_queue queue ON queue.meeting_id = backlog.meeting_id",
-        [],
-        |row| row.get(0),
-    )?;
+    // Its own Meetings that are still in line, rather than the whole queue:
+    // `Back` is a scheduling class, and the catch-up pass for Meetings that
+    // were never diarized uses it too. No join is needed to say "still in
+    // line" — membership hangs off the queue row and the cascade retires it
+    // when that row leaves, so a member is queued by construction.
+    let remaining: i64 =
+        connection.query_row("SELECT COUNT(*) FROM diarize_rerun_backlog", [], |row| {
+            row.get(0)
+        })?;
     Ok(Some(Rerun {
         model,
         model_version,
@@ -299,8 +299,11 @@ pub fn begin_if_the_model_changed(
 /// **The queue row is the gate.** Membership is given up and `abandoned`
 /// raised only when this call is what removed the row. Cancelling twice
 /// therefore counts once, and a Meeting whose run already committed — which
-/// took its own row out inside that transaction — is left alone rather than
-/// re-described as abandoned after the fact.
+/// took its own row out inside that transaction, and its membership with it —
+/// is left alone rather than re-described as abandoned after the fact. That
+/// holds for a Meeting queued again by hand afterwards too: the new row is
+/// nobody's, so cancelling it cannot reach back and abandon the walk that
+/// already happened.
 ///
 /// Unlike [`cancel`], this does not care about priority: an Operator asking
 /// for one Meeting to stop means it, whether it is bulk work or something
@@ -312,21 +315,26 @@ pub fn begin_if_the_model_changed(
 /// an installation that never had a backlog cannot manufacture one.
 pub fn give_up(connection: &Connection, meeting_id: &str) -> Result<()> {
     let transaction = connection.unchecked_transaction()?;
+    // Asked before the row goes, because the row going is what takes the
+    // membership: it hangs off `diarize_queue` and cascades away with it.
+    let owned = installed(&transaction)?
+        && transaction
+            .query_row(
+                "SELECT 1 FROM diarize_rerun_backlog WHERE meeting_id = ?1",
+                params![meeting_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
     let removed = transaction.execute(
         "DELETE FROM diarize_queue WHERE meeting_id = ?1",
         params![meeting_id],
     )?;
-    if removed > 0 && installed(&transaction)? {
-        let owned = transaction.execute(
-            "DELETE FROM diarize_rerun_backlog WHERE meeting_id = ?1",
-            params![meeting_id],
+    if removed > 0 && owned {
+        transaction.execute(
+            "UPDATE diarize_rerun SET abandoned = abandoned + 1 WHERE id = 1",
+            [],
         )?;
-        if owned > 0 {
-            transaction.execute(
-                "UPDATE diarize_rerun SET abandoned = abandoned + 1 WHERE id = 1",
-                [],
-            )?;
-        }
     }
     transaction.commit()?;
     Ok(())
@@ -391,8 +399,6 @@ pub fn cancel(connection: &Connection, active: Option<&str>) -> Result<Stopped> 
         return Ok(Stopped::default());
     }
 
-    // Named before they are deleted, so membership can be given up for
-    // exactly the rows the queue gave up and no others.
     let giving_up: Vec<String> = {
         let mut statement = transaction.prepare(
             "SELECT backlog.meeting_id FROM diarize_rerun_backlog backlog \
@@ -404,13 +410,12 @@ pub fn cancel(connection: &Connection, active: Option<&str>) -> Result<Stopped> 
         })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
+    // Named first, then removed: the membership rows cascade away with the
+    // queue rows they hang off, so the names have to be in hand before the
+    // deletes rather than read back out of a table the deletes empty.
     for meeting_id in &giving_up {
         transaction.execute(
             "DELETE FROM diarize_queue WHERE meeting_id = ?1",
-            params![meeting_id],
-        )?;
-        transaction.execute(
-            "DELETE FROM diarize_rerun_backlog WHERE meeting_id = ?1",
             params![meeting_id],
         )?;
     }
@@ -688,6 +693,69 @@ mod tests {
     /// would leave them queued and ownerless — `total` the handful that
     /// happened to have finished, `remaining` zero, and cancelling emptying
     /// nothing while the machine kept working.
+    /// A walked Meeting queued again by hand is a new request, not old work.
+    ///
+    /// Membership used to hang off `meetings`, so it outlived the queue row
+    /// it was about. Finishing `a` left its membership behind; enqueuing `a`
+    /// again by hand joined the new row back onto it, and the backlog counted
+    /// a Meeting it had already walked as still owed — `remaining` back up,
+    /// `done` back down. Worse, cancelling that fresh request then found
+    /// membership and raised `abandoned` for a walk that had happened, and a
+    /// bulk stop would have deleted a request the re-run never made.
+    ///
+    /// Membership hangs off the queue row now, so finishing retires it in
+    /// whatever transaction removed the row, and the new row is nobody's.
+    #[test]
+    fn a_meeting_queued_again_after_the_backlog_walked_it_is_not_the_backlogs() {
+        let connection = db();
+        history(&connection);
+        begin(&connection, "wespeaker", "2").expect("begin");
+        let walked = state(&connection).expect("state").expect("a row");
+        assert_eq!((walked.total, walked.remaining, walked.done()), (3, 3, 0));
+
+        // What a committed run does, at the seam every completion goes
+        // through — the real one calls this inside the attribution
+        // transaction.
+        diarize_queue::finish(&connection, "a").expect("finish");
+        let walked = state(&connection).expect("state").expect("a row");
+        assert_eq!(
+            (walked.remaining, walked.done(), walked.abandoned),
+            (2, 1, 0),
+            "one of three walked"
+        );
+
+        // Somebody asks for it again — a fresh request, ahead of the bulk
+        // work, that this backlog has nothing to do with.
+        diarize_queue::enqueue(&connection, "a", diarize_queue::Priority::Front).expect("enqueue");
+        let settled = state(&connection).expect("state").expect("a row");
+        assert_eq!(
+            (settled.remaining, settled.done(), settled.abandoned),
+            (2, 1, 0),
+            "a new row under an old id is not the backlog's work returning"
+        );
+
+        // And neither way of giving up can reach back for it.
+        give_up(&connection, "a").expect("give up");
+        let after = state(&connection).expect("state").expect("a row");
+        assert_eq!(
+            (after.remaining, after.done(), after.abandoned),
+            (2, 1, 0),
+            "cancelling the new request cannot abandon the walk that happened"
+        );
+
+        diarize_queue::enqueue(&connection, "a", diarize_queue::Priority::Back).expect("again");
+        let stopped = cancel(&connection, None).expect("cancel");
+        assert_eq!(
+            stopped.abandoned, 2,
+            "the bulk stop gives up its own two and leaves the new request alone"
+        );
+        assert_eq!(
+            diarize_queue::list(&connection).expect("list"),
+            vec!["a".to_string()],
+            "which is still in line, because nobody cancelled it"
+        );
+    }
+
     #[test]
     fn beginning_again_mid_backlog_keeps_the_work_it_already_owns() {
         let connection = db();

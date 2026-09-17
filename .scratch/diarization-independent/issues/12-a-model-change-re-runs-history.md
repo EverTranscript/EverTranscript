@@ -177,9 +177,9 @@ not all belong to one eligible Speaker. Nothing calls either.
       the same end state as an uninterrupted run
 - [ ] Cancelling stops it, reports honestly how far it got, and leaves every
       already-processed Meeting correct
-- [ ] Progress, pause state and cancellation are observable through the
-      protocol, additively (ADR-0028)
-- [ ] Renumbered pseudonyms and any named Speaker left without a Voiceprint are
+- [x] Progress, pause state and cancellation are observable through the
+      protocol, additively (ADR-0028), and drawn in the Registry
+- [x] Renumbered pseudonyms and any named Speaker left without a Voiceprint are
       stated to the Operator rather than discovered
 
 ## Activation
@@ -347,9 +347,28 @@ reintroduce the one-at-a-time question the single worker answers.
    for a run that never reached a transaction — no audio, no models, a failure
    — and is now the only one the worker removes a row for, since removing one
    after a commit could delete a fresh request made in between.
-5. **The trigger** — `begin_if_the_model_changed` at start, and `begin` from
+
+   **Membership hangs off the queue row, not off the Meeting.** That is what
+   makes retirement part of whichever transaction removed the row, including
+   the attribution commit, with nothing in the hot path to remember it. Hung
+   off `meetings` it outlived the work: a Meeting the backlog had walked,
+   queued again by hand, joined back onto the old membership and was counted
+   still owed; cancelling that fresh request raised `abandoned` for a walk
+   that had happened, and a bulk stop would have deleted a request the re-run
+   never made. A promoted `Front` row keeps its queue row and so keeps its
+   membership, which is what keeps promotion out of `done`.
+5. ~~The Registry reports it~~ — **done** (Q203). An optional block above the
+   Speaker list, drawn only when `rerun` is present, polled while the screen
+   is open and stopped when it closes. It **reports and stops; it starts
+   nothing** — no begin, no endpoint for one. `done` is drawn as "gone
+   through" rather than as a result, `abandoned` stays its own count, and a
+   stopped re-run that still has promoted work says what that row is instead
+   of reading as finished. The pseudonym renumbering and the named Speaker
+   left without a Voiceprint are stated there, the latter in the same words
+   the row itself uses.
+6. **The trigger** — `begin_if_the_model_changed` at start, and `begin` from
    the wipe. Activation, so it waits on the model decision and on 05.
-6. **The seeding path** — consume `claims` before `reconcile::apply` and
+7. **The seeding path** — consume `claims` before `reconcile::apply` and
    re-embed each claimed Speaker's own ranges. The largest piece, it needs
    the models, and it is where the negative half returns.
 

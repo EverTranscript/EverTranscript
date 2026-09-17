@@ -1540,13 +1540,21 @@ pub struct DiarizeRerun {
     /// Meetings this re-run owns.
     #[ts(type = "number")]
     pub total: i64,
-    /// Meetings it has walked.
+    /// Meetings the backlog is through with: `total` less `remaining` less
+    /// `abandoned`.
+    ///
+    /// **Not "Meetings whose Voiceprints were rebuilt."** It counts a run
+    /// that committed, a run that could not start at all — no Kept Audio, no
+    /// models on disk — and a Meeting deleted while it waited. What it leaves
+    /// out is the two kinds of giving up, which are `abandoned`. So a Client
+    /// may say processed or finished; it may not promise the walk succeeded.
     #[ts(type = "number")]
     pub done: i64,
     /// Meetings still in line.
     #[ts(type = "number")]
     pub remaining: i64,
-    /// Meetings cancelling gave up on.
+    /// Meetings cancelling gave up on — this Meeting's own cancel, or the
+    /// bulk stop. Kept apart from `done` on purpose: nothing was walked.
     #[ts(type = "number")]
     pub abandoned: i64,
     /// Whether it was stopped. Work already walked keeps what it concluded.

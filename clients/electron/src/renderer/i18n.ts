@@ -28,6 +28,7 @@ const englishOnMac: Partial<Record<MessageKey, string>> = {
   "backend.key.clear": "Forget Key",
   "registry.sample.play": "Play Voice",
   "registry.rename": "Name This Voice",
+  "registry.rerun.stop": "Stop the Update",
 };
 
 const en = {
@@ -248,6 +249,23 @@ const en = {
     "Nothing to play: this voice was captured before samples were kept, or the recording it came from has been deleted.",
   "registry.suggestions":
     "The calendar listed these people in meetings this voice was in. Suggestions only — being invited is not evidence of having spoken.",
+  "registry.rerun.title": "Voice update",
+  "registry.rerun.hint":
+    "The voice model changed, so every meeting whose audio you kept goes through recognition again, oldest first. It runs in the background, stands aside while anything is recording, and picks up where it left off if you quit.",
+  "registry.rerun.running": "Going through your meetings.",
+  "registry.rerun.paused":
+    "Waiting while a meeting records. It carries on when the recording ends.",
+  "registry.rerun.finished": "Update finished.",
+  "registry.rerun.stopped": "Update stopped.",
+  "registry.rerun.gone": "gone through",
+  "registry.rerun.givenUp": "given up",
+  "registry.rerun.left": "still to go",
+  "registry.rerun.stillQueued":
+    "still queued, because it was asked for on its own. Stopping the update does not cancel that.",
+  "registry.rerun.progress": "Meetings the update has been through",
+  "registry.rerun.stop": "Stop the update",
+  "registry.rerun.names":
+    "Voices you never named are re-numbered as this goes, so one listed as Speaker 3 today may be Speaker 5 tomorrow. A name you gave stays on every word it was on — until that voice is heard again, the row shows no Voiceprint.",
   "watchlist.title": "Watchlist",
   "watchlist.hint": "What Meeting Detection watches. Adding an app is all it takes to watch it.",
   "watchlist.empty": "Nothing is watched. Nothing will record by itself.",
@@ -488,6 +506,21 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "registry.sample.hide": "收起",
     "registry.sample.loading": "正在从录音中截取几秒钟…",
     "registry.sample.gone": "无法播放：这个声音是在保留样本之前采集的，或其来源录音已被删除。",
+    "registry.rerun.title": "声音更新",
+    "registry.rerun.hint":
+      "语音模型已更换，因此每一场保留了录音的会议都会重新做一次识别，从最早的开始。它在后台运行，有会议录音时先让路，退出后再打开会从中断处继续。",
+    "registry.rerun.running": "正在逐场处理你的会议。",
+    "registry.rerun.paused": "正在录音，暂且等待。录音结束后继续。",
+    "registry.rerun.finished": "更新已结束。",
+    "registry.rerun.stopped": "更新已停止。",
+    "registry.rerun.gone": "已处理",
+    "registry.rerun.givenUp": "已放弃",
+    "registry.rerun.left": "待处理",
+    "registry.rerun.stillQueued": "仍在队列中，因为它是被单独请求的。停止更新不会取消它。",
+    "registry.rerun.progress": "更新已处理的会议数",
+    "registry.rerun.stop": "停止更新",
+    "registry.rerun.names":
+      "你没有命名过的声音会在这个过程中重新编号，今天显示为“讲话人 3”的，明天可能是“讲话人 5”。你给出的名称仍留在它标注过的每一个字上——在再次听到那个声音之前，该行显示为无声纹。",
     "registry.suggestions": "日历显示这些人参加了该声音出现过的会议。仅供参考——受邀并不等于发言。",
     "watchlist.title": "监视列表",
     "watchlist.hint": "Meeting Detection 监视的应用。加入列表即表示监视。",
