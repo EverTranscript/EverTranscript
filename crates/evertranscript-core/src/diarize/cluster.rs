@@ -625,7 +625,10 @@ pub fn seeds(
 /// Only evidence in the newest exemplar's space enters the average: two
 /// spaces averaged together is a vector in neither, and the column's model
 /// columns would say otherwise.
-fn refresh_voiceprint(connection: &rusqlite::Connection, speaker_id: &str) -> anyhow::Result<()> {
+pub(super) fn refresh_voiceprint(
+    connection: &rusqlite::Connection,
+    speaker_id: &str,
+) -> anyhow::Result<()> {
     use crate::store::speakers;
 
     let evidence = speakers::exemplars(connection, speaker_id)?;

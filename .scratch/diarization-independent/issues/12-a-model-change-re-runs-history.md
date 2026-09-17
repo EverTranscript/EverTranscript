@@ -368,9 +368,28 @@ reintroduce the one-at-a-time question the single worker answers.
    the row itself uses.
 6. **The trigger** — `begin_if_the_model_changed` at start, and `begin` from
    the wipe. Activation, so it waits on the model decision and on 05.
-7. **The seeding path** — consume `claims` before `reconcile::apply` and
-   re-embed each claimed Speaker's own ranges. The largest piece, it needs
-   the models, and it is where the negative half returns.
+7. ~~The seeding writer~~ — **written** (Q204, Q205), in `diarize::reseed`,
+   called by nothing. `plan` reads a Meeting's ranges, `embed_ranges` embeds
+   exactly those through an injected reader and model, and `commit` replaces
+   what the Meeting says and recomputes the Voiceprints that moved.
+
+   **Not off `claims`.** Claims is a shortcut for assigning a whole cluster;
+   a named Speaker's own usable ranges are still theirs when the cluster
+   around them comes out mixed, so the ranges come from the segments. Not
+   from cluster centroids either — `claims`'s own doc says why — and not from
+   the old model's saved sample cuts (ADR-0037).
+
+   **The replacement owns `(speaker_id, meeting_id)`, every writer's rows.**
+   Both columns already exist, so no new provenance and no new migration.
+   Narrower would not have worked: `correct_segment` writes against the same
+   Meeting, and a correction that moved a segment away and then back leaves a
+   negative behind — replacing only this path's rows would re-derive the
+   positive and leave that negative standing.
+
+   What is left for activation is the caller: the worker has to run `plan` →
+   `embed_ranges` → `commit` inside the attribution transaction, with a real
+   `Embedder`. Whether a real model's vectors recognize the same person again
+   is measurement, not a test, and waits on the model decision.
 
 ## Two traps in the old branch's version, checked against this code
 
@@ -387,7 +406,10 @@ next Core start. **Absent metadata is not evidence of a model change.** The
 first start after the feature lands has to record the current identity and
 enqueue nothing.
 
-**`relearnable` includes the Operator, and `claims` must not.** It selects
+**`relearnable` includes the Operator, and `claims` must not.** Already
+handled — `claims` filters the Operator out and has tests for it, and
+`reseed::plan` uses the same filter. Kept here because it is why both do.
+It selects
 `forgotten = 0 AND (display_name IS NOT NULL OR is_operator = 1)`, which is
 right for its own purpose — the Operator is a Speaker a re-run gives a
 Voiceprint back to. But this ticket says the Operator is rebuilt **by the

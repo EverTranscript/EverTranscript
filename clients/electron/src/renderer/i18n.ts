@@ -262,7 +262,7 @@ const en = {
   "registry.rerun.left": "still to go",
   "registry.rerun.stillQueued":
     "still queued, because it was asked for on its own. Stopping the update does not cancel that.",
-  "registry.rerun.progress": "Meetings the update has been through",
+  "registry.rerun.progress": "Meetings the update has dealt with",
   "registry.rerun.stop": "Stop the update",
   "registry.rerun.names":
     "Voices you never named are re-numbered as this goes, so one listed as Speaker 3 today may be Speaker 5 tomorrow. A name you gave stays on every word it was on — until that voice is heard again, the row shows no Voiceprint.",
@@ -517,7 +517,7 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "registry.rerun.givenUp": "已放弃",
     "registry.rerun.left": "待处理",
     "registry.rerun.stillQueued": "仍在队列中，因为它是被单独请求的。停止更新不会取消它。",
-    "registry.rerun.progress": "更新已处理的会议数",
+    "registry.rerun.progress": "更新已了结的会议数",
     "registry.rerun.stop": "停止更新",
     "registry.rerun.names":
       "你没有命名过的声音会在这个过程中重新编号，今天显示为“讲话人 3”的，明天可能是“讲话人 5”。你给出的名称仍留在它标注过的每一个字上——在再次听到那个声音之前，该行显示为无声纹。",

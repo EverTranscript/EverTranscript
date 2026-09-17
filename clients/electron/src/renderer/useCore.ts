@@ -343,12 +343,12 @@ export function useRegistry() {
 
   // The bulk re-run a model change owes, while the Registry is open.
   //
-  // Polled, which the rest of this file is not: `diarize/status` carries no
-  // notification, and a background job that reprocesses History is exactly
-  // the thing the Registry exists to make visible rather than let somebody
-  // discover from a hot fan. The interval is the Registry's — it starts when
-  // this hook mounts and is cleared when it unmounts, so nothing runs behind
-  // a screen nobody is on.
+  // Polled, like `useCore`'s own five-second fallback and for a related
+  // reason: `diarize/status` carries no notification, and a background job
+  // that reprocesses History is exactly the thing the Registry exists to make
+  // visible rather than let somebody discover from a hot fan. The interval is
+  // the Registry's — it starts when this hook mounts and is cleared when it
+  // unmounts, so nothing runs behind a screen nobody is on.
   const [rerun, setRerun] = useState<DiarizeRerun | null>(null);
   const [rerunError, setRerunError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -359,6 +359,31 @@ export function useRegistry() {
   // and a late one is dropped.
   const asked = useRef(0);
   const applied = useRef(0);
+
+  // Accept an answer, and pull the Speaker list with it when the re-run has
+  // moved. The rows underneath are what the re-run is *changing* — voices
+  // relearned, pseudonyms re-numbered, a name left without a Voiceprint — and
+  // a counter ticking over a list frozen at mount is the screen contradicting
+  // itself. Only on a real change, so a poll that finds nothing new costs one
+  // request rather than two.
+  const accept = useCallback(
+    (next: DiarizeRerun | null) => {
+      setRerun((seen) => {
+        const moved =
+          seen === null ||
+          next === null ||
+          seen.done !== next.done ||
+          seen.remaining !== next.remaining ||
+          seen.abandoned !== next.abandoned ||
+          seen.cancelled !== next.cancelled ||
+          seen.model !== next.model ||
+          seen.modelVersion !== next.modelVersion;
+        if (moved) void refresh();
+        return next;
+      });
+    },
+    [refresh],
+  );
 
   const readRerun = useCallback(async () => {
     const mine = ++asked.current;
@@ -371,7 +396,7 @@ export function useRegistry() {
       applied.current = mine;
       // Absent for every installation that has never had one, which is what
       // hides the block — there is no flag to read (ADR-0028).
-      setRerun(status.rerun ?? null);
+      accept(status.rerun ?? null);
       setRerunError(null);
     } catch (cause) {
       if (mine <= applied.current) return;
@@ -380,7 +405,7 @@ export function useRegistry() {
       // that the re-run had finished.
       setRerunError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, []);
+  }, [accept]);
 
   useEffect(() => {
     void readRerun();
@@ -403,14 +428,14 @@ export function useRegistry() {
       );
       if (mine > applied.current) {
         applied.current = mine;
-        setRerun(status.rerun ?? null);
+        accept(status.rerun ?? null);
       }
     } catch (cause) {
       setRerunError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setStopping(false);
     }
-  }, []);
+  }, [accept]);
 
   return {
     speakers,

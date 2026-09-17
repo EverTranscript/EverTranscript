@@ -38,6 +38,7 @@ pub mod fixture;
 pub mod live;
 pub mod operator;
 pub mod reconcile;
+pub mod reseed;
 pub mod runner;
 pub mod score;
 

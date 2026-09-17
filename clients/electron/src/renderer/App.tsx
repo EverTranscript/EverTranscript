@@ -835,12 +835,10 @@ function SettingsPanel({
  */
 function RerunProgress({
   rerun,
-  error,
   stopping,
   onStop,
 }: {
   rerun: DiarizeRerun;
-  error: string | null;
   stopping: boolean;
   onStop: () => void;
 }): React.JSX.Element {
@@ -853,9 +851,12 @@ function RerunProgress({
         <button
           type="button"
           onClick={onStop}
-          // Already stopped is nothing to stop, and a second click while the
-          // first is in flight would ask again for what is already happening.
-          disabled={rerun.cancelled || stopping}
+          // Stop is for work still in line. Already stopped is nothing to
+          // stop; a second click while the first is in flight asks again for
+          // what is already happening; and an emptied line has nothing left
+          // to give up, so a click there would turn a re-run that finished
+          // into one the Operator is told they stopped.
+          disabled={rerun.cancelled || stopping || rerun.remaining === 0}
           className="push"
         >
           {t("registry.rerun.stop")}
@@ -869,6 +870,9 @@ function RerunProgress({
           value={through}
           max={rerun.total}
           aria-label={t("registry.rerun.progress")}
+          // Labelled for what it measures: rows that have left the line,
+          // walked and given up alike. "Been through" would overclaim the
+          // given-up ones.
           className="mb-2 w-full"
         />
       ) : null}
@@ -881,8 +885,6 @@ function RerunProgress({
       {/* The same sentence a row without a Voiceprint carries, so the two
           places agree word for word. */}
       <p className="mt-1 text-xs text-ink-muted">{t("registry.voiceprint.cleared")}</p>
-
-      {error ? <p className="mt-2 text-sm text-recording">{error}</p> : null}
     </section>
   );
 }
@@ -1019,12 +1021,18 @@ function RegistryPanel({
       {rerun ? (
         <RerunProgress
           rerun={rerun}
-          error={rerunError}
           stopping={stopping}
           onStop={() => {
             void stopRerun();
           }}
         />
+      ) : null}
+
+      {/* Outside the block, because the first read failing is exactly the
+          case where there is no block: `rerun` is still null, and an error
+          drawn inside one would be an error nobody ever sees. */}
+      {rerunError ? (
+        <p className="mb-4 text-sm text-recording">{rerunError}</p>
       ) : null}
 
       {error ? (
