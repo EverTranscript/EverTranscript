@@ -392,6 +392,17 @@ client_request_definitions! {
         params: DiarizeCancelParams,
         response: DiarizeStatusResponse,
     },
+    /// Stops the bulk re-run, keeping every Meeting it already walked.
+    ///
+    /// Only the re-run's own Meetings, and only those still waiting their
+    /// turn as bulk work: a Meeting somebody promoted because they are
+    /// waiting for it is no longer this job's to cancel, and the catch-up
+    /// pass for Meetings that were never diarized is not this job's work at
+    /// all.
+    DiarizeRerunCancel => "diarize/rerunCancel" {
+        params: DiarizeRerunCancelParams,
+        response: DiarizeStatusResponse,
+    },
 }
 
 server_notification_definitions! {
@@ -1500,6 +1511,50 @@ pub struct DiarizeStatusResponse {
     /// "nothing waiting" from "a Core too old to have a queue".
     #[serde(default)]
     pub queued: Vec<String>,
+    /// The bulk re-run of History a model change owes, when one has been
+    /// asked for.
+    ///
+    /// Absent — not null, not a zeroed block — when no backlog has ever been
+    /// requested, so a History with no re-run tables and one whose first
+    /// start merely wrote down which model it uses both serialize exactly as
+    /// they did before this field existed (ADR-0028).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub rerun: Option<DiarizeRerun>,
+}
+
+/// A bulk re-run of History, as far as a Client needs to know about it.
+///
+/// The four quantities are kept apart on purpose. `done` counts Meetings
+/// walked; `remaining` counts those still owed; `abandoned` counts those
+/// cancelling threw away. Nothing folds abandoned work into `done`, because
+/// an Operator who stopped a re-run at one of forty should not be told forty
+/// were walked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiarizeRerun {
+    /// The embedding this backlog is for.
+    pub model: String,
+    pub model_version: String,
+    /// Meetings this re-run owns.
+    #[ts(type = "number")]
+    pub total: i64,
+    /// Meetings it has walked.
+    #[ts(type = "number")]
+    pub done: i64,
+    /// Meetings still in line.
+    #[ts(type = "number")]
+    pub remaining: i64,
+    /// Meetings cancelling gave up on.
+    #[ts(type = "number")]
+    pub abandoned: i64,
+    /// Whether it was stopped. Work already walked keeps what it concluded.
+    pub cancelled: bool,
+    /// Whether a recording is holding the backlog. Bulk work stands aside
+    /// while a Meeting is being recorded and resumes when it ends, so this
+    /// is a wait rather than a stop and `remaining` is still owed.
+    pub paused_for_recording: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1508,6 +1563,11 @@ pub struct DiarizeStatusResponse {
 pub struct DiarizeCancelParams {
     pub meeting_id: String,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct DiarizeRerunCancelParams {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

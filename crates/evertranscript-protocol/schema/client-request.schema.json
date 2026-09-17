@@ -631,6 +631,23 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "Stops the bulk re-run, keeping every Meeting it already walked.\n\nOnly the re-run's own Meetings, and only those still waiting their\nturn as bulk work: a Meeting somebody promoted because they are\nwaiting for it is no longer this job's to cancel, and the catch-up\npass for Meetings that were never diarized is not this job's work at\nall.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "diarize/rerunCancel"
+        },
+        "params": {
+          "$ref": "#/$defs/DiarizeRerunCancelParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -715,6 +732,9 @@
       "required": [
         "meetingId"
       ]
+    },
+    "DiarizeRerunCancelParams": {
+      "type": "object"
     },
     "DiarizeStatusParams": {
       "type": "object"

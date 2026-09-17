@@ -2292,3 +2292,33 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Ref:** (pending)
 **Supersedes:** Q190 — its persistence-boundary claim was on the wrong side of the writer's queue, and it left the cancel handle unreachable across completion. Its reason-latching and withdrawn-latency findings stand.
+
+## Q193 — diarization/12 — gate-resolution
+
+**Question:** `rerun::state` fails with `no such table: diarize_rerun` on every History in the field. What should a production reader do with that?
+**Options considered:** Read it only after activation / match the error text and treat that one message as "no re-run" / ask `sqlite_master` whether the table is there
+**Chosen:** `state` asks `sqlite_master` for the table by name and answers `None` when it is absent; every other failure propagates.
+**Decided-by:** agent
+**Justification:** Ticket 12's own seam list called this out as worth settling before a reader was written rather than inside one, and the reader is now written. "Read it only after activation" makes the status call depend on a flag that does not exist and would have to be invented. Matching the error text ties the code to a SQLite message and would swallow a corrupt page or a locked file as "no re-run", which is exactly the failure a status pane must not hide. Asking by name is one cheap query and says what it means. The half-installed case — the row table present, the backlog table not — deliberately still errors, because that is a broken install and not an absence. Above it, `Core::rerun_block` degrades a failed read to no block with a warning rather than failing the whole status call, the same degradation `queued` already takes: a Client that cannot be told about the backlog should still be told what is running.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q194 — diarization/12 — tradeoff
+
+**Question:** The re-run's `rerun` block is optional on the wire. Which states are absent, and does a recorded model with no backlog count as a re-run?
+**Options considered:** Present whenever the tables exist / present whenever a row exists / present only once a backlog was actually asked for
+**Chosen:** Only once one was asked for — `total > 0 || abandoned > 0 || cancelled`. A first start that merely records the embedding serializes exactly as before.
+**Decided-by:** agent
+**Justification:** `begin_if_the_model_changed` writes a row on first start recording which embedding the History is in and asks for nothing, because an absent row is every History today and reading it as a model change would enqueue all of History after an ordinary update. That row is metadata, not a backlog, and reporting it as a re-run of zero Meetings would put a progress bar in front of every Operator who never triggered one. So two cases have to encode byte-identically to the old shape and both are asserted: no tables at all, and a baseline row. `cancelled` is in the predicate so that stopping a backlog with nothing left in it is still a re-run that was stopped rather than one that never existed. The four quantities stay apart — `done`, `remaining`, `abandoned`, `cancelled` — with `paused_for_recording` separate again, because a recording is a wait and the Meetings are still owed; folding abandoned into done would tell an Operator who stopped at one of forty that forty were walked. Removing the suppression makes the wire-shape test fail; hard-coding the pause false makes the progress test fail.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q195 — diarization/12 — tradeoff
+
+**Question:** A bulk stop and a run's commit race. Both write; the queue row is removed in a third write. What keeps the count honest, and what is left unclosed?
+**Options considered:** Route the bulk stop through the existing single-Meeting cancel / clear the whole `Back` queue / stop the eligible job's token first and let the store's single writer order the rest / hold a lock across each run
+**Chosen:** The third. The token is cancelled before the mutation is queued, and `cancel` tells a walked Meeting from an abandoned one by its `diarized_at` against the re-run's own `started_at`.
+**Decided-by:** agent
+**Justification:** The first two were ruled out by what they destroy: `diarize_cancel` takes a Meeting out of the line whatever put it there, so applying it widely would throw away the catch-up pass and anything an Operator is waiting for, and clearing `Back` wholesale does the same more bluntly. What remains is an ordering argument, and it holds because `Store::write` is one sequential writer: a job that has not reached its writer closure finds the token already cancelled and writes nothing, so its Meeting is genuinely abandoned; a job past it has committed, and the queue row it still holds is not evidence that it has not been walked, because the worker removes that row in a later write. `julianday` rather than a string compare, since both stamps are local-time RFC 3339 and two offsets do not sort — checked against the four shapes `chrono::Local::now().to_rfc3339()` produces. Eligibility is the same rule `cancel` applies, asked about one Meeting by `owns_bulk_work`: a Meeting promoted to `Front` keeps running because somebody is waiting for it, and the catch-up pass was never this job's. One window is left open knowingly: the worker can sit between reading the head of the queue and registering the job, so that one Meeting is walked after the stop. It is bounded at one — the next pass finds nothing of this backlog's — the Meeting keeps what the walk concluded, and closing it would mean holding a lock across an entire multi-minute run. Four mutations falsify the four guards; the fourth, dropping the priority filter from `owns_bulk_work`, passed until the promoted-job assertion was added, so that rule was untested when first written.
+**Outcome:** applied
+**Ref:** (pending)

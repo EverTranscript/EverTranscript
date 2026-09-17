@@ -100,10 +100,12 @@ between consecutive checks, so **no single stage bounds the delay** — the
 guarantee is that a run stopped before that last check writes nothing, not that
 a stop lands within a window or interrupts a commit already under way.
 
-The two that are written and **unwired**: `store::rerun` exists — `Rerun`, `state`, `begin`,
-`begin_if_the_model_changed`, `cancel`, the last enqueuing at
-`Priority::Back` oldest-first — with its tables out of `MIGRATIONS`, so every
-function fails on a current History by design. `cluster::Claims` and
+`store::rerun` exists — `Rerun`, `state`, `begin`, `begin_if_the_model_changed`,
+`cancel`, `owns_bulk_work` — with its tables out of `MIGRATIONS`. `state` now
+answers "no re-run" for an uninstalled schema, asked of `sqlite_master` by name
+rather than inferred from an error string, so a genuinely broken read is still
+an error; `begin` and `begin_if_the_model_changed` remain unreachable from
+production, so no code path can start a backlog. `cluster::Claims` and
 `cluster::claims` exist too, reading the standing attribution before
 `reconcile::apply` overwrites it, and abstaining where a cluster's segments do
 not all belong to one eligible Speaker. Nothing calls either.
@@ -138,17 +140,19 @@ not all belong to one eligible Speaker. Nothing calls either.
    with no `diarize_rerun` row is every History today and absent metadata is
    not evidence of a model change. Until that exists the re-run cannot start,
    resume or report, whatever the store can already express.
-3. The protocol, additively (ADR-0028): an optional `rerun` block on
-   `DiarizeStatusResponse` — which today carries `state`, `meetingId`,
-   `doneMs`, `totalMs`, `queued` and nothing about a bulk run — and a
-   `diarize/rerunCancel` method. A Core with no re-run must encode
-   byte-identically to today's shape.
-4. The Registry's progress, pause and cancel affordances. Nothing in
+3. The Registry's progress, pause and cancel affordances. Nothing in
    `clients/electron/src` reads a re-run; the existing `rerunSetup` is
-   onboarding and unrelated.
-
-A stray gitignored `client-request.schema.json.actual` from 2026-09-15 mentions
-`diarize/rerunCancel`; it is stale test output, not a committed schema.
+   onboarding and unrelated. The wire is ready for it: `DiarizeStatusResponse`
+   carries an optional `rerun` block — `total`, `done`, `remaining`,
+   `abandoned`, `cancelled`, `pausedForRecording` — absent whenever no backlog
+   was asked for, so a History with no tables and one whose first start merely
+   recorded its embedding both encode byte-identically to the old shape
+   (ADR-0028). `diarize/rerunCancel` stops only this backlog's own bulk rows
+   and, when it is one of them, the Meeting being walked; a promoted `Front`
+   Meeting and the catch-up pass are left alone. A run that committed before
+   the stop is counted walked rather than abandoned, told apart by its
+   `diarized_at` against the re-run's own start, because the commit and the
+   queue removal are two separate writes.
 
 ## Acceptance criteria
 
@@ -302,21 +306,20 @@ reintroduce the one-at-a-time question the single worker answers.
 
 ### The remaining seams, smallest first
 
-1. **Pause while a Meeting records — missing, and it is not only the
-   re-run's.** `run_diarization_queue` never consults `is_recording()`; the
-   only callers are `detect::policy` and `detect::driver`. So today's
-   overnight catch-up already competes with a live recording, and the re-run
-   would too. The fix is a guard in the worker's select, which changes
-   behaviour for *all* `Back` work — its own decision, not part of
-   activating the re-run.
-2. **`state` errors on an unregistered schema**, with `no such table:
-   diarize_rerun`. Any production reader needs a policy for that: tolerate
-   the missing table as "no re-run", or read it only after activation.
-   Worth settling before a reader is written, not inside one.
-3. **`diarize/status` gains an optional `rerun` block** — additive
-   (ADR-0028), needing a test that a Core with no re-run encodes
-   byte-identically to today.
-4. **`diarize/rerunCancel`** — an additive method over `rerun::cancel`.
+1. ~~Pause while a Meeting records~~ — **done** (Q187, Q190, Q192). The
+   worker yields only `Back` work, keeps the row owed, and honours the stop
+   inside the store's writer closure. It changed behaviour for all `Back`
+   work, including today's catch-up pass, which was the point.
+2. ~~`state` errors on an unregistered schema~~ — **done**. It answers "no
+   re-run" for an absent table and propagates every other failure.
+3. ~~`diarize/status` gains an optional `rerun` block~~ — **done**, with the
+   byte-identical test for both the no-tables and the first-start-baseline
+   cases.
+4. ~~`diarize/rerunCancel`~~ — **done**, over `rerun::cancel` and
+   `rerun::owns_bulk_work`. One window is left open deliberately: the worker
+   can be between reading the head of the queue and registering the job, in
+   which case that one Meeting is walked after the stop. Bounded at one, and
+   closing it would need a lock held across a whole run.
 5. **The trigger** — `begin_if_the_model_changed` at start, and `begin` from
    the wipe. Activation, so it waits on the model decision and on 05.
 6. **The seeding path** — consume `claims` before `reconcile::apply` and

@@ -46,10 +46,10 @@ WeSpeaker Voiceprints to a ReDimNet2 resolve without a word (DECISIONS Q154).
 | Ticket | Why |
 |---|---|
 | 03 | Turns come from segmentation. Main landed its own turn-placement implementation while this branch built a different one; reconciling them is its own work, not a merge. |
-| 05 | A model change clears Voiceprints. Migration written and tested, **not registered**; Registry messaging and activation remain — see below. |
+| 05 | A model change clears Voiceprints. Migration written and tested, **not registered**. Registry messaging is done — the wipe keeps the model stamp so a named Speaker can say *why* it is empty (Q184, `3d65e16`). Activation remains. |
 | 06 | ReDimNet2-B3 replaces WeSpeaker. **Measurement is complete**: both halves, plus the split-model architecture on dev (Q180) and on held-out test at declared points (Q183). No measurement work remains. The decision is the user's and is deliberately held open. See below. |
 | 07 | Recognition thresholds are re-derived. Dev curve and held-out validation done, now also across both clustering arms and both embeddings at three declared points. No point selected — not because the DER bar is missing, which a threshold does not need, but because ranking the four recognition quantities against each other needs a rate of exchange between a correct and a wrong attributed second, and that is the user's. |
-| 12 | A model change re-runs History. `cluster::claims` built and unwired (`058bcad`); the rest wants 05, a migration or the protocol — see below. |
+| 12 | A model change re-runs History. Built: `cluster::claims` (`058bcad`), the queue's recording pause and its persistence-boundary stop (Q190/Q192), and the additive `rerun` status block plus `diarize/rerunCancel`. `begin` and `begin_if_the_model_changed` stay unreachable and the tables unregistered; the seeding writer and the Registry surface remain — see below. |
 
 ### 05 and 12, audited against this branch rather than their old Done flags
 
