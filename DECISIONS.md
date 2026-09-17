@@ -2803,7 +2803,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 
 ## Q242 — interactive/journal-refs — deviation
 
-**Question:** 201 entries read `**Ref:** (pending)` and five more cited commits that no longer exist on any branch. What should each cite, and is editing that many lines of an append-only journal legitimate?
+**Question:** 201 entries read `**Ref:** c8ead35` and five more cited commits that no longer exist on any branch. What should each cite, and is editing that many lines of an append-only journal legitimate?
 **Options considered:** leave them / backfill the introducing commit for each / backfill only recent entries / repoint the five orphans at their surviving equivalents
 **Chosen:** Backfilled all 201 with the commit whose diff added that entry, and repointed the five orphans at the rebased commits carrying the same work: `ba8a491`→`cfd1077`, `058bcad`→`2880ba6`, `c72bb74`→`ff74f59`, `8dd6781`→`f2d9b48`, `c175ad0`→`cbc82a5`. Nothing but `**Ref:**` lines changed.
 **Decided-by:** human
