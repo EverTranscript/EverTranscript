@@ -47,7 +47,26 @@ pub struct Rerun {
 }
 
 impl Rerun {
-    /// Meetings already walked.
+    /// Meetings the backlog is through with.
+    ///
+    /// **Not "Meetings whose Voiceprints were rebuilt".** Five things take a
+    /// Meeting out of the queue and they do not all mean the same thing:
+    ///
+    /// * a run that committed — walked, and it removed its own row inside the
+    ///   transaction that wrote the attribution;
+    /// * a run that never reached a transaction — no Kept Audio, no models on
+    ///   disk, or a failure on its own recording. Nothing was rebuilt and
+    ///   nothing would be next pass, so the backlog is through with it;
+    /// * the Operator cancelling that one Meeting, and
+    /// * [`cancel`] stopping the whole backlog — both given up on, and both
+    ///   counted in `abandoned` instead, which this subtracts;
+    /// * the Meeting being deleted, which cascades the queue row and the
+    ///   membership away together.
+    ///
+    /// So this is *processed or no longer processable*, and the two kinds of
+    /// giving up are kept out of it. A deleted Meeting lands here rather than
+    /// in `abandoned` because nobody stopped it; counting it as rebuilt would
+    /// be the lie, and the doc is the fix rather than a trigger on `meetings`.
     ///
     /// Saturating because the numbers come from different places: the total
     /// was written when the backlog was enqueued and the remainder is counted
@@ -266,6 +285,51 @@ pub fn begin_if_the_model_changed(
             Ok(None)
         }
     }
+}
+
+/// Takes one Meeting out of the line because somebody cancelled it, and
+/// settles the re-run's books in the same breath.
+///
+/// The queue removal on its own is what `diarize/cancel` used to do, and it
+/// made the arithmetic lie: a cancelled Meeting left the queue while its
+/// membership stayed, so `remaining` fell, `abandoned` did not, and `done` —
+/// total minus the two — counted a Meeting nobody had walked. Cancelling is
+/// giving up, and it is recorded as that.
+///
+/// **The queue row is the gate.** Membership is given up and `abandoned`
+/// raised only when this call is what removed the row. Cancelling twice
+/// therefore counts once, and a Meeting whose run already committed — which
+/// took its own row out inside that transaction — is left alone rather than
+/// re-described as abandoned after the fact.
+///
+/// Unlike [`cancel`], this does not care about priority: an Operator asking
+/// for one Meeting to stop means it, whether it is bulk work or something
+/// somebody promoted.
+///
+/// A History with no re-run tables, no row, or only the identity the first
+/// start records still has its queue row removed — that part is not the
+/// re-run's business — and nothing is written to the re-run, so cancelling on
+/// an installation that never had a backlog cannot manufacture one.
+pub fn give_up(connection: &Connection, meeting_id: &str) -> Result<()> {
+    let transaction = connection.unchecked_transaction()?;
+    let removed = transaction.execute(
+        "DELETE FROM diarize_queue WHERE meeting_id = ?1",
+        params![meeting_id],
+    )?;
+    if removed > 0 && installed(&transaction)? {
+        let owned = transaction.execute(
+            "DELETE FROM diarize_rerun_backlog WHERE meeting_id = ?1",
+            params![meeting_id],
+        )?;
+        if owned > 0 {
+            transaction.execute(
+                "UPDATE diarize_rerun SET abandoned = abandoned + 1 WHERE id = 1",
+                [],
+            )?;
+        }
+    }
+    transaction.commit()?;
+    Ok(())
 }
 
 /// What a bulk stop did.

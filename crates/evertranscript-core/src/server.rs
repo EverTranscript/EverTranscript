@@ -229,6 +229,18 @@ pub enum DiarizeOutcome {
 /// is not a reason to make them wait longer. `Back` work is the overnight
 /// re-run and the catch-up of what a previous Core left, and neither has
 /// anybody waiting.
+/// Whether the worker still has to take the Meeting out of the line.
+///
+/// Only for a run that never reached a transaction. A committed one removed
+/// its own row inside the commit, and removing it again afterwards could
+/// delete a fresh request somebody made in between — the row under that id is
+/// no longer the one this run was working. A pause left it owed on purpose,
+/// and a cancellation, single or bulk, already took it out with the re-run's
+/// books settled in the same transaction.
+fn leaves_the_line_afterwards(outcome: DiarizeOutcome) -> bool {
+    matches!(outcome, DiarizeOutcome::Skipped)
+}
+
 fn yields_to_recording(priority: crate::store::diarize_queue::Priority, recording: bool) -> bool {
     recording && matches!(priority, crate::store::diarize_queue::Priority::Back)
 }
@@ -2102,11 +2114,13 @@ impl Core {
                 Ok(outcome) => outcome,
                 // Never fatal, and never the Meeting's problem: the record
                 // stands whether or not anyone could be identified in it.
-                // Out of the line, because a run that failed on its own audio
-                // would fail the same way on the next pass.
+                // `Skipped`, because nothing reached a transaction and so
+                // nothing has taken the row out — and it has to come out, or
+                // this loop reads the same head, fails the same way and never
+                // reaches the work behind it.
                 Err(error) => {
                     tracing::warn!(meeting = %meeting_id, %error, "Diarization did not complete");
-                    DiarizeOutcome::Wrote(0)
+                    DiarizeOutcome::Skipped
                 }
             };
 
@@ -2120,14 +2134,7 @@ impl Core {
                 }
             }
 
-            // Only for a run that never reached a transaction. A written one
-            // took its own row out inside the commit, and removing it again
-            // here could delete a fresh request made in between. A pause left
-            // it owed on purpose, and a cancellation already deleted it — in
-            // `diarize_cancel`, or in the bulk stop — so finishing either here
-            // would turn "stand aside" into "drop", which is the bug this
-            // outcome exists to stop.
-            if let DiarizeOutcome::Skipped = outcome {
+            if leaves_the_line_afterwards(outcome) {
                 let done = meeting_id.clone();
                 if let Err(error) = self
                     .store
@@ -2379,23 +2386,31 @@ impl Core {
             Ok(Some(resolved)) => resolved,
             _ => meeting_id.to_string(),
         };
-        if let Some(job) = self.diarization.lock().await.as_ref()
-            && job.meeting_id == meeting_id
         {
-            job.cancel.cancel();
-        }
-        // Out of the line as well as stopped. Cancelling a Meeting that is
-        // still waiting has to mean it does not run — otherwise "cancel"
-        // means "cancel, then run anyway in four minutes", which is not a
-        // word anyone would choose for that. The running job is taken out by
-        // the worker when its run ends, cancelled or not.
-        let queued = meeting_id.clone();
-        if let Err(error) = self
-            .store
-            .write(move |connection| crate::store::diarize_queue::finish(connection, &queued))
-            .await
-        {
-            warn!(meeting = %meeting_id, %error, "could not take a Meeting out of the Diarization queue");
+            // The token and the removal under one hold of the job lock, the
+            // same shape the bulk stop takes and for the same reason: apart,
+            // a run can register between them and go on to write after the
+            // Operator was told it had stopped. Registration takes this lock
+            // and re-reads the queue, so whichever side gets here first wins
+            // cleanly. No inference happens under it — the run is spawned
+            // after registration, with the lock released.
+            let running = self.diarization.lock().await;
+            if let Some(job) = running.as_ref()
+                && job.meeting_id == meeting_id
+            {
+                job.cancel.cancel();
+            }
+            // Out of the line as well as stopped. Cancelling a Meeting that
+            // is still waiting has to mean it does not run — otherwise
+            // "cancel" means "cancel, then run anyway in four minutes", which
+            // is not a word anyone would choose for that. And giving up on
+            // one of the bulk re-run's own Meetings is giving up, so the
+            // backlog's books are settled in the same transaction rather than
+            // left to report it as walked.
+            let queued = meeting_id.clone();
+            self.store
+                .write(move |connection| crate::store::rerun::give_up(connection, &queued))
+                .await?;
         }
         self.diarize_status().await
     }
@@ -4867,6 +4882,339 @@ mod tests {
                 .expect("a row")
                 .cancelled,
             "and the row it did record was left alone"
+        );
+    }
+
+    /// Runs the worker until the queue drains, or gives up.
+    ///
+    /// Bounded: a loop that never drains is the failure being tested, so the
+    /// deadline is short and the queue it was still holding is returned for
+    /// the assertion to name.
+    async fn drain(core: &Arc<Core>, within: std::time::Duration) -> Vec<String> {
+        let shutdown = tokio_util::sync::CancellationToken::new();
+        let worker = tokio::spawn(Arc::clone(core).run_diarization_queue(shutdown.clone()));
+        let deadline = std::time::Instant::now() + within;
+        let mut queued = core.diarize_status().await.expect("status").queued;
+        while !queued.is_empty() && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            queued = core.diarize_status().await.expect("status").queued;
+        }
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), worker)
+            .await
+            .expect("the worker did not stop when shutdown was cancelled")
+            .expect("the worker panicked");
+        queued
+    }
+
+    /// A run that fails before any transaction still leaves the line.
+    ///
+    /// It has to. Only a committed run takes its own row out, so a failure
+    /// that stayed reported as written would leave the row at the head, and
+    /// the loop would read it, fail the same way and never reach the work
+    /// behind it — a spin, not a retry.
+    #[tokio::test]
+    async fn a_run_that_fails_before_writing_leaves_the_line_and_the_queue_moves_on() {
+        use crate::store::diarize_queue::Priority;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        meetings_with_audio(&core, &["gone", "next"]).await;
+        core.enqueue_diarization("gone", Priority::Back)
+            .await
+            .expect("queue");
+        core.enqueue_diarization("next", Priority::Back)
+            .await
+            .expect("queue");
+
+        // A queue row whose Meeting is not there. `diarize_meeting` bails on
+        // it, which is the shape of every failure that happens before the
+        // run: the outcome is an `Err`, not an outcome. Written with the key
+        // check off, because the cascade exists to stop exactly this — the
+        // point is the arm that handles it, not how a row got there.
+        core.store
+            .write(|connection| {
+                connection.pragma_update(None, "foreign_keys", false)?;
+                connection.execute("DELETE FROM meetings WHERE id = 'gone'", [])?;
+                connection.pragma_update(None, "foreign_keys", true)?;
+                Ok(())
+            })
+            .await
+            .expect("orphan");
+        assert_eq!(
+            core.diarize_status().await.expect("status").queued,
+            vec!["gone".to_string(), "next".to_string()],
+            "the premise: the failing one is at the head"
+        );
+
+        assert!(
+            drain(&core, std::time::Duration::from_secs(2))
+                .await
+                .is_empty(),
+            "the failure left the line, and the Meeting behind it was reached"
+        );
+    }
+
+    /// Cancelling one Meeting of the backlog is giving up on it, not walking it.
+    ///
+    /// The queue removal alone made the arithmetic lie: the row left, the
+    /// membership stayed, `remaining` fell and `done` — total minus remaining
+    /// minus abandoned — counted a Meeting nobody had walked.
+    #[tokio::test]
+    async fn cancelling_one_of_the_backlogs_meetings_counts_it_given_up_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+        assert_eq!(begin_rerun(&core).await, 3);
+
+        core.diarize_cancel("m2").await.expect("cancel");
+        let after = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
+        assert_eq!(
+            (after.done, after.remaining, after.abandoned),
+            (0, 2, 1),
+            "given up on, not walked: {after:?}"
+        );
+        assert!(!after.cancelled, "the backlog itself is still running");
+
+        // Again, and it must still be one. The queue row is the gate.
+        core.diarize_cancel("m2").await.expect("cancel again");
+        assert_eq!(
+            core.diarize_status()
+                .await
+                .expect("status")
+                .rerun
+                .expect("a backlog")
+                .abandoned,
+            1,
+            "cancelling twice is one Meeting given up on"
+        );
+    }
+
+    /// A Meeting the backlog never owned, and one whose run already committed.
+    ///
+    /// Neither may move `abandoned`: the first was never the re-run's, and the
+    /// second took its own queue row out inside the transaction that wrote its
+    /// attribution, so there is nothing left to give up.
+    #[tokio::test]
+    async fn cancelling_unowned_or_already_committed_work_does_not_count_it_given_up() {
+        use crate::diarize::Cancel;
+        use crate::store::diarize_queue::Priority;
+        use std::sync::atomic::AtomicBool;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        with_rerun_tables(&core).await;
+        let (meeting, succeeded) = diarizable(&core).await;
+        meetings_with_audio(&core, &["m2"]).await;
+        assert_eq!(begin_rerun(&core).await, 2);
+        // Recorded *after* the backlog began, so it is nobody's but the
+        // queue's — `begin` enqueues the History it finds, and this was not
+        // in it.
+        meetings_with_audio(&core, &["catchup"]).await;
+        core.enqueue_diarization("catchup", Priority::Front)
+            .await
+            .expect("catch-up");
+
+        core.diarize_cancel("catchup").await.expect("cancel");
+        assert_eq!(
+            core.diarize_status()
+                .await
+                .expect("status")
+                .rerun
+                .expect("a backlog")
+                .abandoned,
+            0,
+            "work the re-run never asked for is not work it gave up on"
+        );
+
+        core.finish_run(
+            &meeting,
+            succeeded(),
+            &Cancel::new(),
+            &Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await
+        .expect("finish");
+        core.diarize_cancel(&meeting).await.expect("cancel");
+        let after = core
+            .diarize_status()
+            .await
+            .expect("status")
+            .rerun
+            .expect("a backlog");
+        assert_eq!(
+            (after.done, after.remaining, after.abandoned),
+            (1, 1, 0),
+            "it was walked before the cancel arrived, and stays walked: {after:?}"
+        );
+    }
+
+    /// Cancelling on an installation with no backlog does not invent one.
+    #[tokio::test]
+    async fn cancelling_one_meeting_never_manufactures_a_backlog() {
+        use crate::store::diarize_queue::Priority;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        meetings_with_audio(&core, &["m1"]).await;
+        core.enqueue_diarization("m1", Priority::Front)
+            .await
+            .expect("queue");
+
+        let cancelled = core.diarize_cancel("m1").await.expect("cancel");
+        assert!(
+            cancelled.rerun.is_none() && cancelled.queued.is_empty(),
+            "out of the line, and no re-run said to exist: {cancelled:?}"
+        );
+
+        // And with the tables there but only the first start's identity in
+        // them, which is metadata rather than a backlog.
+        with_rerun_tables(&core).await;
+        core.store
+            .write(|connection| {
+                crate::store::rerun::begin_if_the_model_changed(connection, "wespeaker", "2")
+            })
+            .await
+            .expect("first start");
+        core.enqueue_diarization("m1", Priority::Front)
+            .await
+            .expect("queue");
+        assert!(
+            core.diarize_cancel("m1")
+                .await
+                .expect("cancel")
+                .rerun
+                .is_none(),
+            "a recorded model is still not a backlog"
+        );
+    }
+
+    /// A run registering into the single cancel's window must not write.
+    ///
+    /// The token check and the queue removal are one hold of the job lock,
+    /// and registration takes that lock and re-reads the queue. So a run that
+    /// arrives while a cancel is in flight either registers first, and the
+    /// cancel finds its handle, or arrives after and finds no row.
+    #[tokio::test]
+    async fn a_run_registering_into_a_cancel_finds_the_work_already_gone() {
+        use crate::store::diarize_queue::Priority;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, _succeeded) = diarizable(&core).await;
+
+        // Past the checks that precede registration; nothing opens them.
+        let models = core.models_dir.clone();
+        std::fs::create_dir_all(&models).expect("models dir");
+        for name in ["diarize-segmentation.onnx", "diarize-embedding.onnx"] {
+            std::fs::write(models.join(name), []).expect("placeholder");
+        }
+        std::fs::write(core.history_dir.join("m1.wav"), []).expect("audio");
+
+        core.diarize_cancel(&meeting).await.expect("cancel");
+        assert_eq!(
+            core.diarize_meeting(&meeting, Priority::Front)
+                .await
+                .expect("run"),
+            DiarizeOutcome::Cancelled,
+            "the row is gone, so the run stops before claiming anything"
+        );
+        assert_eq!(
+            core.store.read(evidence).await.expect("read"),
+            (0, 0, 0),
+            "and nothing was written after the Operator was told it stopped"
+        );
+        assert!(core.diarization.lock().await.is_none());
+    }
+
+    /// Which outcomes still owe the queue a removal, and which must not.
+    ///
+    /// The `Wrote` row is the one with teeth: that run took its own row out
+    /// inside the commit, so a second removal afterwards would fall on
+    /// whatever row is under that id now — which can be a request somebody
+    /// made in the meantime.
+    #[test]
+    fn only_a_run_that_never_reached_a_transaction_is_taken_out_afterwards() {
+        for (outcome, afterwards, why) in [
+            (
+                DiarizeOutcome::Skipped,
+                true,
+                "nothing ran, so nothing removed it",
+            ),
+            (
+                DiarizeOutcome::Wrote(0),
+                false,
+                "the commit removed its own row",
+            ),
+            (
+                DiarizeOutcome::Wrote(7),
+                false,
+                "the commit removed its own row",
+            ),
+            (DiarizeOutcome::Paused, false, "still owed on purpose"),
+            (
+                DiarizeOutcome::Cancelled,
+                false,
+                "the cancellation took it out",
+            ),
+        ] {
+            assert_eq!(leaves_the_line_afterwards(outcome), afterwards, "{why}");
+        }
+    }
+
+    /// A request made after a run commits survives the worker.
+    ///
+    /// The window the rule above protects: the commit takes its own row out,
+    /// and between that and the worker's next step somebody asks for the same
+    /// Meeting again. A removal there would drop a request nobody cancelled.
+    #[tokio::test]
+    async fn a_request_made_after_a_run_commits_is_not_swept_up_by_it() {
+        use crate::diarize::Cancel;
+        use crate::store::diarize_queue::Priority;
+        use std::sync::atomic::AtomicBool;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, succeeded) = diarizable(&core).await;
+        core.enqueue_diarization(&meeting, Priority::Back)
+            .await
+            .expect("queue");
+
+        let outcome = core
+            .finish_run(
+                &meeting,
+                succeeded(),
+                &Cancel::new(),
+                &Arc::new(AtomicBool::new(false)),
+                None,
+            )
+            .await
+            .expect("finish");
+        assert!(matches!(outcome, DiarizeOutcome::Wrote(_)));
+        assert!(
+            !core.diarization_holds(&meeting).await.expect("holds"),
+            "the commit took its own row out"
+        );
+
+        // Somebody asks again — a re-run of a Meeting they just watched
+        // finish, which is the ordinary way this happens.
+        core.enqueue_diarization(&meeting, Priority::Front)
+            .await
+            .expect("asked again");
+        assert!(
+            !leaves_the_line_afterwards(outcome),
+            "so the worker must not remove anything, or it removes this"
+        );
+        assert!(
+            core.diarization_holds(&meeting).await.expect("holds"),
+            "and the new request is still owed"
         );
     }
 

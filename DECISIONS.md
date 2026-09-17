@@ -2355,3 +2355,34 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Ref:** (pending)
 **Supersedes:** Q193 — its degradation of an unexpected read failure to an absent block. Its `sqlite_master` guard stands and is now shared with `cancel`.
+
+## Q199 — diarization/12 — deviation
+
+**Question:** Q196 made only `Skipped` take a Meeting out of the line, but the worker's `Err` arm still answered `Wrote(0)`. What does a run that failed before any transaction owe the queue?
+**Options considered:** Leave it, since a failure wrote nothing / answer `Skipped`, which is what a run that never reached a transaction is
+**Chosen:** `Skipped`. The arm's own comment already said the Meeting leaves the line; the outcome it returned had stopped meaning that.
+**Decided-by:** agent
+**Justification:** This was a regression I introduced and did not check. Before Q196, `Wrote(0)` was what took a row out, so the `Err` arm was correct as written; after it, `Wrote` means "the commit removed its own row" and an errored run has no commit, so the row stayed at the head. The loop then read the same Meeting, failed the same way and never reached the work behind it — a spin rather than a retry, and worse than the drop the outcome type was introduced to prevent, because nothing else ever runs. The regression drives the worker for real over a queue whose head is a row with no Meeting behind it, which is the shape of every failure that happens before the run: `diarize_meeting` bails, the arm sees an `Err`, and the Meeting queued behind it must be reached. Written with the foreign key briefly off, because the cascade exists to stop exactly that row existing — what is under test is the arm that handles a failure, not how one arises. Restoring `Wrote(0)` there makes it fail by never draining.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q196 — it changed what `Wrote` obliges without changing this sibling arm to match.
+
+## Q200 — diarization/12 — deviation
+
+**Question:** `diarize_cancel` released the job lock before its delete, swallowed the write error, and removed the queue row without telling the re-run. Same treatment as the bulk stop?
+**Options considered:** Leave it, since single cancel predates the re-run / give it the same lock-and-write shape and settle the backlog's books in the same transaction
+**Chosen:** The same shape. The token and the removal are one hold of the job lock, the failure is returned, and an owned pending Meeting is counted `abandoned` in the transaction that removes it.
+**Decided-by:** agent
+**Justification:** Three faults, all the same faults the bulk stop had, and fixing only the bulk path left the sibling wrong. A run could register between the token check and the delete and go on to write after the Operator had been told it stopped; registration already takes the job lock and re-reads the queue, so holding that lock across both makes whichever side arrives first win cleanly, and no inference happens under it because the run is spawned after registration with the lock released. The swallowed error is now returned, which the method's new `Result` made possible. And the bookkeeping was the arithmetic lie: the queue row left while the membership stayed, so `remaining` fell, `abandoned` did not, and `done` counted a Meeting nobody had walked. `rerun::give_up` does both in one transaction and **gates on the queue row having been removed by this call** — so cancelling twice counts once, and a run that already committed, which took its own row out inside its commit, is left as walked rather than re-described as abandoned afterwards. Unlike the bulk stop it ignores priority: an Operator asking for one Meeting to stop means it, promoted or not. It writes nothing to the re-run when the tables, the row or a backlog are absent, so a cancel on an installation that never had one cannot manufacture a baseline. Four mutations falsify: the `Err` arm, the bare queue delete, dropping the queue-row gate, and re-adding the worker's removal after a commit. The last of those needed the rule pulled into `leaves_the_line_afterwards` to have anywhere to fail — it passed everything until then, so the protection Q196 relied on was itself untested.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q201 — diarization/12 — gate-resolution
+
+**Question:** Five paths take a Meeting out of the queue. Does `done` — total minus remaining minus abandoned — claim the right thing about each?
+**Options considered:** Count deletions and failed runs as abandoned too, with a trigger on `meetings` / narrow `done` to successful rebuilds with a new column / say accurately what it already counts
+**Chosen:** The third. `done` means *processed or no longer processable*, and that is written on `Rerun::done`.
+**Decided-by:** agent
+**Justification:** The audit, once: a committed run removes its own row inside the commit; a run that never reached a transaction is removed by the worker; the Operator cancels one Meeting; `cancel` stops the backlog; and deleting a Meeting cascades the queue row and the membership away together. The two deliberate give-ups are the ones an Operator would call abandonment and both now raise `abandoned`, which `done` subtracts — that was the missing half and is fixed in Q200. The other two are not abandonment by anyone: a Meeting with no Kept Audio or no models on disk has nothing to rebuild and would have nothing next pass, and a deleted Meeting was not stopped, it is gone. Counting either as given up would need a trigger on `meetings` and a new meaning for a number that already reads correctly once said plainly, and the ticket's instruction was the minimum schema change. So the honest reading is stated on the method — with the five paths listed, so the next reader audits from the doc rather than from the queue — and `done` is not offered as a count of Voiceprints rebuilt. The wire field keeps its name; its meaning is the one the Registry will have to render, and a bar labelled "walked" over "processed or no longer processable" is accurate for every path that reaches it.
+**Outcome:** applied
+**Ref:** (pending)

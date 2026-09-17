@@ -324,6 +324,19 @@ reintroduce the one-at-a-time question the single worker answers.
    job is registered and the stop finds its handle or the row is gone and the
    run returns before claiming anything.
 
+   **Five things take a Meeting out of the queue, and `done` does not claim
+   they are the same.** A committed run (walked); a run that never reached a
+   transaction — no Kept Audio, no models, a failure on its own recording
+   (nothing to rebuild, and nothing would be next pass); the Operator
+   cancelling one Meeting; `rerun::cancel` stopping the backlog; and the
+   Meeting being deleted, which cascades the queue row and the membership
+   away together. The two deliberate give-ups are counted in `abandoned` and
+   subtracted, so `done` means **processed or no longer processable** — not
+   "Voiceprints rebuilt" — and that is written on `Rerun::done` rather than
+   inferred. A deleted Meeting lands in `done` because nobody stopped it; a
+   trigger on `meetings` to count it separately would be more machinery than
+   the distinction earns.
+
    **A run takes its own queue row out inside the transaction that writes the
    attribution.** That is what makes a stop unable to miscount a walked
    Meeting as abandoned — there is no window in which one still looks owed —
