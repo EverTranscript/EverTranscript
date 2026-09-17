@@ -1751,8 +1751,8 @@ impl Core {
 
         // What this Meeting already says about its named voices, read before
         // the run and embedded during it. Only a bulk re-run's own Meeting
-        // has one: `is_bulk_work` is false on every History in the field,
-        // because the re-run tables are not in `MIGRATIONS`.
+        // has one: `is_bulk_work` is false for every Meeting the backlog does
+        // not own.
         //
         // Read here rather than on the writer because `plan` is a read and
         // the embedding that follows is minutes of model time; the copy the
@@ -2491,13 +2491,15 @@ impl Core {
     /// queue it left behind carry on. Resume is therefore a property of the
     /// queue living in the record rather than of anything this does.
     ///
-    /// **Inert in the field, and inert by construction.** The re-run tables
-    /// are not in `MIGRATIONS`, so `begin_if_the_model_changed` answers `None`
-    /// on every History that exists today without reading a model identity at
-    /// all. A History that does have them and has never seen this code gets
-    /// its identity written down and no work enqueued — an absent row is not
-    /// evidence of a model change, and reading it as one would re-run all of
-    /// History after an ordinary update.
+    /// **Where the walk begins after the swap.** `MODEL_CHANGE_RERUN` seeds
+    /// its row with the identity the wipe emptied, WeSpeaker's, so the first
+    /// start after that upgrade finds a different embedding recorded and
+    /// enqueues all of History (Q228). A History with no row — one whose
+    /// stamp was removed, or a test's — gets its identity written down and no
+    /// work enqueued: an absent row is not evidence of a model change, and
+    /// reading it as one would re-run all of History after an ordinary
+    /// update. A fresh install goes through the same gate with an empty
+    /// History and walks zero Meetings, which is not worth a line in the log.
     ///
     /// Awaited rather than spawned, unlike
     /// [`Self::finish_interrupted_diarization`]: on every History in the field
@@ -2516,7 +2518,7 @@ impl Core {
             })
             .await;
         match enqueued {
-            Ok(None) => {}
+            Ok(None) | Ok(Some(0)) => {}
             Ok(Some(meetings)) => {
                 info!(
                     meetings,
@@ -4716,21 +4718,23 @@ mod tests {
         );
     }
 
-    /// Installs ticket 12's tables, which no migration does.
+    /// A History that has never been through the model-change upgrade.
     ///
-    /// Explicit here for the same reason it is explicit in
-    /// `store::rerun`'s own tests: the pending SQL is unregistered, so a test
-    /// that reached these paths without asking for them would be testing a
-    /// History no installation has.
+    /// `MODEL_CHANGE_RERUN` seeds its one row with WeSpeaker's identity so that
+    /// the next start reads a model change (Q228); every test here wants to
+    /// start either from no row at all or from the current model, so this
+    /// takes that stamp back out. What is left is exactly the History a test
+    /// used to build by installing the tables by hand.
     async fn with_rerun_tables(core: &Arc<Core>) {
         core.store
             .write(|connection| {
                 connection
-                    .execute_batch(crate::store::schema::PENDING_MODEL_CHANGE_RERUN)
+                    .execute("DELETE FROM diarize_rerun", [])
+                    .map(drop)
                     .map_err(Into::into)
             })
             .await
-            .expect("the pending re-run tables");
+            .expect("an un-stamped History");
     }
 
     /// Meetings with Kept Audio, so a re-run has something to enqueue.
@@ -5219,18 +5223,61 @@ mod tests {
             .expect("previous model");
     }
 
-    /// The trigger is unreachable on every History that exists today.
+    /// The upgrade every History in the field goes through, end to end: the
+    /// migration wipes and stamps, the first start reads the stamp as a model
+    /// change and walks all of History, oldest first.
     ///
-    /// It runs on every start, so this is the assertion that matters most:
-    /// the tables are not in `MIGRATIONS`, and the gate is inside
-    /// `begin_if_the_model_changed` rather than in this caller, so no caller
-    /// can forget it. Meetings with Kept Audio are present precisely so that
-    /// getting past the gate would enqueue something visible.
+    /// This is the assertion that matters most, because the alternative is
+    /// silent: a wipe whose stamp was missing would be recorded as already in
+    /// the new space and never walked, and with every exemplar gone the lazy
+    /// path could not rescue it either. Nothing here installs or seeds by
+    /// hand — `Core::new` runs the migration, and the trigger is the one the
+    /// daemon calls.
     #[tokio::test]
-    async fn a_history_in_the_field_is_not_re_run_at_startup() {
+    async fn a_history_in_the_field_is_re_run_by_the_first_start_after_the_upgrade() {
         let dir = tempfile::tempdir().expect("tempdir");
         let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
         meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
+        assert_eq!(
+            rerun_seen(&core).await,
+            None,
+            "the stamp alone is not a backlog anyone is shown"
+        );
+
+        core.rerun_if_the_model_changed().await;
+
+        assert_eq!(
+            core.diarize_status().await.expect("status").queued,
+            vec!["m1".to_string(), "m2".to_string(), "m3".to_string()],
+            "all of History, oldest first"
+        );
+        assert_eq!(
+            rerun_seen(&core).await,
+            Some((3, 0, 3, 0, false)),
+            "three owed, none walked, none given up on"
+        );
+        let state = core
+            .store
+            .read(crate::store::rerun::state)
+            .await
+            .expect("state")
+            .expect("a row");
+        assert_eq!(
+            (state.model.as_str(), state.model_version.as_str()),
+            (
+                crate::diarize::live::EMBEDDING_MODEL,
+                crate::diarize::live::EMBEDDING_MODEL_VERSION
+            ),
+            "and the stamp is now the current model's, so the next start resumes"
+        );
+    }
+
+    /// A fresh install goes through the same migration and the same gate
+    /// with nothing in it, and comes out with nothing to show.
+    #[tokio::test]
+    async fn a_fresh_install_records_the_model_and_shows_no_backlog() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
 
         core.rerun_if_the_model_changed().await;
 
@@ -5239,31 +5286,28 @@ mod tests {
                 .await
                 .expect("status")
                 .queued
-                .is_empty(),
-            "nothing was enqueued"
+                .is_empty()
         );
-        assert_eq!(rerun_seen(&core).await, None, "and no re-run is reported");
-        assert!(
-            !core
-                .store
-                .read(|connection| Ok(connection
-                    .query_row(
-                        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'diarize_rerun'",
-                        [],
-                        |_| Ok(())
-                    )
-                    .optional()?
-                    .is_some()))
-                .await
-                .expect("read"),
-            "and the schema was not installed on the way past"
+        assert_eq!(
+            rerun_seen(&core).await,
+            None,
+            "zero Meetings is not a re-run"
         );
+        let state = core
+            .store
+            .read(crate::store::rerun::state)
+            .await
+            .expect("state")
+            .expect("a row");
+        assert_eq!(state.model, crate::diarize::live::EMBEDDING_MODEL);
+        assert!(!state.requested());
     }
 
-    /// With the tables present, the first start writes down which embedding
-    /// this History is in and asks for nothing.
+    /// With no row, the first start writes down which embedding this History
+    /// is in and asks for nothing.
     ///
-    /// An absent row is every History predating the feature. Reading it as a
+    /// An absent row was every History predating the feature, and is still
+    /// what a removed stamp leaves. Reading it as a
     /// model change would re-run all of History after an ordinary update, so
     /// the baseline is recorded rather than acted on — and `requested()` keeps
     /// it out of the Client's sight, because a backlog of zero reported to an
@@ -5618,7 +5662,7 @@ mod tests {
             serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
         assert!(
             before.get("rerun").is_none(),
-            "no tables, so no key at all — not a null and not a zeroed block: {before}"
+            "the upgrade's stamp is no key at all — not a null and not a zeroed block: {before}"
         );
 
         with_rerun_tables(&core).await;
@@ -6031,7 +6075,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
 
-        // No tables at all.
+        // Only the upgrade's stamp, which is metadata.
         let before =
             serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
         let after =
@@ -6039,7 +6083,7 @@ mod tests {
         assert_eq!(after, before, "nothing to stop, and nothing said about it");
         assert!(after.get("rerun").is_none());
 
-        // Tables, and the identity the first start records.
+        // No stamp, and the identity the first start records.
         with_rerun_tables(&core).await;
         meetings_with_audio(&core, &["m1"]).await;
         core.store
@@ -6262,8 +6306,8 @@ mod tests {
             "out of the line, and no re-run said to exist: {cancelled:?}"
         );
 
-        // And with the tables there but only the first start's identity in
-        // them, which is metadata rather than a backlog.
+        // And with only the first start's identity recorded, which is
+        // metadata rather than a backlog.
         with_rerun_tables(&core).await;
         core.store
             .write(|connection| {

@@ -84,8 +84,9 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
 
     // What a model change owes, before the catch-up below, so the re-run's
     // oldest-first order is in the queue before anything else joins it. On
-    // every History in the field this reads one row of `sqlite_master` and
-    // returns: the re-run tables are not in `MIGRATIONS`.
+    // the first start after the swap this is where every Meeting with Kept
+    // Audio joins the line; on every start after that it reads one row and
+    // returns.
     core.rerun_if_the_model_changed().await;
 
     // The other thing a previous run can leave half done, and the one that

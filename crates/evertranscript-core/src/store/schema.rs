@@ -468,9 +468,11 @@ const MIGRATIONS: &[&str] = &[
     DIARIZE_QUEUE,
     A_DELETED_VOICEPRINT_STAYS_DELETED,
     ONE_OPERATOR,
+    MODEL_CHANGE_WIPE,
+    MODEL_CHANGE_RERUN,
 ];
 
-/// The wipe a model change owes, **written and deliberately not registered**.
+/// 15 — the wipe a model change owes.
 ///
 /// Ticket 05. ADR-0037: when the embedding changes, old and new vectors
 /// cannot be compared, so every Voiceprint and every exemplar goes and the
@@ -478,12 +480,13 @@ const MIGRATIONS: &[&str] = &[
 /// whole clusters — *not* from these exemplars' stored sample offsets, which
 /// are the old model's choice of cuts.
 ///
-/// **Absent from [`MIGRATIONS`] on purpose.** Applying it while the model is
-/// unchanged would clear Voiceprints for no swap, and applying it without
-/// ticket 12 would leave a History nobody is recognized in, which ADR-0037's
-/// *Considered options* rejected by name. It is here so it is written and
-/// tested before the swap rather than during it; appending it to `MIGRATIONS`
-/// is the whole of its activation.
+/// Written and tested before the swap, and held out of [`MIGRATIONS`] until
+/// it: applying it while the model is unchanged would clear Voiceprints for
+/// no swap, and applying it without ticket 12 would leave a History nobody
+/// is recognized in, which ADR-0037's *Considered options* rejected by name.
+/// Registered 2026-09-17 on the user's instruction (DECISIONS Q228), the day
+/// ReDimNet2-B3 replaced WeSpeaker (Q226), with [`MODEL_CHANGE_RERUN`]
+/// directly behind it.
 ///
 /// What it keeps and why:
 ///
@@ -523,7 +526,7 @@ const MIGRATIONS: &[&str] = &[
 /// [`speakers::speakers_with_stale_voiceprint`]:
 ///     crate::store::speakers::speakers_with_stale_voiceprint
 /// [`speakers::set_voiceprint`]: crate::store::speakers::set_voiceprint
-pub const PENDING_MODEL_CHANGE_WIPE: &str = r#"
+pub const MODEL_CHANGE_WIPE: &str = r#"
     DELETE FROM speaker_exemplars;
 
     UPDATE speakers
@@ -531,19 +534,42 @@ pub const PENDING_MODEL_CHANGE_WIPE: &str = r#"
      WHERE voiceprint IS NOT NULL;
 "#;
 
-/// The backlog a model change re-runs History with, **written and
-/// deliberately not registered**.
+/// 16 — the backlog a model change re-runs History with, and the row that
+/// makes the next start ask for it.
 ///
 /// Ticket 12. The work itself lives in [`super::diarize_queue`], which
 /// already outlives the process; what these two tables hold is only what the
 /// queue cannot say — which model the backlog is for, how big it was, whether
 /// the Operator stopped it, and which Meetings are its own.
 ///
-/// **Absent from [`MIGRATIONS`] for the same reason as
-/// [`PENDING_MODEL_CHANGE_WIPE`]**, which it is the other half of: a re-run
-/// without the wipe re-diarizes a History whose Voiceprints are still the old
-/// model's, and a wipe without the re-run leaves a History nobody is
-/// recognized in.
+/// **The other half of [`MODEL_CHANGE_WIPE`]**, registered directly behind
+/// it (Q228): a re-run without the wipe re-diarizes a History whose
+/// Voiceprints are still the old model's, and a wipe without the re-run
+/// leaves a History nobody is recognized in.
+///
+/// **The `INSERT` at the end is what turns the wipe into a re-run.** The
+/// startup gate, [`rerun::begin_if_the_model_changed`], walks History only
+/// when the stored identity differs from the loaded one, and on an absent row
+/// it records the loaded identity and asks for nothing — an absent row is
+/// every History from before this table existed, and reading it as a change
+/// would re-run all of them on an ordinary update (Q221). That guard is right
+/// and stays. But it means a History this migration has just wiped, with the
+/// table created empty a moment earlier, would be recorded as already in the
+/// new space and never walked; the lazy path cannot rescue it either, since
+/// the wipe leaves `stale_exemplars` nothing to find. So the migration writes
+/// down the one fact it knows — the identity every vector the wipe removed
+/// was stamped with, WeSpeaker's — as the row the gate reads at the next
+/// start. That row is the wipe's stamp, not a backlog: `total` is zero, so
+/// [`rerun::Rerun::requested`] answers false and no Client is shown a phantom
+/// re-run in the instant between migrating and the gate. The gate then sees
+/// the old identity against the new, calls [`rerun::begin`], and `record`
+/// overwrites this row with the real one. A fresh install runs the same
+/// sequence on an empty History and walks zero Meetings, which is harmless
+/// and is pinned by `rerun::tests`.
+///
+/// [`rerun::begin_if_the_model_changed`]: super::rerun::begin_if_the_model_changed
+/// [`rerun::begin`]: super::rerun::begin
+/// [`rerun::Rerun::requested`]: super::rerun::Rerun::requested
 ///
 /// `diarize_rerun` is one row by primary key rather than by every writer
 /// remembering: two re-runs of different models at once is not a state this
@@ -571,7 +597,7 @@ pub const PENDING_MODEL_CHANGE_WIPE: &str = r#"
 /// a walk that had already happened, and a bulk stop would delete a request
 /// the re-run never made. The chain through `diarize_queue` still reaches
 /// `meetings`, so deleting a Meeting clears both.
-pub const PENDING_MODEL_CHANGE_RERUN: &str = r#"
+pub const MODEL_CHANGE_RERUN: &str = r#"
     CREATE TABLE diarize_rerun (
         id             INTEGER PRIMARY KEY CHECK (id = 1),
         model          TEXT NOT NULL,
@@ -586,6 +612,15 @@ pub const PENDING_MODEL_CHANGE_RERUN: &str = r#"
         meeting_id TEXT PRIMARY KEY NOT NULL
                    REFERENCES diarize_queue(meeting_id) ON DELETE CASCADE
     ) STRICT;
+
+    -- The space the wipe above just emptied, so that the next start reads a
+    -- model change rather than a first start. Zero total: a stamp, not a
+    -- backlog.
+    INSERT INTO diarize_rerun
+        (id, model, model_version, total, cancelled, abandoned, started_at)
+    VALUES
+        (1, 'wespeaker-voxceleb-resnet34-LM', '2', 0, 0, 0,
+         strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'));
 "#;
 
 /// Applies every migration the database has not seen yet.
@@ -627,8 +662,7 @@ mod tests {
     /// being about a different migration, which is the failure a test cannot
     /// report because it no longer knows what it was for.
     ///
-    /// Appending — which is all registering the pending wipe would do — never
-    /// moved them. That is why this is a prefactor rather than a bug fix: it
+    /// Appending — which is all registering the wipe did — never moved them. That is why this is a prefactor rather than a bug fix: it
     /// costs nothing now and removes the trap before anyone goes near the
     /// order.
     fn before(migration: &str) -> usize {
@@ -669,7 +703,9 @@ mod tests {
         assert_eq!(before(VOICE_SAMPLES_AND_THE_PRUNE), 9);
         assert_eq!(before(THE_DIARIZATION_MARK), 10);
         assert_eq!(before(DIARIZE_QUEUE), 11);
-        assert_eq!(before(ONE_OPERATOR), MIGRATIONS.len() - 1);
+        assert_eq!(before(ONE_OPERATOR), 13);
+        assert_eq!(before(MODEL_CHANGE_WIPE), 14);
+        assert_eq!(before(MODEL_CHANGE_RERUN), 15);
     }
 
     #[test]
@@ -909,32 +945,20 @@ mod tests {
 
     // ---- Ticket 05: the wipe that is written but not registered ----
 
-    /// The activation gate, as a test rather than as a comment.
+    /// The wipe and the re-run are one upgrade: adjacent, in that order, last.
     ///
-    /// Appending it to `MIGRATIONS` is the whole of activating it, so doing
-    /// that by accident — a stray paste, a merge — would clear Voiceprints on
-    /// the next Core start with no model swap behind it.
+    /// Until 2026-09-17 two tests here asserted the opposite — that neither
+    /// was in `MIGRATIONS` — because appending them is the whole of activating
+    /// them and a stray paste would have cleared Voiceprints with no swap
+    /// behind it. The swap happened (Q226) and the user said to register
+    /// (Q228). What is left to guard is the pairing: a wipe registered without
+    /// its re-run directly behind it leaves a History nobody is recognized in.
     #[test]
-    fn the_pending_wipe_is_not_registered() {
-        assert!(
-            !MIGRATIONS.contains(&PENDING_MODEL_CHANGE_WIPE),
-            "ticket 05 activates on the user's model decision and on ticket 12 existing; \
-             neither has happened"
-        );
-    }
-
-    /// The same gate for ticket 12's half.
-    ///
-    /// Registering it would create the tables on the next Core start, which
-    /// is harmless on its own — nothing reads them — but it is the step that
-    /// turns dormant groundwork into schema the product carries, and it
-    /// belongs with the swap rather than before it.
-    #[test]
-    fn the_pending_rerun_is_not_registered() {
-        assert!(
-            !MIGRATIONS.contains(&PENDING_MODEL_CHANGE_RERUN),
-            "ticket 12 activates with ticket 05 and the user's model decision"
-        );
+    fn the_wipe_and_the_rerun_are_registered_as_a_pair() {
+        let wipe = before(MODEL_CHANGE_WIPE);
+        let rerun = before(MODEL_CHANGE_RERUN);
+        assert_eq!(rerun, wipe + 1, "the re-run is the other half, and follows");
+        assert_eq!(rerun, MIGRATIONS.len() - 1);
     }
 
     /// A History as the current build leaves one, on disk.
@@ -944,13 +968,39 @@ mod tests {
     /// enrolled, an attributed segment and a correction hint — one of each
     /// thing the wipe promises to keep or to take.
     fn populated_history(path: &std::path::Path) -> (String, String, String, String, String) {
-        use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
+        populated_history_at(path, MIGRATIONS.len())
+    }
+
+    /// The same History as the build that had applied only the first
+    /// `applied` migrations left it — the shape in the field the instant
+    /// before an upgrade. Its evidence is stamped with the identity that build
+    /// wrote: before the wipe that is WeSpeaker's, since a History from before
+    /// the swap has nothing in the current space, and stamping it as if it
+    /// did would pass the upgrade test on a History that cannot exist.
+    fn populated_history_at(
+        path: &std::path::Path,
+        applied: usize,
+    ) -> (String, String, String, String, String) {
         use crate::store::speakers::{self, NewExemplar};
         use rusqlite::params;
 
-        let mut connection = Connection::open(path).expect("open");
+        let (embedding_model, embedding_model_version) = if applied <= before(MODEL_CHANGE_WIPE) {
+            ("wespeaker-voxceleb-resnet34-LM", "2")
+        } else {
+            (
+                crate::diarize::live::EMBEDDING_MODEL,
+                crate::diarize::live::EMBEDDING_MODEL_VERSION,
+            )
+        };
+
+        let connection = Connection::open(path).expect("open");
         configure(&connection).expect("configure");
-        migrate(&mut connection).expect("migrate");
+        for migration in &MIGRATIONS[..applied] {
+            connection.execute_batch(migration).expect("migrate");
+        }
+        connection
+            .pragma_update(None, "user_version", applied as i64)
+            .expect("user_version");
 
         connection
             .execute(
@@ -981,8 +1031,8 @@ mod tests {
                         speaker_id: id,
                         meeting_id: Some("m1"),
                         vector: &vector,
-                        model: EMBEDDING_MODEL,
-                        model_version: EMBEDDING_MODEL_VERSION,
+                        model: embedding_model,
+                        model_version: embedding_model_version,
                         voiced_ms: 30_000,
                         from_operator: is_negative,
                         is_negative,
@@ -999,8 +1049,8 @@ mod tests {
                 &connection,
                 id,
                 &vector,
-                EMBEDDING_MODEL,
-                EMBEDDING_MODEL_VERSION,
+                embedding_model,
+                embedding_model_version,
             )
             .expect("voiceprint");
         }
@@ -1122,28 +1172,50 @@ mod tests {
         );
     }
 
-    /// Ticket 05, on disk: the vectors go and the record stays.
+    /// Ticket 05 on disk, through the real upgrade: a History as the last
+    /// WeSpeaker build left it, opened by this one. The vectors go, the record
+    /// stays, and the row the re-run needs is there.
     #[test]
-    fn the_pending_wipe_takes_every_vector_and_keeps_the_record() {
+    fn upgrading_takes_every_vector_keeps_the_record_and_stamps_the_old_space() {
         use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
         use crate::store::speakers;
 
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("history.sqlite3");
-        let (alice, me, gone, fresh, segment) = populated_history(&path);
+        let (alice, me, gone, fresh, segment) =
+            populated_history_at(&path, before(MODEL_CHANGE_WIPE));
 
-        {
-            let connection = Connection::open(&path).expect("open to wipe");
-            configure(&connection).expect("configure");
-            connection
-                .execute_batch(PENDING_MODEL_CHANGE_WIPE)
-                .expect("wipe");
-        }
-
-        let connection = Connection::open(&path).expect("reopen");
+        let mut connection = Connection::open(&path).expect("reopen");
         configure(&connection).expect("configure");
+        migrate(&mut connection).expect("upgrade");
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("user_version");
+        assert_eq!(version as usize, MIGRATIONS.len());
 
         record_survives(&connection, &alice, &me, &gone, &fresh, &segment);
+
+        let stamp: (String, String, i64, i64, i64) = connection
+            .query_row(
+                "SELECT model, model_version, total, cancelled, abandoned
+                   FROM diarize_rerun WHERE id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .expect("the wipe's stamp");
+        assert_eq!(
+            stamp,
+            ("wespeaker-voxceleb-resnet34-LM".into(), "2".into(), 0, 0, 0),
+            "the space the wipe emptied, as a zero-total row the next start reads as a change"
+        );
 
         let exemplars: i64 = connection
             .query_row("SELECT count(*) FROM speaker_exemplars", [], |row| {
@@ -1199,7 +1271,7 @@ mod tests {
             assert!(!forgotten, "{who} was not deleted by anybody");
             assert_eq!(
                 (model.as_deref(), version.as_deref()),
-                (Some(EMBEDDING_MODEL), Some(EMBEDDING_MODEL_VERSION)),
+                (Some("wespeaker-voxceleb-resnet34-LM"), Some("2")),
                 "{who} keeps the stamp of the model whose vector this wipe took"
             );
         }

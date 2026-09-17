@@ -1028,9 +1028,9 @@ mod tests {
         .expect("the old space");
         speakers::set_voiceprint(&connection, "alice", &[1.0, 0.0], "old", "1").expect("print");
 
-        // Ticket 05's wipe, as the pending migration performs it.
+        // Ticket 05's wipe, as the migration performs it.
         connection
-            .execute_batch(crate::store::schema::PENDING_MODEL_CHANGE_WIPE)
+            .execute_batch(crate::store::schema::MODEL_CHANGE_WIPE)
             .expect("wipe");
         assert!(
             !speakers::get(&connection, "alice")

@@ -1,7 +1,7 @@
-//! The bulk re-run a model change owes, **written and inactive**.
+//! The bulk re-run a model change owes.
 //!
 //! Ticket 12. A model change clears every Voiceprint (ticket 05's
-//! [`super::schema::PENDING_MODEL_CHANGE_WIPE`]) and this is what earns them
+//! [`super::schema::MODEL_CHANGE_WIPE`]) and this is what earns them
 //! back: every Meeting with Kept Audio walks through Diarization again,
 //! oldest first, in the new model's vector space.
 //!
@@ -15,10 +15,12 @@
 //! the process, so resume-rather-than-restart is a property of the shape
 //! rather than of a flag somebody clears.
 //!
-//! **Nothing calls any of this, and its tables are not in `MIGRATIONS`**, so
-//! every function here fails on a current History by design. Activation is
-//! the user's model decision plus ticket 05; see
-//! [`super::schema::PENDING_MODEL_CHANGE_RERUN`].
+//! The tables arrive with [`super::schema::MODEL_CHANGE_RERUN`], registered
+//! directly behind the wipe (Q228); that migration also seeds the one row
+//! with the identity the wipe emptied, which is what makes the first start
+//! after it a model change rather than a first start. [`installed`] stays,
+//! because a History opened without migrating — a read-only tool, a test —
+//! still has to be answered rather than failed.
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -102,11 +104,11 @@ impl Rerun {
 ///
 /// Asked of `sqlite_master` by name rather than inferred from the error text
 /// of a query, so that a genuinely broken read — a corrupt page, a locked
-/// file — stays an error instead of being reported as "no re-run". The tables
-/// are not in `MIGRATIONS`, so every History in the field answers `false`. If
-/// this table is here and the backlog one is not, the queries that follow fail
-/// and that failure is propagated, which is the right answer for a
-/// half-installed schema.
+/// file — stays an error instead of being reported as "no re-run". Every
+/// migrated History answers `true` since Q228; what answers `false` is one
+/// opened without migrating. If this table is here and the backlog one is
+/// not, the queries that follow fail and that failure is propagated, which
+/// is the right answer for a half-installed schema.
 fn installed(connection: &Connection) -> Result<bool> {
     Ok(connection
         .query_row(
@@ -264,11 +266,15 @@ pub fn begin(connection: &Connection, model: &str, model_version: &str) -> Resul
 ///
 /// **Answers `None` on a History with no re-run tables**, rather than failing
 /// the way the rest of this module does. This is the one function a Core calls
-/// on every start, including the ones in the field where the tables are not in
-/// `MIGRATIONS` — so the gate belongs here, beside [`is_bulk_work`]'s, and not
-/// in a caller that has to remember it. Nothing is recorded either: a History
-/// without the schema has nowhere to record it, and inventing a row would be
-/// the half-installed state [`installed`] exists to refuse.
+/// on every start, so the gate belongs here, beside [`is_bulk_work`]'s, and
+/// not in a caller that has to remember it. Nothing is recorded either: a
+/// History without the schema has nowhere to record it, and inventing a row
+/// would be the half-installed state [`installed`] exists to refuse.
+///
+/// **The row the upgrade leaves is the trigger.** `MODEL_CHANGE_RERUN` seeds
+/// WeSpeaker's identity with a zero total, so the first start after the wipe
+/// lands in the `Some(_)` arm below and walks History; `record` then
+/// overwrites the stamp with the model that walk was for.
 pub fn begin_if_the_model_changed(
     connection: &Connection,
     model: &str,
@@ -300,10 +306,9 @@ pub fn begin_if_the_model_changed(
 
 /// Whether this Meeting is the bulk re-run's own work.
 ///
-/// The gate every re-run-only step hangs off, and the reason those steps are
-/// inert in the field: the tables are not in `MIGRATIONS`, so [`installed`]
-/// is false and this answers `false` without looking further. A History that
-/// has never had a backlog cannot be told it has one.
+/// The gate every re-run-only step hangs off. On a History opened without
+/// migrating, [`installed`] is false and this answers `false` without looking
+/// further; a History that has never had a backlog cannot be told it has one.
 ///
 /// Membership hangs off the queue row and cascades away with it, so this is
 /// also false for a Meeting the backlog has already walked — and true for one
@@ -486,19 +491,86 @@ fn record(
 mod tests {
     use super::*;
 
-    /// A History as the current build leaves one, plus ticket 12's tables.
+    /// A History as the current build leaves one, minus the upgrade's stamp.
     ///
-    /// The second step is what the product does *not* do on its own: the
-    /// migration is unregistered, so nothing here is reachable until the
-    /// swap it belongs to.
+    /// The migration seeds WeSpeaker's identity so the next start reads a
+    /// model change; the tests below want to start from no row and record
+    /// one themselves, so the stamp is taken back out. The upgrade path
+    /// itself is `the_upgrade_stamp_makes_the_first_start_a_model_change`.
     fn db() -> Connection {
         let mut connection = Connection::open_in_memory().expect("open");
         crate::store::schema::configure(&connection).expect("configure");
         crate::store::schema::migrate(&mut connection).expect("migrate");
         connection
-            .execute_batch(crate::store::schema::PENDING_MODEL_CHANGE_RERUN)
-            .expect("the pending re-run tables");
+            .execute("DELETE FROM diarize_rerun", [])
+            .expect("an un-stamped History");
         connection
+    }
+
+    /// The row `MODEL_CHANGE_RERUN` leaves behind is what turns the wipe into
+    /// a walk: the first start finds WeSpeaker recorded against the current
+    /// model, enqueues every Meeting with Kept Audio oldest first, and
+    /// overwrites the stamp with the identity it walked for. Read through
+    /// the real migration, not seeded here.
+    #[test]
+    fn the_upgrade_stamp_makes_the_first_start_a_model_change() {
+        use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
+        let mut connection = Connection::open_in_memory().expect("open");
+        crate::store::schema::configure(&connection).expect("configure");
+        crate::store::schema::migrate(&mut connection).expect("migrate");
+        history(&connection);
+
+        let stamped = state(&connection).expect("state").expect("the stamp");
+        assert_eq!(
+            (stamped.model.as_str(), stamped.model_version.as_str()),
+            ("wespeaker-voxceleb-resnet34-LM", "2"),
+            "the space the wipe emptied"
+        );
+        assert!(!stamped.requested(), "a stamp, not a backlog");
+
+        assert_eq!(
+            begin_if_the_model_changed(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
+                .expect("first start after the upgrade"),
+            Some(3)
+        );
+        assert_eq!(
+            diarize_queue::list(&connection).expect("list"),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+        let walking = state(&connection).expect("state").expect("a row");
+        assert_eq!(
+            (walking.model.as_str(), walking.model_version.as_str()),
+            (EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
+        );
+        assert!(walking.running());
+    }
+
+    /// A fresh install runs the same migration on nothing: the stamp is
+    /// there, the walk is of zero Meetings, and no backlog is ever shown.
+    #[test]
+    fn a_fresh_install_walks_nothing_and_records_the_current_model() {
+        use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
+        let mut connection = Connection::open_in_memory().expect("open");
+        crate::store::schema::configure(&connection).expect("configure");
+        crate::store::schema::migrate(&mut connection).expect("migrate");
+
+        assert_eq!(
+            begin_if_the_model_changed(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
+                .expect("first start"),
+            Some(0),
+            "the stamp reads as a change, of nothing"
+        );
+        assert!(diarize_queue::list(&connection).expect("list").is_empty());
+        let recorded = state(&connection).expect("state").expect("a row");
+        assert_eq!(recorded.model, EMBEDDING_MODEL);
+        assert!(!recorded.requested(), "zero total: nothing to show anyone");
+
+        assert_eq!(
+            begin_if_the_model_changed(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
+                .expect("second start"),
+            None,
+            "and from then on it is the ordinary case"
+        );
     }
 
     /// `started_at` out of insertion order on purpose: the walk follows the
@@ -533,16 +605,14 @@ mod tests {
         assert_eq!(state(&connection).expect("state"), None);
     }
 
-    /// The gate every re-run-only step hangs off, asked of the History the
-    /// product actually ships.
+    /// The gate every re-run-only step hangs off, asked of a History that
+    /// has the stamp but no backlog: the instant between migrating and the
+    /// first start's gate.
     ///
-    /// `db()` installs the pending tables by hand; this one deliberately does
-    /// not, because that is the shape in the field. If this ever answers
-    /// `true`, a re-run-only path has become reachable on an installation
-    /// that never asked for one — which is the failure the unregistered
-    /// migration exists to make impossible.
+    /// If this ever answers `true`, a re-run-only path has become reachable
+    /// on a Meeting no backlog owns.
     #[test]
-    fn a_history_in_the_field_owns_no_bulk_work() {
+    fn a_stamped_history_with_no_backlog_owns_no_bulk_work() {
         let mut connection = Connection::open_in_memory().expect("open");
         crate::store::schema::configure(&connection).expect("configure");
         crate::store::schema::migrate(&mut connection).expect("migrate");
@@ -553,25 +623,27 @@ mod tests {
 
         assert!(
             !is_bulk_work(&connection, "m1").expect("ask"),
-            "no re-run tables, so nothing can be the re-run's"
+            "a stamp is not a backlog, so nothing is the re-run's"
         );
     }
 
     /// The one function a Core calls on every start answers rather than fails
     /// on a History that has never had the tables.
     ///
-    /// Everything else in this module is allowed to fail there, because
-    /// nothing reaches it without a backlog already existing. This is
-    /// different: it runs at every boot on every installation in the field, so
-    /// the gate is here rather than in the caller, which cannot be relied on
-    /// to remember it. An `Err` would be swallowed into a startup warning and
-    /// look identical to the right answer, which is why this asserts the
-    /// answer and not merely that nothing was enqueued.
+    /// Since Q228 every migrated History has them, so the shape here is a
+    /// History opened short of that migration — which is still what a
+    /// read-only tool or an older build sees. An `Err` would be swallowed
+    /// into a startup warning and look identical to the right answer, which
+    /// is why this asserts the answer and not merely that nothing was
+    /// enqueued.
     #[test]
     fn asking_at_startup_whether_the_model_changed_is_safe_without_the_tables() {
         let mut connection = Connection::open_in_memory().expect("open");
         crate::store::schema::configure(&connection).expect("configure");
         crate::store::schema::migrate(&mut connection).expect("migrate");
+        connection
+            .execute_batch("DROP TABLE diarize_rerun_backlog; DROP TABLE diarize_rerun;")
+            .expect("a History short of the re-run migration");
         meetings(
             &connection,
             &[("m1", "2024-01-01T00:00:00Z", Some("a.wav"))],
