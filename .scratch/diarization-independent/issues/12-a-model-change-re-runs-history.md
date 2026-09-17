@@ -64,7 +64,7 @@ version built some of them itself:
 - `store::speakers::attributed_speaker` — the display join, newest correction
   wins. This is what `claims` has to read through, not `speaker_id` directly.
 - `registry::DIARIZE_EMBEDDING.voiceprint()` — the model identity, from
-  ticket 04 (`ba8a491`). Both the trigger and the resume guard: a re-run row
+  ticket 04 (`cfd1077`). Both the trigger and the resume guard: a re-run row
   carrying the model it was started for is what makes resume-not-restart
   structural rather than a flag somebody clears.
 
@@ -118,7 +118,7 @@ not all belong to one eligible Speaker. Nothing calls either.
 **Still to build, and absent from `main`:**
 
 1. **The seeding writer, which is not a restored `relearn`.** One was built
-   and then **withdrawn** (Q165, `8dd6781`), and the reason bounds what
+   and then **withdrawn** (Q165, `f2d9b48`), and the reason bounds what
    replaces it. Its positive half would have enrolled a cluster's centroid,
    which `cluster::centroid` builds over every grouped `Observation` while
    reconciliation runs afterwards — so a claimed cluster's vector can carry
@@ -338,7 +338,7 @@ No part of this may be run against a real History before (1) and (2). Writing
 and testing the trigger is safe and is done; **registering the schema is what
 makes it fire**, and that stays out of `MIGRATIONS`.
 
-## Built: `cluster::claims` and `store::rerun` (`058bcad`, `c72bb74`, `8dd6781`)
+## Built: `cluster::claims` and `store::rerun` (`2880ba6`, `ff74f59`, `f2d9b48`)
 
 Landed ahead of the rest because none of it adds a protocol method, a
 production caller or a registered migration. **Nothing calls any of it**; the

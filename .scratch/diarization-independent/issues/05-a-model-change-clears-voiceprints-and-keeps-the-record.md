@@ -8,7 +8,7 @@ state it is written against has moved.
 **Parent:** `docs/prd.md` (Speakers & diarization, stories 33b–33i) and
 ADR-0037.
 
-**Blocked by:** nothing. Ticket 04 has landed (`ba8a491`), which is what makes
+**Blocked by:** nothing. Ticket 04 has landed (`cfd1077`), which is what makes
 "the model changed" a question the code can answer.
 
 **Status:** built, **not activated**. The migration, its file-backed test and
