@@ -953,14 +953,19 @@ pub struct Claims {
 /// identity, and a tie between two names would be broken by comparing two
 /// UUIDs, which mean nothing about whose voice it is.
 ///
-/// **The Operator is excluded**, though
-/// [`crate::store::speakers::relearnable`] includes them. A re-run does give
-/// the Operator a Voiceprint back, but by ADR-0029's three channel rules
-/// alone and never from the previous model's attributions — and the previous
-/// model's attributions are precisely what this reads. Claiming a cluster
-/// for the Operator here would seed them from the old model's guess about
-/// whose voice was theirs, which is the failure ADR-0029 as amended was
-/// rewritten to stop.
+/// **The Operator is included**, like every other named Speaker, since
+/// 2026-09-17 (DECISIONS Q237). They were excluded until then, on the
+/// reasoning that ADR-0029's three channel rules rebuild the Operator by
+/// themselves so this path need not. The first real re-run against a
+/// populated History showed the reasoning does not close: the third of those
+/// three rules **is** the Voiceprint match, so a rule needing a Voiceprint
+/// that nothing rebuilds is a rule that cannot fire after a model change. It
+/// cost the Operator their name on the four most recent Meetings (Q234,
+/// Q236). The boundary that was actually load-bearing stays, and it is the
+/// one the rest of this doc applies to everybody: what is read here is which
+/// Speaker *the record attributes* a segment to, never a cluster vector, so
+/// the Operator is relearned from their own words and not from a previous
+/// model's guess at which cluster was theirs.
 ///
 /// Corrections outrank the machine because
 /// [`crate::store::speakers::attributed_speaker`] is the display join: the
@@ -1001,11 +1006,9 @@ pub fn claims(
 ) -> anyhow::Result<Claims> {
     use crate::store::speakers;
 
-    let operator = speakers::operator(connection)?.map(|speaker| speaker.id);
     let eligible: BTreeSet<String> = speakers::relearnable(connection)?
         .into_iter()
         .map(|speaker| speaker.id)
-        .filter(|id| Some(id) != operator.as_ref())
         .collect();
     if eligible.is_empty() {
         return Ok(Claims::default());
@@ -1943,34 +1946,36 @@ mod tests {
 
     /// `relearnable` includes the Operator; this must not.
     ///
-    /// ADR-0029 as amended rebuilds the Operator from the three channel
-    /// rules alone. Claiming a cluster for them here would seed them from
-    /// the *previous model's* guess about whose voice was theirs, which is
-    /// the failure that amendment was written to stop — and it would look
-    /// like the system agreeing with itself.
+    /// The Operator claims like any other named Speaker, since Q237.
+    ///
+    /// This asserted the opposite until 2026-09-17, when the first real
+    /// re-run showed what the exclusion cost: rule 3 of ADR-0029 as amended
+    /// *is* the Voiceprint match, so an Operator whose Voiceprint no path
+    /// rebuilds cannot be recognized after a model change at all (Q234,
+    /// Q236). What still holds is what the assertion reads — a Speaker the
+    /// record attributes these segments to, not a cluster vector.
     #[test]
-    fn the_operator_is_never_claimed_from_the_old_models_attributions() {
+    fn the_operator_claims_a_cluster_like_any_other_named_speaker() {
         use crate::store::{meetings, speakers};
         let connection = db();
         let meeting = meetings::start(&connection, None, None).expect("meeting");
         let me = named(&connection, "Me");
         speakers::set_operator(&connection, &me).expect("operator");
 
-        // The Operator is in `relearnable` — that is correct for its own
-        // purpose, and is the trap this test names.
         assert!(
             speakers::relearnable(&connection)
                 .expect("relearnable")
                 .iter()
                 .any(|speaker| speaker.id == me),
-            "the premise: the query this is built on does include them"
+            "the premise: the query this is built on includes them"
         );
 
         let reconciliation = spoken(&connection, &meeting.id, &[(Some(0), Some(&me))]);
         let said = claims(&connection, &reconciliation).expect("claims");
-        assert!(
-            said.claimed.is_empty() && said.denied.is_empty(),
-            "the channel rules own the Operator, not the old attributions"
+        assert_eq!(
+            said.claimed[&Cluster(0)],
+            me,
+            "the Operator's own attributed words are evidence about the Operator"
         );
     }
 

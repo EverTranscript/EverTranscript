@@ -40,11 +40,22 @@
 //!   when the cluster around them comes out mixed.
 //! * **the old model's saved sample cuts.** ADR-0037 rejected re-embedding
 //!   those; the ranges come from the transcript, which is in the record.
-//! * **pseudonyms, forgotten Speakers and the Operator.** The first are
-//!   re-minted and renumbered rather than relearned, the second is the whole
-//!   point of the mark (ADR-0009), and the Operator is rebuilt by the three
-//!   channel rules alone (ADR-0029 as amended) — never from the previous
-//!   model's guesses about which voice was theirs.
+//! * **pseudonyms and forgotten Speakers.** The first are re-minted and
+//!   renumbered rather than relearned, and the second is the whole point of
+//!   the mark (ADR-0009).
+//!
+//! **The Operator was a third of those and is not, since 2026-09-17
+//! (DECISIONS Q237).** They relearn from their own attributed ranges like any
+//! other named Speaker. ADR-0029's three channel rules still decide who the
+//! Operator *is*; what changed is that rule 3's Voiceprint is rebuilt here
+//! rather than left for nothing to rebuild. The first real re-run on a
+//! populated History is what settled it: a rule that needs a Voiceprint no
+//! path restores cannot fire after a model change, and the Operator lost
+//! their name on the four most recent Meetings (Q234, Q236). The boundary
+//! that stays is the one this whole module is built on — the Operator is
+//! relearned from the ranges the record attributes to them, never from a
+//! cluster vector and never from another model's guess at which cluster was
+//! theirs.
 //!
 //! # The scope a replacement owns
 //!
@@ -133,14 +144,13 @@ pub fn plan(connection: &Connection, meeting_id: &str) -> Result<Option<Plan>> {
         return Ok(None);
     };
 
-    // Named, not forgotten, not the Operator — the same set `claims` works
-    // from, and for the same reasons. A pseudonym is absent because it has no
-    // name, so nothing here has to exclude it by hand.
-    let operator = speakers::operator(connection)?.map(|speaker| speaker.id);
+    // Named and not forgotten — the same set `claims` works from, and for
+    // the same reasons. A pseudonym is absent because it has no name, so
+    // nothing here has to exclude it by hand, and the Operator is in for the
+    // reasons in the module doc.
     let eligible: BTreeSet<String> = speakers::relearnable(connection)?
         .into_iter()
         .map(|speaker| speaker.id)
-        .filter(|id| Some(id) != operator.as_ref())
         .collect();
 
     let segments: Vec<(String, String, i64, i64, Option<String>)> = {
@@ -884,6 +894,48 @@ mod tests {
                 "{why}: and so is the Voiceprint"
             );
         }
+    }
+
+    /// Q237: a re-run Meeting re-seeds the Operator's Voiceprint.
+    ///
+    /// This is the test that would have caught Q236. The Operator was
+    /// excluded from `plan` until 2026-09-17, so a model change wiped their
+    /// Voiceprint and nothing put one back — and rule 3 of ADR-0029 as
+    /// amended, the Voiceprint match, is one of the three rules that name
+    /// the Operator. On the real History that cost them their name on the
+    /// four most recent Meetings (Q234). What is read here is still only
+    /// what the record attributes to them, which is the boundary that made
+    /// the exclusion look right in the first place.
+    #[test]
+    fn a_re_run_re_seeds_the_operators_voiceprint() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut connection = history();
+        speaker(&connection, "me", Some("Me"));
+        speakers::set_operator(&connection, "me").expect("operator");
+        segment(&connection, "s1", 1, (1000, 2000), "me");
+
+        let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
+        assert_eq!(
+            plan.ranges.len(),
+            1,
+            "the Operator's own attributed range is evidence about the Operator"
+        );
+        assert_eq!(plan.ranges[0].speaker_id, "me");
+        assert!(!plan.ranges[0].is_negative, "nobody corrected it away");
+        assert!(
+            plan.owners.contains("me"),
+            "and this Meeting's evidence about them is this run's to replace"
+        );
+
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+        assert_eq!(held(&connection, "me").len(), 1, "one range, one exemplar");
+        assert!(
+            speakers::get(&connection, "me")
+                .expect("get")
+                .expect("row")
+                .has_voiceprint,
+            "and the vector rule 3 matches on is back"
+        );
     }
 
     /// A Speaker this Meeting no longer says anything about keeps nothing
