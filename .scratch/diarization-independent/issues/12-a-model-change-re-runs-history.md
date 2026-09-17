@@ -259,14 +259,26 @@ the gate is about the schema, not about how the row arrived.
 
 ## Acceptance criteria
 
-- [ ] A named Speaker is recognized again after its Meetings are re-run, end to
-      end from an old-model History — the wiring is there and asserted through
-      the resolver (`a_wipe_then_a_bounded_rebuild_leaves_the_named_voice_matchable_again`:
+- [x] A named Speaker is recognized again after its Meetings are re-run, end to
+      end from an old-model History — asserted through the resolver
+      (`a_wipe_then_a_bounded_rebuild_leaves_the_named_voice_matchable_again`:
       wipe, rebuild, `cluster::resolve` names Alice again) and through the real
       completion path (`rebuilt_ranges_survive_the_run_that_would_have_replaced_them`,
-      `an_unanimous_claim_attributes_without_enrolling_the_cluster`), but with
-      synthetic embeddings. Whether a real model's vectors recognize the same
-      person is measurement, and waits on the model decision and on the trigger
+      `an_unanimous_claim_attributes_without_enrolling_the_cluster`), and
+      **measured on a real History with a real model** — Q234, the wipe and
+      re-run on `macbook-pro-nickel`: 10 of 10 Meetings walked, every Voiceprint
+      restamped `redimnet2-b3`/`1`, and Marc Ammann recognized in the 2026-09-16
+      Meeting from a Voiceprint earned eight Meetings earlier, in a History
+      holding zero rows in `attribution_hints` — so on the machine's own
+      judgement, with no Operator correction anywhere in it to replay.
+      Q243 re-ran the same History through `diarize/rerunRequest` after Q236
+      and found the walk clean a second time. **Two limits this does not
+      cover, both recorded rather than hidden:** the Operator was excluded
+      from relearning when Q234 ran (raised as Q236), and although Q237 fixed
+      that and Q243 confirms they now earn a Voiceprint back, the four Meetings already
+      lost to a pseudonym do not return — a pseudonym holding a Voiceprint cut
+      from exactly those segments keeps them, and recovering them needs a
+      re-enrol or merge surface that does not exist.
 - [x] Re-seeding and the run commit together or not at all — a stop before the
       writer and a failure after `reseed::commit` both leave the previous
       evidence exactly as it was

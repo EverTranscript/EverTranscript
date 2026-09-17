@@ -2821,3 +2821,14 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Supersedes:** Q238 — the substitute it escalated over is moot; the active trigger removed the need to seed anything
 **Ref:** 8b2d4aa
+
+## Q244 — issues/12 — deviation
+
+**Question:** Q243 cites Q236 as the fix that let the Operator relearn and Q237 as the entry that raised the cost. They are the other way round, and it also claims to supersede Q238, which Q240 already superseded. What is the record?
+**Options considered:** leave it / edit Q243 in place / append a correction that supersedes it
+**Chosen:** Corrected here, and Q243 left as written. **Q236 is the escalation** — *"The Operator came back from the re-run with no Voiceprint and lost their name on the four most recent Meetings. Is that the design, or a defect to fix?"*, `Outcome: escalated`, Ref `2978f20`. **Q237 is the fix** — the exclusion removed from `reseed::plan` and `cluster::claims`, `Outcome: applied`, Ref `23602b3`. Every sentence in Q243 naming one means the other. Its `Supersedes: Q238` is withdrawn: Q240 superseded Q238 already, and one escalation cannot be closed twice. **The measurement Q243 reports is unaffected** — no number, host, or verdict changes; only the entries they are attributed to.
+**Decided-by:** agent
+**Justification:** Appended rather than edited because the journal is append-only and this is content, not a `Ref` address or a numbering repair — the two sanctioned exceptions, and neither covers a wrong citation. The file's own precedent is this shape: Q229 corrected Q226's claim by superseding it rather than rewriting it. Caught while ticking ticket 12's last checkbox, where NOTES.md had the pair the right way round and the entry did not. **Two related repairs made in the same change, both to editable files rather than to the journal:** the ticket's new prose carried the same swap and is fixed, and NOTES.md's line on Q237 claimed the re-run was *"re-verified on the same host against an installed build"* — which never happened. Q237's own text makes no such claim, no install has occurred, and Q235 is still open; that sentence now records what Q243 actually did, on a copy through `diarize/rerunRequest`, together with the finding that the four lost Meetings do not return. A claim of verification against a build that was never installed is the kind of error that reads as evidence later, which is why it is corrected now rather than noted.
+**Outcome:** applied
+**Supersedes:** Q243 — its citations of Q236 and Q237 are transposed throughout, and its `Supersedes` line duplicates Q240's
+**Ref:** (pending)
