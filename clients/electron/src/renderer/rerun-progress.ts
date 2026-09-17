@@ -63,3 +63,27 @@ export function rerunLines(rerun: DiarizeRerun): RerunLines {
     through: Math.max(0, total - remaining),
   };
 }
+
+/**
+ * Whether the re-run actually moved between two answers.
+ *
+ * The Registry pulls `diarize/status` every two seconds, and a change is what
+ * decides whether to pull the Speaker list with it. Two things make this
+ * worth writing down rather than inlining. **Absence is a state, not a
+ * change:** an installation that has never changed models answers `null`
+ * forever, and calling `null` → `null` a move would refetch the whole list
+ * every two seconds for as long as the Registry is open. And what counts as
+ * movement is only what the rows underneath can see — a re-run standing aside
+ * for a recording has changed nothing about any Speaker.
+ */
+export function rerunMoved(seen: DiarizeRerun | null, next: DiarizeRerun | null): boolean {
+  if (seen === null || next === null) return (seen === null) !== (next === null);
+  return (
+    seen.done !== next.done ||
+    seen.remaining !== next.remaining ||
+    seen.abandoned !== next.abandoned ||
+    seen.cancelled !== next.cancelled ||
+    seen.model !== next.model ||
+    seen.modelVersion !== next.modelVersion
+  );
+}

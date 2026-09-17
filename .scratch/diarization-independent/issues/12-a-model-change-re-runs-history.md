@@ -159,14 +159,27 @@ not all belong to one eligible Speaker. Nothing calls either.
 ## Acceptance criteria
 
 - [ ] A named Speaker is recognized again after its Meetings are re-run, end to
-      end from an old-model History
-- [ ] Seeding comes from attributed whole clusters, not from the old model's
-      stored sample offsets — asserted, since the lazy path next door does the
-      opposite and the distinction is the reason this ticket exists
-- [ ] A forgotten Speaker is not re-embedded, and a Meeting without Kept Audio
-      keeps its attributions
-- [ ] Corrections outrank the machine's attribution when seeding, and negatives
-      are rebuilt
+      end from an old-model History — the wiring is there and asserted through
+      the resolver (`a_wipe_then_a_bounded_rebuild_leaves_the_named_voice_matchable_again`:
+      wipe, rebuild, `cluster::resolve` names Alice again), but with synthetic
+      embeddings. Whether a real model's vectors recognize the same person is
+      measurement, and waits on the model decision and on the caller
+- [x] Seeding comes from the attributed ranges, not from the old model's stored
+      sample offsets — asserted in
+      `reseed::tests::the_model_is_handed_only_the_audio_the_ranges_cover_in_both_directions`,
+      which records every stretch the reader is asked for. Not from whole
+      clusters as the ticket first said, per Q205: `claims` answers unanimity
+      over a cluster, and gating on it would discard a named Speaker's own
+      usable ranges whenever the cluster around them came out mixed
+- [x] A forgotten Speaker is not re-embedded, and a Meeting without Kept Audio
+      keeps its attributions — `plan` returns `None` without kept audio, and a
+      Speaker forgotten while embedding is one of the three disturbances in
+      `a_record_that_moved_while_embedding_refuses_the_vectors`
+- [x] Corrections outrank the machine's attribution when seeding, and negatives
+      are rebuilt — driven through `speakers::correct_attribution` rather than
+      fabricated hints (Q208). What a rebuilt negative does is stated exactly
+      rather than overclaimed: it is not a repellent, and the vector being
+      cleared is what withdraws recognition (Q209)
 - [x] Recording pauses the re-run and it resumes afterwards; a just-ended
       Meeting is diarized ahead of the backlog — in the queue worker, covered
       by `tests/diarize_queue.rs` (five cases, with a no-recording control) and
@@ -257,10 +270,12 @@ from Alice, relearn, correct back, relearn again, and the stale negative
 stays; a repartition writes a second vector and keeps the obsolete one. 05's
 one-time wipe does not reach a later correction under the same model.
 
-The negative half comes back with the seeding path, which re-embeds the
-claimed ranges and will have both of the missing inputs in hand: a vector
-bounded to what the correction actually covered, and a stable source identity
-to scope an atomic replacement to.
+The negative half came back with the seeding path, which re-embeds the
+claimed ranges and had both of the missing inputs in hand: a vector bounded to
+what the correction actually covered, and a stable source identity —
+`(speaker_id, meeting_id)` — to scope an atomic replacement to. Both defects
+above are covered by `reseed`'s away-then-back regression, which drives
+`speakers::correct_attribution` rather than fabricating the hints.
 
 ### `store::rerun` — the backlog state, over the existing queue
 
@@ -381,10 +396,18 @@ reintroduce the one-at-a-time question the single worker answers.
 
    **The replacement owns `(speaker_id, meeting_id)`, every writer's rows.**
    Both columns already exist, so no new provenance and no new migration.
-   Narrower would not have worked: `correct_segment` writes against the same
-   Meeting, and a correction that moved a segment away and then back leaves a
-   negative behind — replacing only this path's rows would re-derive the
-   positive and leave that negative standing.
+   Narrower would not have worked: `speakers::correct_attribution` writes
+   against the same Meeting, and a correction that moved a segment away and
+   then back leaves a negative behind — replacing only this path's rows would
+   re-derive the positive and leave that negative standing.
+
+   **What a rebuilt negative does, exactly.** It is stored and rebuilt, and
+   that is what keeps the next rebuild from handing the range back as a
+   positive. It is not a repellent: `centroid` filters negatives out and
+   `seeds` reads the positive Voiceprint column, so nothing scores against
+   one. What withdraws recognition is the vector going — which `commit` now
+   does through `clear_voiceprint`, never `delete_voiceprint`, so a
+   recomputation cannot leave a Speaker marked as one the Operator forgot.
 
    What is left for activation is the caller: the worker has to run `plan` →
    `embed_ranges` → `commit` inside the attribution transaction, with a real

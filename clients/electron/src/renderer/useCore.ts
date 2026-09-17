@@ -34,6 +34,8 @@ import type { StatusResponse } from "@protocol/StatusResponse";
 import type { TranscriptSegment } from "@protocol/TranscriptSegment";
 import type { TranscriptSnapshotResponse } from "@protocol/TranscriptSnapshotResponse";
 
+import { rerunMoved } from "./rerun-progress.js";
+
 export type CoreState = {
   status: StatusResponse | null;
   meetings: Meeting[];
@@ -360,6 +362,12 @@ export function useRegistry() {
   const asked = useRef(0);
   const applied = useRef(0);
 
+  // What the last accepted answer said. Held in a ref rather than read from
+  // the state, because the comparison has to happen *outside* `setRerun`'s
+  // updater: `main.tsx` runs StrictMode, which double-invokes updaters, so an
+  // updater that fires a request is not pure and would fire it twice.
+  const seen = useRef<DiarizeRerun | null>(null);
+
   // Accept an answer, and pull the Speaker list with it when the re-run has
   // moved. The rows underneath are what the re-run is *changing* — voices
   // relearned, pseudonyms re-numbered, a name left without a Voiceprint — and
@@ -368,19 +376,10 @@ export function useRegistry() {
   // request rather than two.
   const accept = useCallback(
     (next: DiarizeRerun | null) => {
-      setRerun((seen) => {
-        const moved =
-          seen === null ||
-          next === null ||
-          seen.done !== next.done ||
-          seen.remaining !== next.remaining ||
-          seen.abandoned !== next.abandoned ||
-          seen.cancelled !== next.cancelled ||
-          seen.model !== next.model ||
-          seen.modelVersion !== next.modelVersion;
-        if (moved) void refresh();
-        return next;
-      });
+      const moved = rerunMoved(seen.current, next);
+      seen.current = next;
+      setRerun(next);
+      if (moved) void refresh();
     },
     [refresh],
   );

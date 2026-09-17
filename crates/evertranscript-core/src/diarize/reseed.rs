@@ -12,8 +12,19 @@
 //! for whoever that segment is attributed to *now* — the newest correction if
 //! there is one, the machine's conclusion if there is not. The other half of
 //! a correction is kept: a segment a correction took away from somebody is
-//! negative evidence against them, which is what stops the same wrong match
-//! happening again (ADR-0009 as amended).
+//! recorded as negative evidence against them (ADR-0009 as amended), so the
+//! correction survives the model change rather than being re-derived as a
+//! positive from the same audio.
+//!
+//! **Be precise about what a stored negative does.** It is not a repellent.
+//! Nothing scores against one: [`super::cluster::centroid`] filters negatives
+//! out, and [`super::cluster::seeds`] reads the positive Voiceprint column,
+//! not the exemplar rows — so the only two readers of the flag either ignore
+//! the row or never see it. What it does is withhold: the range stops
+//! contributing to that Speaker's centroid, and where it was the last usable
+//! evidence, the Voiceprint is cleared and the Speaker is not a candidate at
+//! all. **Clearing the vector is what withdraws recognition; the negative is
+//! what keeps a later rebuild from handing the range back.**
 //!
 //! Three things are deliberately not sources:
 //!
@@ -36,7 +47,7 @@
 //!
 //! **Every exemplar an eligible Speaker has from this Meeting**, whichever
 //! writer produced it. Not a narrower scope tagged for this one: the sibling
-//! writer [`crate::store::speakers::correct_segment`] also writes rows
+//! writer [`crate::store::speakers::correct_attribution`] also writes rows
 //! against this Meeting, and a correction that moved a segment away and then
 //! back has already left a negative behind. Replacing only rows this path
 //! wrote would re-derive the positive and leave that negative standing, so
@@ -63,6 +74,7 @@ use anyhow::Result;
 use evertranscript_protocol::AudioChannel;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use rusqlite::Transaction;
 use rusqlite::params;
 
 use crate::store::speakers::{self, NewExemplar, Sample};
@@ -128,19 +140,30 @@ pub fn plan(connection: &Connection, meeting_id: &str) -> Result<Option<Plan>> {
         .filter(|id| Some(id) != operator.as_ref())
         .collect();
 
-    let segments: Vec<(String, String, i64, i64)> = {
+    let segments: Vec<(String, String, i64, i64, Option<String>)> = {
         let mut statement = connection.prepare(
-            "SELECT id, channel, start_ms, end_ms FROM transcript_segments \
+            "SELECT id, channel, start_ms, end_ms, speaker_id FROM transcript_segments \
               WHERE meeting_id = ?1 ORDER BY sequence",
         )?;
         let rows = statement.query_map(params![meeting_id], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
         })?;
         rows.collect::<rusqlite::Result<_>>()?
     };
 
+    let mut latest_hint = connection.prepare(
+        "SELECT speaker_id, replaced_speaker_id FROM attribution_hints \
+          WHERE segment_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
+    )?;
+
     let mut ranges = Vec::new();
-    for (segment_id, channel, start_ms, end_ms) in segments {
+    for (segment_id, channel, start_ms, end_ms, machine) in segments {
         let Some(channel) = AudioChannel::parse(&channel) else {
             continue;
         };
@@ -154,43 +177,54 @@ pub fn plan(connection: &Connection, meeting_id: &str) -> Result<Option<Plan>> {
             start_ms,
             end_ms,
         };
-        let corrected = speakers::attributed_speaker(connection, &segment_id)?.is_some()
-            && speakers::replaced_speaker(connection, &segment_id)?.is_some();
 
-        // Who owns this audio now. The newest correction if there is one,
-        // the machine's conclusion otherwise.
-        if let Some(owner) = speakers::attributed_speaker(connection, &segment_id)?
-            .filter(|id| eligible.contains(id))
-        {
+        // One read, and a failure is a failure. The newest correction if
+        // there is one, the machine's conclusion if there is not — the same
+        // order `attributed_speaker` applies, asked once here because the
+        // sign, the owner and whether the Operator is behind it all come out
+        // of the same row.
+        let hint: Option<(String, Option<String>)> = latest_hint
+            .query_row(params![&segment_id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+        // **A correction, not a non-null replacement.** Attributing a
+        // segment the machine had no opinion about records a hint with no
+        // `replaced_speaker_id`, and it is still the Operator's act — the
+        // strongest evidence there is about that voice. Reading the
+        // replacement as the test would file it as the machine's.
+        let from_operator = hint.is_some();
+        let (owner, replaced) = match hint {
+            Some((owner, replaced)) => (Some(owner), replaced),
+            None => (machine, None),
+        };
+
+        if let Some(owner) = owner.as_ref().filter(|id| eligible.contains(*id)) {
             ranges.push(Range {
                 segment_id: segment_id.clone(),
-                speaker_id: owner,
+                speaker_id: owner.clone(),
                 sample,
                 is_negative: false,
-                from_operator: corrected,
+                from_operator,
             });
         }
-        // And who it was taken from. Always the Operator's act, so always
-        // their evidence.
-        if let Some(denied) = speakers::replaced_speaker(connection, &segment_id)?
-            .filter(|id| eligible.contains(id))
-            .filter(|id| {
-                speakers::attributed_speaker(connection, &segment_id)
-                    .ok()
-                    .flatten()
-                    .as_ref()
-                    != Some(id)
-            })
+        // And who it was taken from. `correct_attribution` records the
+        // *machine's* column as the replacement, not the previous hint, so
+        // correcting away and back names the same Speaker on both sides —
+        // and a Speaker the audio ended up with is not also denied it.
+        if let Some(denied) = replaced
+            .as_ref()
+            .filter(|id| eligible.contains(*id))
+            .filter(|id| owner.as_ref() != Some(*id))
         {
             ranges.push(Range {
                 segment_id,
-                speaker_id: denied,
+                speaker_id: denied.clone(),
                 sample,
                 is_negative: true,
                 from_operator: true,
             });
         }
     }
+    drop(latest_hint);
 
     // Whoever this Meeting will speak for, plus whoever it spoke for before
     // and no longer does — their rows go too, and their Voiceprint with them.
@@ -227,8 +261,16 @@ pub fn plan(connection: &Connection, meeting_id: &str) -> Result<Option<Plan>> {
 /// else's words. Production passes [`crate::audio::sample::read`].
 pub type Read<'a> = dyn FnMut(&Path, AudioChannel, u64, u64) -> Result<(Vec<f32>, u32)> + 'a;
 
-/// Embeds each planned range, in order. `None` where a range yielded
-/// nothing — unreadable audio, or too little of it for the model.
+/// Embeds each planned range, in order.
+///
+/// `None` for a range the model legitimately cannot embed — too little
+/// voiced audio to run on. **Everything else is an error**, and the whole
+/// batch fails: a reader that could not open the recording and a model that
+/// failed to run both mean the vectors do not describe this Meeting, and
+/// [`commit`] deletes the previous evidence before it writes. Folded into
+/// `None`, a transient failure would be indistinguishable from "nothing to
+/// learn here" and would replace a Speaker's evidence with nothing while
+/// reporting success.
 ///
 /// The same reading and resampling [`super::runner::rebuild`] does, and the
 /// model is a callback for the same reason.
@@ -237,29 +279,31 @@ pub fn embed_ranges(
     history_dir: &Path,
     read: &mut Read<'_>,
     embed: &mut super::runner::Embed<'_>,
-) -> Vec<Option<Vec<f32>>> {
+) -> Result<Vec<Option<Vec<f32>>>> {
     let path = history_dir.join(&plan.audio_path);
-    plan.ranges
-        .iter()
-        .map(|range| {
-            let (samples, rate) = read(
-                &path,
-                range.sample.channel,
-                range.sample.start_ms.max(0) as u64,
-                range.sample.end_ms.max(0) as u64,
-            )
-            .inspect_err(|error| {
-                tracing::warn!(%error, segment = %range.segment_id, "could not read the range to re-embed");
-            })
-            .ok()?;
-            embed(&super::runner::resample_to_model_rate(&samples, rate))
-                .inspect_err(|error| {
-                    tracing::warn!(%error, segment = %range.segment_id, "could not re-embed the range");
-                })
-                .ok()
-                .flatten()
-        })
-        .collect()
+    let mut vectors = Vec::with_capacity(plan.ranges.len());
+    for range in &plan.ranges {
+        let (samples, rate) = read(
+            &path,
+            range.sample.channel,
+            range.sample.start_ms.max(0) as u64,
+            range.sample.end_ms.max(0) as u64,
+        )
+        .map_err(|error| {
+            error.context(format!(
+                "reading {} of {} to re-embed segment {}",
+                range.sample.channel.as_str(),
+                plan.audio_path,
+                range.segment_id
+            ))
+        })?;
+        vectors.push(
+            embed(&super::runner::resample_to_model_rate(&samples, rate)).map_err(|error| {
+                anyhow::anyhow!("re-embedding segment {}: {error}", range.segment_id)
+            })?,
+        );
+    }
+    Ok(vectors)
 }
 
 /// Why a commit wrote nothing.
@@ -271,15 +315,26 @@ pub enum Refused {
     Moved,
     /// The Meeting's audio is gone, so there is nothing to plan from.
     Gone,
+    /// The vectors are not one per planned range. A caller that lost some
+    /// along the way would otherwise delete a complete set of evidence and
+    /// put back a partial one.
+    Incomplete,
 }
 
 /// Replaces everything this Meeting says about its named voices, and
 /// recomputes the Voiceprints that changed.
 ///
-/// `vectors` is parallel to `plan.ranges`. Call inside a transaction: the
-/// delete, the inserts and the recomputation are one change, and a failure
-/// part-way through must leave the previous evidence whole rather than a
-/// Speaker with half of two models' worth.
+/// `vectors` is parallel to `plan.ranges`, and has to be exactly as long:
+/// the delete is wholesale, so a short list is a silent erasure rather than
+/// a partial write, and it is refused before anything is removed.
+///
+/// **Takes a [`Transaction`] rather than a connection**, because the delete,
+/// the inserts and the recomputation are one change: a failure part-way
+/// through has to leave the previous evidence whole rather than a Speaker
+/// with half of two models' worth. Its eventual place is inside
+/// `finish_run`'s writer closure, where the attribution transaction already
+/// is. A comment asking the caller to open one is not the same thing, and
+/// every call in autocommit is a partial write waiting for an error.
 ///
 /// **Re-reads the plan first.** Embedding happens outside any lock, and the
 /// record can move under it — a correction, a Meeting deleted, a Speaker
@@ -288,13 +343,16 @@ pub enum Refused {
 /// reason this cannot overwrite a newer correction or resurrect evidence for
 /// a Speaker somebody has since forgotten.
 pub fn commit(
-    connection: &Connection,
+    transaction: &Transaction<'_>,
     plan: &Plan,
     vectors: &[Option<Vec<f32>>],
     model: &str,
     model_version: &str,
 ) -> Result<std::result::Result<usize, Refused>> {
-    let Some(current) = self::plan(connection, &plan.meeting_id)? else {
+    if vectors.len() != plan.ranges.len() {
+        return Ok(Err(Refused::Incomplete));
+    }
+    let Some(current) = self::plan(transaction, &plan.meeting_id)? else {
         return Ok(Err(Refused::Gone));
     };
     if current != *plan {
@@ -305,7 +363,7 @@ pub fn commit(
     // it — see the module docs. Confined to this Meeting, so what they were
     // taught anywhere else stands.
     for speaker_id in &plan.owners {
-        connection.execute(
+        transaction.execute(
             "DELETE FROM speaker_exemplars WHERE speaker_id = ?1 AND meeting_id = ?2",
             params![speaker_id, plan.meeting_id],
         )?;
@@ -317,7 +375,7 @@ pub fn commit(
             continue;
         };
         speakers::add_exemplar(
-            connection,
+            transaction,
             NewExemplar {
                 speaker_id: &range.speaker_id,
                 meeting_id: Some(&plan.meeting_id),
@@ -333,12 +391,12 @@ pub fn commit(
         written += 1;
     }
 
-    // Including the ones that ended up with nothing: `seeds` reads the
-    // Voiceprint column, not the rows, so a Speaker whose evidence went and
-    // whose vector stayed would go on recognizing itself from a model that
-    // no longer describes it.
+    // Including the ones that ended up with nothing, and the ones left with
+    // only negatives: `seeds` reads the Voiceprint column, not the rows, so
+    // a Speaker whose usable evidence went and whose vector stayed would go
+    // on recognizing itself from a model that no longer describes it.
     for speaker_id in &plan.owners {
-        super::cluster::refresh_voiceprint(connection, speaker_id)?;
+        super::cluster::refresh_voiceprint(transaction, speaker_id)?;
     }
     Ok(Ok(written))
 }
@@ -346,16 +404,20 @@ pub fn commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diarize::{Cluster, Embedding, cluster};
     use crate::store::speakers::Exemplar;
 
     const RATE: u32 = crate::diarize::fbank::SAMPLE_RATE;
 
     /// A History with the current schema and one Meeting with kept audio.
     ///
-    /// No file behind it: the reader is injected, so what these check is
-    /// which stretches get asked for, which is the question. Whether
-    /// symphonia can decode a given container is its own concern and is not
-    /// re-tested here.
+    /// No file behind it: the reader is injected. **What that tests is the
+    /// range arithmetic and the sign of each range — which stretches of
+    /// which channel the model is shown.** It does not test decoding, and it
+    /// is not a substitute for it: whether `audio::sample::read` can open a
+    /// real recording is its own question, exercised by the paths that call
+    /// it for real, and this build's symphonia carries no WAV reader, so a
+    /// synthesized fixture could not have answered it here anyway.
     fn history() -> Connection {
         let mut connection = Connection::open_in_memory().expect("open");
         crate::store::schema::configure(&connection).expect("configure");
@@ -363,7 +425,7 @@ mod tests {
         connection
             .execute(
                 "INSERT INTO meetings (id, started_at, audio_path, created_at, updated_at) \
-                 VALUES ('m1', '2024-01-01T00:00:00Z', 'm1.wav', 'now', 'now')",
+                 VALUES ('m1', '2024-01-01T00:00:00Z', 'm1.mp3', 'now', 'now')",
                 [],
             )
             .expect("meeting");
@@ -391,29 +453,9 @@ mod tests {
             .expect("segment");
     }
 
-    /// A correction, as the record holds one: an appended hint, never an
-    /// overwrite (ADR-0009 as amended).
-    fn correct(connection: &Connection, segment_id: &str, to: &str, from: Option<&str>) {
-        connection
-            .execute(
-                "INSERT INTO attribution_hints \
-                    (id, segment_id, speaker_id, replaced_speaker_id, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    uuid::Uuid::now_v7().to_string(),
-                    segment_id,
-                    to,
-                    from,
-                    crate::store::now_rfc3339()
-                ],
-            )
-            .expect("hint");
-    }
-
     /// A reader that records every stretch it is asked for and answers a
-    /// second of silence, and an embedder that turns that into a vector
-    /// naming the request. Between them they say exactly what audio the
-    /// model was shown.
+    /// second of audio, and an embedder that turns that into a vector naming
+    /// the request. Between them they say exactly what the model was shown.
     fn reader(
         asked: &mut Vec<(AudioChannel, u64, u64)>,
     ) -> impl FnMut(&Path, AudioChannel, u64, u64) -> Result<(Vec<f32>, u32)> + '_ {
@@ -436,6 +478,18 @@ mod tests {
         speakers::exemplars(connection, speaker_id).expect("exemplars")
     }
 
+    /// Plan, embed and commit in one step, as the worker eventually will.
+    fn rebuild(connection: &mut Connection, dir: &Path) -> std::result::Result<usize, Refused> {
+        let plan = self::plan(connection, "m1").expect("plan").expect("audio");
+        let mut asked = Vec::new();
+        let vectors =
+            embed_ranges(&plan, dir, &mut reader(&mut asked), &mut embedder).expect("embed");
+        let transaction = connection.transaction().expect("begin");
+        let written = commit(&transaction, &plan, &vectors, "new", "2").expect("commit");
+        transaction.commit().expect("commit the transaction");
+        written
+    }
+
     #[test]
     fn the_model_is_handed_only_the_audio_the_ranges_cover_in_both_directions() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -446,11 +500,12 @@ mod tests {
         // Taken from Bob and given to Alice: positive for one, negative for
         // the other, over the same stretch.
         segment(&connection, "s2", 2, (2500, 3000), "bob");
-        correct(&connection, "s2", "alice", Some("bob"));
+        speakers::correct_attribution(&connection, "s2", "alice").expect("correction");
 
         let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
         let mut asked = Vec::new();
-        let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder);
+        let vectors =
+            embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder).expect("embed");
 
         assert_eq!(
             asked,
@@ -462,89 +517,160 @@ mod tests {
             "only the segments' own audio, once for the positive and once for the negative"
         );
         assert_eq!(vectors.len(), 3);
-        assert!(vectors.iter().all(Option::is_some));
 
-        let signs: Vec<(&str, bool)> = plan
+        let signs: Vec<(&str, bool, bool)> = plan
             .ranges
             .iter()
-            .map(|range| (range.speaker_id.as_str(), range.is_negative))
+            .map(|range| {
+                (
+                    range.speaker_id.as_str(),
+                    range.is_negative,
+                    range.from_operator,
+                )
+            })
             .collect();
         assert_eq!(
             signs,
-            vec![("alice", false), ("alice", false), ("bob", true)],
-            "the correction teaches Alice the voice and teaches Bob it is not his"
+            vec![
+                ("alice", false, false),
+                ("alice", false, true),
+                ("bob", true, true)
+            ],
+            "the correction teaches Alice the voice and teaches Bob it is not his, \
+             and only the corrected range is the Operator's"
         );
     }
 
-    /// The failure the sibling writer causes, and the reason the scope is the
-    /// whole Meeting rather than rows this path tagged as its own.
+    /// Naming a segment nobody had attributed is still the Operator's act.
+    #[test]
+    fn attributing_a_segment_the_machine_had_no_opinion_on_is_the_operators_evidence() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let connection = history();
+        speaker(&connection, "alice", Some("Alice"));
+        connection
+            .execute(
+                "INSERT INTO transcript_segments \
+                    (id, meeting_id, sequence, channel, start_ms, end_ms, text, speaker_id) \
+                 VALUES ('s1', 'm1', 1, 'mic', 1000, 2000, 'hello', NULL)",
+                [],
+            )
+            .expect("unattributed");
+        speakers::correct_attribution(&connection, "s1", "alice").expect("correction");
+
+        let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
+        let _ = dir;
+        assert_eq!(plan.ranges.len(), 1);
+        assert!(
+            plan.ranges[0].from_operator,
+            "a hint with no replacement is still a hint"
+        );
+        assert!(!plan.ranges[0].is_negative);
+    }
+
+    /// The reversal, through the path production actually uses.
+    ///
+    /// `correct_attribution` records the *machine's* column as what was
+    /// replaced, not the previous hint — so with the machine saying Alice
+    /// throughout, Alice → Bob → Alice ends with a hint whose replacement is
+    /// Alice herself. She is not denied audio she was just given, and Bob is
+    /// left with nothing, because nothing in the record says the voice was
+    /// ever his.
     #[test]
     fn a_correction_taken_away_and_given_back_replaces_rather_than_accumulates() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let connection = history();
+        let mut connection = history();
         speaker(&connection, "alice", Some("Alice"));
         speaker(&connection, "bob", Some("Bob"));
         segment(&connection, "s1", 1, (1000, 2000), "alice");
 
-        // What `correct_segment` leaves behind: away from Alice, then back.
-        speakers::add_exemplar(
-            &connection,
-            NewExemplar {
-                speaker_id: "alice",
-                meeting_id: Some("m1"),
-                vector: &[9.0, 9.0],
-                model: "old",
-                model_version: "1",
-                voiced_ms: 1000,
-                from_operator: true,
-                is_negative: true,
-                sample: None,
-            },
-        )
-        .expect("stale negative");
-        correct(&connection, "s1", "bob", Some("alice"));
-        correct(&connection, "s1", "alice", Some("bob"));
-
-        let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
-        let mut asked = Vec::new();
-        let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder);
-        let written = commit(&connection, &plan, &vectors, "new", "2")
-            .expect("commit")
-            .expect("accepted");
+        speakers::correct_attribution(&connection, "s1", "bob").expect("away");
         assert_eq!(
-            written, 2,
-            "the latest correction says Alice, and says it was not Bob"
+            rebuild(&mut connection, dir.path()),
+            Ok(2),
+            "Bob's, not Alice's"
         );
+        assert_eq!(held(&connection, "alice").len(), 1);
+        assert!(held(&connection, "alice")[0].is_negative);
+
+        // And back. `feed_correction` fires again here and writes against
+        // the rows the rebuild just left, which is what leaves a stale
+        // negative behind for a narrower replacement to miss.
+        speakers::correct_attribution(&connection, "s1", "alice").expect("back");
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
 
         let alice = held(&connection, "alice");
         assert_eq!(alice.len(), 1, "the stale negative did not survive");
         assert!(
             !alice[0].is_negative,
-            "and what is left is the positive the latest correction implies"
+            "what is left is the positive the latest correction implies"
         );
         assert_eq!(alice[0].model, "new");
-        let bob = held(&connection, "bob");
-        assert_eq!(bob.len(), 1);
-        assert!(bob[0].is_negative, "the other half of the same correction");
+        assert!(
+            held(&connection, "bob").is_empty(),
+            "and nothing says the voice was ever Bob's"
+        );
 
-        // And running it again does not stack a second copy.
-        let again = self::plan(&connection, "m1").expect("plan").expect("audio");
-        let mut twice = Vec::new();
-        let vectors = embed_ranges(&again, dir.path(), &mut reader(&mut twice), &mut embedder);
-        commit(&connection, &again, &vectors, "new", "2")
-            .expect("commit")
-            .expect("accepted");
+        // A retry stacks nothing.
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
         assert_eq!(held(&connection, "alice").len(), 1, "a retry replaces");
+    }
+
+    /// Correcting a Speaker's last positive segment away leaves it with a
+    /// negative and no usable vector — and it is not the Operator forgetting
+    /// them.
+    #[test]
+    fn a_speaker_left_with_only_a_negative_loses_the_vector_but_not_its_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut connection = history();
+        speaker(&connection, "alice", Some("Alice"));
+        speaker(&connection, "bob", Some("Bob"));
+        segment(&connection, "s1", 1, (1000, 2000), "alice");
+
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+        assert!(
+            speakers::get(&connection, "alice")
+                .expect("get")
+                .expect("row")
+                .has_voiceprint,
+            "Alice is recognizable from her one segment"
+        );
+
+        speakers::correct_attribution(&connection, "s1", "bob").expect("it was Bob");
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(2));
+
+        let alice = held(&connection, "alice");
+        assert_eq!(alice.len(), 1);
+        assert!(alice[0].is_negative, "the negative is kept");
+        let row = speakers::get(&connection, "alice")
+            .expect("get")
+            .expect("row");
+        assert!(
+            !row.has_voiceprint,
+            "and the vector nothing supports is gone"
+        );
+        assert_eq!(
+            row.display_name.as_deref(),
+            Some("Alice"),
+            "she is still Alice"
+        );
+        assert!(
+            speakers::relearnable(&connection)
+                .expect("relearnable")
+                .iter()
+                .any(|speaker| speaker.id == "alice"),
+            "and a recomputation must never mark her forgotten: `relearnable` \
+             consults that flag, and she is still someone a later Meeting can teach"
+        );
     }
 
     #[test]
     fn what_another_meeting_taught_is_left_alone() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let connection = history();
+        let mut connection = history();
         connection
             .execute(
                 "INSERT INTO meetings (id, started_at, audio_path, created_at, updated_at) \
-                 VALUES ('m0', '2023-01-01T00:00:00Z', 'm0.wav', 'now', 'now')",
+                 VALUES ('m0', '2023-01-01T00:00:00Z', 'm0.mp3', 'now', 'now')",
                 [],
             )
             .expect("earlier meeting");
@@ -566,13 +692,7 @@ mod tests {
         )
         .expect("other meeting");
 
-        let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
-        let mut asked = Vec::new();
-        let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder);
-        commit(&connection, &plan, &vectors, "new", "2")
-            .expect("commit")
-            .expect("accepted");
-
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
         let alice = held(&connection, "alice");
         assert_eq!(alice.len(), 2, "one from each Meeting");
         assert!(
@@ -592,7 +712,7 @@ mod tests {
         let disturbances: [(&str, Disturbance); 3] = [
             ("a correction landed", |connection: &Connection| {
                 speaker(connection, "bob", Some("Bob"));
-                correct(connection, "s1", "bob", Some("alice"));
+                speakers::correct_attribution(connection, "s1", "bob").expect("correction");
             }),
             ("the Speaker was forgotten", |connection: &Connection| {
                 connection
@@ -610,20 +730,23 @@ mod tests {
         ];
         for (why, disturb) in disturbances {
             let dir = tempfile::tempdir().expect("tempdir");
-            let connection = history();
+            let mut connection = history();
             speaker(&connection, "alice", Some("Alice"));
             segment(&connection, "s1", 1, (1000, 2000), "alice");
 
             let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
             let mut asked = Vec::new();
-            let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder);
+            let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder)
+                .expect("embed");
             disturb(&connection);
 
+            let transaction = connection.transaction().expect("begin");
             assert_eq!(
-                commit(&connection, &plan, &vectors, "new", "2").expect("commit"),
+                commit(&transaction, &plan, &vectors, "new", "2").expect("commit"),
                 Err(Refused::Moved),
                 "{why}"
             );
+            transaction.commit().expect("commit");
             assert!(
                 held(&connection, "alice").is_empty(),
                 "{why}: and nothing was written"
@@ -634,20 +757,98 @@ mod tests {
     #[test]
     fn a_deleted_recording_refuses_rather_than_writing_from_a_stale_plan() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let connection = history();
+        let mut connection = history();
         speaker(&connection, "alice", Some("Alice"));
         segment(&connection, "s1", 1, (1000, 2000), "alice");
         let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
         let mut asked = Vec::new();
-        let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder);
+        let vectors =
+            embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder).expect("embed");
 
         connection
             .execute("UPDATE meetings SET audio_path = NULL WHERE id = 'm1'", [])
             .expect("kept audio dropped");
+        let transaction = connection.transaction().expect("begin");
         assert_eq!(
-            commit(&connection, &plan, &vectors, "new", "2").expect("commit"),
+            commit(&transaction, &plan, &vectors, "new", "2").expect("commit"),
             Err(Refused::Gone)
         );
+    }
+
+    /// The erasure a zip would have performed quietly.
+    #[test]
+    fn vectors_that_are_not_one_per_range_are_refused_before_anything_is_deleted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut connection = history();
+        speaker(&connection, "alice", Some("Alice"));
+        segment(&connection, "s1", 1, (1000, 2000), "alice");
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+
+        let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
+        let transaction = connection.transaction().expect("begin");
+        assert_eq!(
+            commit(&transaction, &plan, &[], "new", "2").expect("commit"),
+            Err(Refused::Incomplete),
+            "an empty batch for a non-empty plan is a caller that lost them"
+        );
+        transaction.commit().expect("commit");
+        assert_eq!(
+            held(&connection, "alice").len(),
+            1,
+            "and the complete set it would have erased is still there"
+        );
+    }
+
+    /// A reader or a model that failed says nothing about this Meeting, and
+    /// must not be read as "there was nothing to learn".
+    #[test]
+    fn a_failed_read_or_a_failed_model_is_an_error_and_changes_nothing() {
+        for (why, read_fails) in [
+            ("the recording could not be read", true),
+            ("the model failed", false),
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let mut connection = history();
+            speaker(&connection, "alice", Some("Alice"));
+            segment(&connection, "s1", 1, (1000, 2000), "alice");
+            assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+            let before = held(&connection, "alice");
+            assert_eq!(before.len(), 1);
+
+            let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
+            let failed = embed_ranges(
+                &plan,
+                dir.path(),
+                &mut |_path: &Path, channel: AudioChannel, start: u64, end: u64| {
+                    if read_fails {
+                        anyhow::bail!("no such file");
+                    }
+                    let _ = (channel, start, end);
+                    Ok((vec![0.0; RATE as usize], RATE))
+                },
+                &mut |_samples: &[f32]| {
+                    if read_fails {
+                        unreachable!("the read failed first");
+                    }
+                    Err(crate::diarize::DiarizeError::Failed(anyhow::anyhow!(
+                        "the session died"
+                    )))
+                },
+            );
+            assert!(failed.is_err(), "{why}");
+            assert_eq!(
+                held(&connection, "alice"),
+                before,
+                "{why}: and the evidence in the same space is untouched"
+            );
+            assert!(
+                speakers::get(&connection, "alice")
+                    .expect("get")
+                    .expect("row")
+                    .has_voiceprint,
+                "{why}: and so is the Voiceprint"
+            );
+        }
     }
 
     /// A Speaker this Meeting no longer says anything about keeps nothing
@@ -658,9 +859,9 @@ mod tests {
     /// on either side: a pseudonym is re-minted rather than relearned, so it
     /// gets no ranges, and Alice gets neither a positive nor a negative.
     #[test]
-    fn a_former_owner_left_with_nothing_loses_its_voiceprint_too() {
+    fn a_former_owner_left_with_nothing_loses_its_voiceprint_but_not_its_name() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let connection = history();
+        let mut connection = history();
         speaker(&connection, "alice", Some("Alice"));
         speaker(&connection, "ghost", None);
         segment(&connection, "s1", 1, (1000, 2000), "ghost");
@@ -690,77 +891,89 @@ mod tests {
             plan.owners.contains("alice"),
             "Alice is still an owner, because her evidence is what goes"
         );
-        let mut asked = Vec::new();
-        let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder);
-        commit(&connection, &plan, &vectors, "new", "2")
-            .expect("commit")
-            .expect("accepted");
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(0));
 
         assert!(held(&connection, "alice").is_empty());
         let alice = speakers::get(&connection, "alice")
             .expect("get")
             .expect("row");
         assert!(!alice.has_voiceprint, "the vector went with the evidence");
+        assert_eq!(
+            alice.display_name.as_deref(),
+            Some("Alice"),
+            "but she is still Alice, not somebody the Operator forgot"
+        );
+        assert!(
+            speakers::relearnable(&connection)
+                .expect("relearnable")
+                .iter()
+                .any(|speaker| speaker.id == "alice"),
+            "and a later Meeting may still teach her"
+        );
         assert!(
             held(&connection, "ghost").is_empty(),
             "and the pseudonym was never this writer's to teach"
         );
     }
 
+    /// A failure after the delete must put the old set back, whole.
     #[test]
-    fn a_failure_part_way_through_leaves_the_previous_evidence_whole() {
+    fn a_failure_after_the_delete_leaves_the_previous_evidence_and_vector_whole() {
         let dir = tempfile::tempdir().expect("tempdir");
         let mut connection = history();
         speaker(&connection, "alice", Some("Alice"));
         segment(&connection, "s1", 1, (1000, 2000), "alice");
-        speakers::add_exemplar(
-            &connection,
-            NewExemplar {
-                speaker_id: "alice",
-                meeting_id: Some("m1"),
-                vector: &[1.0, 0.0],
-                model: "old",
-                model_version: "1",
-                voiced_ms: 1000,
-                from_operator: true,
-                is_negative: false,
-                sample: None,
-            },
-        )
-        .expect("the old set");
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+        let before = held(&connection, "alice");
+        assert_eq!(before.len(), 1);
+
+        // Nothing may be inserted from here on, so the commit fails after
+        // its delete — the one ordering a rollback has to survive.
+        connection
+            .execute_batch(
+                "CREATE TRIGGER no_more_exemplars BEFORE INSERT ON speaker_exemplars                    BEGIN SELECT RAISE(ABORT, 'the disk went away'); END;",
+            )
+            .expect("trigger");
 
         let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
         let mut asked = Vec::new();
-        let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder);
-
+        let vectors =
+            embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder).expect("embed");
         let transaction = connection.transaction().expect("begin");
-        commit(&transaction, &plan, &vectors, "new", "2")
-            .expect("commit")
-            .expect("accepted");
+        let failure = commit(&transaction, &plan, &vectors, "newer", "3");
+        assert!(failure.is_err(), "the insert failure is propagated");
         drop(transaction);
 
-        let alice = held(&connection, "alice");
+        connection
+            .execute_batch("DROP TRIGGER no_more_exemplars;")
+            .expect("drop");
         assert_eq!(
-            alice.len(),
-            1,
+            held(&connection, "alice"),
+            before,
             "the old complete set, not a half-written one"
         );
-        assert_eq!(alice[0].model, "old");
+        assert!(
+            speakers::get(&connection, "alice")
+                .expect("get")
+                .expect("row")
+                .has_voiceprint,
+            "and the Voiceprint it supports"
+        );
     }
 
     /// The end the ticket promises, as far as this can be taken without a
     /// model: clear every Voiceprint, rebuild one Meeting from the ranges,
-    /// and the named Speaker is matchable again in the new space.
+    /// and the named Speaker is matched again in the new space.
     ///
     /// The embeddings are synthetic, so what this establishes is the wiring
-    /// — the ranges, the replacement, the recomputation and the space the
-    /// vectors are stamped with. **Whether a real model's vectors actually
-    /// recognize the same person again is measurement, not a test**, and
-    /// waits on the model decision this ticket waits on.
+    /// — the ranges, the replacement, the recomputation, and that the
+    /// resolver reaches the result. **Whether a real model's vectors
+    /// actually recognize the same person again is measurement, not a
+    /// test**, and waits on the model decision this ticket waits on.
     #[test]
     fn a_wipe_then_a_bounded_rebuild_leaves_the_named_voice_matchable_again() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let connection = history();
+        let mut connection = history();
         speaker(&connection, "alice", Some("Alice"));
         segment(&connection, "s1", 1, (1000, 2000), "alice");
         speakers::add_exemplar(
@@ -792,12 +1005,7 @@ mod tests {
             "nothing is recognized straight after a model change"
         );
 
-        let plan = self::plan(&connection, "m1").expect("plan").expect("audio");
-        let mut asked = Vec::new();
-        let vectors = embed_ranges(&plan, dir.path(), &mut reader(&mut asked), &mut embedder);
-        commit(&connection, &plan, &vectors, "new", "2")
-            .expect("commit")
-            .expect("accepted");
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
 
         let alice = speakers::get(&connection, "alice")
             .expect("get")
@@ -811,16 +1019,22 @@ mod tests {
             (Some("new"), Some("2")),
             "and it is in the new space, not the old one"
         );
-        let matchable = speakers::voiceprints(&connection, "new", "2").expect("voiceprints");
-        let (_, vector, _) = matchable
-            .iter()
-            .find(|(id, _, _)| id == "alice")
-            .expect("matching finds it");
-        let mut expected = vectors[0].clone().expect("the range embedded");
-        super::super::cluster::l2_normalize(&mut expected);
+
+        // Through the resolver rather than by reading the gallery: what
+        // matters is that the same range, offered as this Meeting's one
+        // cluster, now comes back named.
+        let seeds = cluster::seeds(&connection, "new", "2").expect("seeds");
+        let exemplar = &held(&connection, "alice")[0];
+        let clusters: std::collections::BTreeMap<Cluster, Embedding> = [(
+            Cluster(0),
+            Embedding::new(exemplar.vector.clone(), "new", "2", 1000),
+        )]
+        .into_iter()
+        .collect();
         assert_eq!(
-            *vector, expected,
-            "one range, so the Voiceprint is that range's direction"
+            cluster::resolve(&clusters, &seeds).get(&Cluster(0)),
+            Some(&cluster::Resolved::Existing("alice".to_string())),
+            "the voice the Meeting taught is the voice it now finds"
         );
     }
 }

@@ -616,7 +616,7 @@ pub fn seeds(
 }
 
 /// Recomputes a Speaker's Voiceprint from the evidence it still holds, or
-/// clears it when none is left.
+/// clears it when the evidence cannot produce one.
 ///
 /// The clearing is what makes a withdrawn exemplar actually withdrawn:
 /// [`seeds`] reads the column, not the rows, and a Speaker whose every
@@ -625,6 +625,31 @@ pub fn seeds(
 /// Only evidence in the newest exemplar's space enters the average: two
 /// spaces averaged together is a vector in neither, and the column's model
 /// columns would say otherwise.
+///
+/// **It clears; it never forgets.** Forgetting is the Operator's act and
+/// [`speakers::delete_voiceprint`] is the only thing that performs it —
+/// which is exactly why a recomputation must not call it. This used to, for
+/// the case where no evidence is left, and the mark it set is the one
+/// [`speakers::relearnable`] consults: a Speaker that simply ran out of
+/// evidence would have been recorded as one the Operator deliberately
+/// forgot, excluded from every future re-run, and shown in the Registry as
+/// deleted by them. That call also removed *every* exemplar the Speaker
+/// had, from every Meeting — harmless only because it ran when there were
+/// none. [`speakers::clear_voiceprint`] is the half a recomputation wants,
+/// and it exists for this.
+///
+/// **Evidence that is all negative clears too.** It used to be left alone,
+/// on the reasoning that a Speaker with nothing but negatives had nothing to
+/// recompute *from*. But it has something to recompute *away*: correcting a
+/// Speaker's last positive segment to somebody else leaves the old vector
+/// standing, still offered to every future match, with nothing behind it
+/// that agrees. The stored negative does not prevent that by itself, and
+/// saying so would be a claim this code does not back: [`centroid`] filters
+/// negatives out, [`seeds`] reads the positive Voiceprint column, and
+/// nothing else scores against one either. **The vector going is the whole
+/// of what withdraws the recognition.** The negative exemplar is left where
+/// it is — it is the record of the correction (ADR-0009 as amended), and a
+/// recomputation is not the place to decide it has served its purpose.
 pub(super) fn refresh_voiceprint(
     connection: &rusqlite::Connection,
     speaker_id: &str,
@@ -658,10 +683,11 @@ pub(super) fn refresh_voiceprint(
             &latest.model,
             &latest.model_version,
         ),
-        (None, None) => speakers::delete_voiceprint(connection, speaker_id).map(|_| ()),
-        // Evidence that yields no centroid — every exemplar negative — leaves
-        // the Voiceprint as it was, as it always has.
-        _ => Ok(()),
+        // No evidence at all, or none that yields a centroid. Either way
+        // there is no vector this Speaker's record supports, and the columns
+        // that claim one are cleared — without touching the name, the
+        // exemplars, or the forgetting mark.
+        _ => speakers::clear_voiceprint(connection, speaker_id).map(|_| ()),
     }
 }
 

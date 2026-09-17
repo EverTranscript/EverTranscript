@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import type { DiarizeRerun } from "@protocol/DiarizeRerun";
 
-import { rerunLines } from "./rerun-progress.js";
+import { rerunLines, rerunMoved } from "./rerun-progress.js";
 
 const backlog = (over: Partial<DiarizeRerun>): DiarizeRerun => ({
   model: "wespeaker",
@@ -53,4 +53,23 @@ test("an emptied line that nobody stopped is finished", () => {
   const { state, counts } = rerunLines(backlog({ done: 40, remaining: 0 }));
   assert.equal(state, "Update finished.");
   assert.equal(counts, "40 gone through");
+});
+
+// The common case by a wide margin: no model has ever changed here, so every
+// poll for as long as the Registry is open answers the same nothing.
+test("an installation with no re-run at all is not moving", () => {
+  assert.equal(rerunMoved(null, null), false);
+});
+
+test("a re-run appearing, and the same re-run finishing and going, are all moves", () => {
+  const running = backlog({});
+  assert.equal(rerunMoved(null, running), true);
+  assert.equal(rerunMoved(running, backlog({ done: 13, remaining: 27 })), true);
+  assert.equal(rerunMoved(running, null), true);
+});
+
+// The rows underneath are the reason to refetch, and a pause changes none of
+// them: the words above say "waiting" from the answer already in hand.
+test("standing aside for a recording is not a move", () => {
+  assert.equal(rerunMoved(backlog({}), backlog({ pausedForRecording: true })), false);
 });
