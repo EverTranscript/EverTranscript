@@ -525,3 +525,36 @@ inference pass rather than one per cell.
 remain escalated and were not carried over.
 That journal forked from main's at Q115 — both sides claim Q115–Q124 for
 different decisions — so it cannot be merged, only read.
+
+## `macbook-pro-nickel`, the host with the real History
+
+The only host with a populated History (`~/Documents/EverTranscript`, 10
+Meetings, 8 named Speakers), so anything needing real recorded audio runs
+there. It is a laptop that sleeps, surfacing for seconds at a time — which is
+why remote work on it is one self-contained script fed over
+`ssh … 'bash -s'` rather than several round trips.
+
+**The installed app is still v1.1.1 and must not start.** Q234's migration left
+ReDimNet2 at `diarize-embedding.onnx`, 18 045 013 bytes, under the fixed
+filename v1.1.1 expects WeSpeaker's 26 535 549 at, so that build reads it as
+`Corrupted` on size and re-fetches WeSpeaker over it — after which Q227's lazy
+path rebuilds every Voiceprint back into the old space. Q235's install is the
+fix and has not happened.
+
+**Its login item is disabled, 2026-09-17 (Q241).**
+`~/Library/LaunchAgents/com.evertranscript.core.plist` carried `RunAtLoad` true
+on that v1.1.1 binary, so the next login would have done exactly the above with
+nobody opening the app. `launchctl disable gui/<uid>/com.evertranscript.core`
+now holds it, keyed on the label so it survives a reboot and a rewritten plist;
+the plist is copied to
+`~/EverTranscript-backups/com.evertranscript.core.plist.disabled-20260917-132237`
+and otherwise left in place. Re-enable with `launchctl enable` once a build from
+`main` is installed. The embedding file read 18 045 013 bytes before and after.
+
+Its `/tmp` also holds eleven scripts from two earlier sessions **on that
+machine** — audited 2026-09-17: none running, none in state `T`, no crontab, no
+plist referencing any of them. Four drive the installed v1.1.1 Core against the
+real History and two replace `/Applications/EverTranscript.app`, so none should
+be run before the install. They were kept rather than deleted because two,
+`et-sign.sh` and `et-swap.sh`, are cited as the install recipe in that host's own
+`local-macos-install-recipe.md`.
