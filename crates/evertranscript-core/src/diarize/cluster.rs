@@ -36,6 +36,13 @@ use super::Embedding;
 /// of voice) go unrecognized at 0.61 and admits nobody wrongly.
 /// Before the fix the same measurement put the *same* person at 0.58 on
 /// average, which is why recognition never worked in the shipped builds.
+///
+/// **Selected rather than inherited since 2026-09-17** (DECISIONS Q231).
+/// Held-out AMI test, in the arm that ships, against the two other points
+/// predeclared in Q182: 0.30/0.00 is worse on all four recognition
+/// quantities, and 0.80/0.00 trades 303.790s of correct returning for
+/// 37.700s less wrong with newcomers tied — a trade this loses only if a
+/// wrong attributed second is held to cost more than 8.06 correct ones.
 pub const MATCH_FLOOR: f32 = 0.62;
 
 /// How far the best candidate must beat the runner-up.
@@ -47,6 +54,8 @@ pub const MATCH_FLOOR: f32 = 0.62;
 /// nearest other person's was 0.34, so this is never the binding rule
 /// there; it is kept for the pair of colleagues that measurement did not
 /// contain.
+///
+/// Selected with [`MATCH_FLOOR`], which it is chosen as a pair with.
 pub const MATCH_MARGIN: f32 = 0.08;
 
 /// Agglomerative merge threshold on L2-normalized embeddings (catalog M3).
