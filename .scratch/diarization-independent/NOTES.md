@@ -2,7 +2,8 @@
 
 Branch `diarization-independent`, cut from `origin/main` at 83e0521.
 
-The twelve tickets in `.scratch/diarization-pyannote-redimnet2/` were written
+The twelve tickets in `.scratch/diarization-pyannote-redimnet2/` — on the tag
+`archive/diarization-pyannote-redimnet2` now, the branch is gone — were written
 against a main that has since moved. Six of them turned out to be independent
 of the question that stalled the rest — whether ReDimNet2-B3 should replace
 WeSpeaker — so they were landed on their own. Their ticket files were
@@ -506,7 +507,8 @@ inference pass rather than one per cell.
 
 ## Escalated, still open
 
-`Q135` and `Q145` in the **original** branch's journal
-(`diarization-pyannote-redimnet2`) remain escalated and were not carried over.
+`Q135` and `Q145` in the **original** branch's journal — read it at the tag
+`archive/diarization-pyannote-redimnet2`; the branch was deleted 2026-09-17 —
+remain escalated and were not carried over.
 That journal forked from main's at Q115 — both sides claim Q115–Q124 for
 different decisions — so it cannot be merged, only read.
