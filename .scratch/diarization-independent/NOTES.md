@@ -802,7 +802,14 @@ that path (`et-sign.sh:5`, `et-swap.sh:10`), so losing it leaves them nothing
 to sign or copy. `et-swap.sh`'s own failure message names that path as the
 reinstall source too; the rollback that survives a wipe is
 `~/EverTranscript-backups/EverTranscript.app.installed-20260917-153552`, which
-is the **pre-swap** bundle. If `out/` is gone, rebuild from `6579ed0` or later
+is the **pre-swap** bundle. **The staged bundle itself is now preserved at
+`~/EverTranscript-backups/EverTranscript.app.staged-6579ed0`** (300 MB, same
+Core `325e4b82…` and `LC_UUID 0BEA34B2-…`, mtimes kept by `ditto`): if
+`packaging/out` is gone, `ditto
+~/EverTranscript-backups/EverTranscript.app.staged-6579ed0
+~/github.com/EverTranscript/EverTranscript/packaging/out/installers/mac-arm64/EverTranscript.app`
+first and then run the scripts unchanged — **do not edit the scripts** to point
+elsewhere. Only if that copy is lost too, rebuild from `6579ed0` or later
 `main` (`./packaging/build.sh` then `CSC_IDENTITY_AUTO_DISCOVERY=false pnpm -C
 clients/electron package`, with mise's node on `PATH`) and **re-read the new
 bundle's `LC_UUID` before step 1** — a rebuild is a fresh link, so the UUID

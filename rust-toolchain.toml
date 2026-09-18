@@ -1,5 +1,25 @@
-# Build with the stable channel — whatever `rustup update stable` has made current —
-# so a machine whose default toolchain is something else still builds this workspace
-# the way CI does (dtolnay/rust-toolchain@stable in ci.yml and package.yml).
+# **Pinned, not floating** — 2026-09-18, DECISIONS Q271.
+#
+# This used to say `channel = "stable"`, so that a machine whose default
+# toolchain is something else still built this workspace the way CI did. It
+# kept that property and bought a surprise with it: `stable` is whatever
+# `rustup update` last fetched, so the toolchain could move under an
+# unchanged tree. It did. clippy 0.1.98 turned on `chunks_exact_to_as_chunks`
+# and CI went red on a commit that touched only `DECISIONS.md`, then stayed
+# red for 43 runs — with `Lints` failing at step 7, which skipped `Tests` and
+# the bindings check behind it (Q268).
+#
+# An exact version keeps the property and removes the surprise: CI installs
+# *this file* rather than `@stable`, so a developer's machine and both
+# workflows can only move together, and only on a commit that says so — which
+# CI then checks like any other change. Bumping is deliberate: edit `channel`,
+# run `cargo fmt --all --check` and `cargo clippy --workspace --all-targets --
+# -D warnings` locally, fix whatever the new lints found, and push that as one
+# commit.
+#
+# `components` is here rather than in the workflows for the same reason: one
+# source of truth. `rustup toolchain install` with no argument installs the
+# active toolchain, which is this one, with these components.
 [toolchain]
-channel = "stable"
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]

@@ -33,7 +33,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install the Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # From `rust-toolchain.toml`, not `@stable`. With no toolchain
+        # argument `rustup toolchain install` installs the *active* one — the
+        # version and components that file pins — so CI and a developer's
+        # machine cannot drift apart without a commit that moves both.
+        shell: bash
+        run: |
+          rustup toolchain install --no-self-update
+          rustc --version && cargo clippy --version && cargo fmt --version
 
       # No `version:` here. The root package.json carries `packageManager`,
       # and specifying both is an error rather than a redundancy — the

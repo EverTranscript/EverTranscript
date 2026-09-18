@@ -11,9 +11,15 @@ ADR-0037.
 **Blocked by:** nothing. Ticket 04 has landed (`cfd1077`), which is what makes
 "the model changed" a question the code can answer.
 
-**Status:** built, **not activated**. The migration, its file-backed test and
-the Registry messaging all exist; the activation does not, and by design will
-not until the model decision is the user's to give.
+**Status:** **done — built and activated.** Registered 2026-09-17 as
+`MODEL_CHANGE_WIPE`, migration 15, on the user's instruction (DECISIONS Q228),
+and **run against a real History the same day** (Q234): the gate fired on first
+boot on `macbook-pro-nickel`, wiped every Voiceprint and kept the record, and
+`user_version` went 14 → 16. All six acceptance criteria are met. The text
+below was written while it was groundwork and still says the wipe is held out
+of `MIGRATIONS`; read those passages as history — `store::schema.rs:471` lists
+it, the constant is no longer `PENDING_*`, and the two tests that asserted it
+was unregistered were inverted into one that asserts the pairing (Q228).
 
 ## What to build
 

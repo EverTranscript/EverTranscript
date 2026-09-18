@@ -11,12 +11,20 @@ ADR-0037.
 **Blocked by:** 05, and nothing else. The branch listed 06, 08, 09, 10 and 11;
 08–11 have all landed here, and 06 gates *activation* rather than the work.
 
-**Status:** groundwork implemented, activation outstanding. The backlog and
-its state, the queue worker's pause and ordering, the protocol surface, the
-Registry block, and the bounded seeding writer (`diarize::reseed`) are all
-written and tested. What is not done is activation: nothing calls the writer,
-`begin` and `begin_if_the_model_changed` are unreachable, and the schemas stay
-unregistered — see *Activation* below.
+**Status:** **done — built, activated and exercised end to end.** Registered
+2026-09-17 as `MODEL_CHANGE_RERUN`, migration 16, directly behind the wipe
+(DECISIONS Q228), and **run against a real 361 MB History the same day**
+(Q234): backed up whole first, the gate wiped and enqueued on first boot, and
+the walk finished 10 of 10 Meetings in sixteen minutes with 0 abandoned, 0
+owed and no `rerunError`. Attribution rose 2584 → 2593 of 3744 segments and
+exemplars 78 → 1458, every Voiceprint stamped `redimnet2-b3`/`1`. The writer
+is called, `begin_if_the_model_changed` runs at every boot, and both schemas
+are in `MIGRATIONS`. All ten acceptance criteria are met — the last was closed
+by that run, with the Operator's exclusion removed in Q237 and verified in
+Q243. Verifying it found a defect **outside** the criteria, which is ticket 13
+and then ticket 15's rule, not a gap here (Q246–Q249). The text below was
+written while this was groundwork and still says nothing calls the writer and
+the schemas stay unregistered; read those passages as history.
 
 ## What to build
 
@@ -349,6 +357,13 @@ Same two dependencies as 05, plus one of its own:
 No part of this may be run against a real History before (1) and (2). Writing
 and testing the trigger is safe and is done; **registering the schema is what
 makes it fire**, and that stays out of `MIGRATIONS`.
+
+> **Superseded 2026-09-17.** Both conditions were met and the section above is
+> now history. The user instructed registration (Q228), so `MODEL_CHANGE_WIPE`
+> and `MODEL_CHANGE_RERUN` are migrations 15 and 16; the real end-to-end
+> exercise (3) then ran on `macbook-pro-nickel` (Q234), which is the run the
+> Status block records. The ≥ 2.0-point DER bar in (1) is still the user's and
+> still undecided — it gated adoption of a model, not this wiring.
 
 ## Built: `cluster::claims` and `store::rerun` (`2880ba6`, `ff74f59`, `f2d9b48`)
 
