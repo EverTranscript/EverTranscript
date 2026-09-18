@@ -37,13 +37,21 @@ use super::CaptureEvent;
 /// wall clock, because people breathe.
 ///
 /// **The margin is a guess and is deliberately generous.** What matters is
-/// the ratio of voiced audio to wall clock, as *the diarizer* counts turns,
-/// and that has not been measured on a real enrolment on real hardware. At
-/// thirty seconds a normal speaker needs two thirds of the recording to be
-/// speech to clear the floor; at forty, half. Ten seconds of somebody's time
-/// is the cheaper side of that to be wrong on — the other side is a first-run
-/// step that refuses people who did nothing wrong, which teaches them to
-/// skip it. Worth narrowing once there is a measurement to narrow it with.
+/// the ratio of voiced audio to wall clock, as *the diarizer* counts turns.
+/// At thirty seconds a normal speaker needs two thirds of the recording to
+/// be speech to clear the floor; at forty, half. Ten seconds of somebody's
+/// time is the cheaper side of that to be wrong on — the other side is a
+/// first-run step that refuses people who did nothing wrong, which teaches
+/// them to skip it.
+///
+/// **One measurement exists and it is a ceiling, not a typical case.** The
+/// real segmenter over `evertranscript_fixtures::OPERATOR_ENROLMENT` — 35.6 s
+/// of continuous synthesized speech — reports 35.57 s voiced, essentially
+/// 100 %, in one cluster (`tests/enrolment_vertical.rs`). That says the floor
+/// is reachable and that the arithmetic is sound; it says nothing about a
+/// person, because the clip has none of the breathing, hesitation and
+/// restarts the margin was chosen for. A real enrolment on real hardware is
+/// still the measurement that would narrow this, and still has not happened.
 pub const DEFAULT_SECONDS: u64 = 40;
 
 /// Mic audio, at the rate it was captured.

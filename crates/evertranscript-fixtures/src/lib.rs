@@ -61,6 +61,34 @@ pub const BILINGUAL_MEETING: Fixture = Fixture {
     purpose: "Mandarin/English code-switching",
 };
 
+/// One voice, alone, for half a minute — an enrolment sample.
+///
+/// Everything else here is a *meeting*: two voices, short turns, the material
+/// diarization has to pull apart. This is the opposite shape and exists for
+/// the opposite reason. `diarize::enrol` refuses a recording that holds more
+/// than one voice or less than `operator::MIN_OPERATOR_MS` of speech, so the
+/// only clip that can prove an enrolment is *accepted* is one that is neither,
+/// and no such clip existed: `english_meeting` is two people and too short per
+/// person, and the AMI corpus ships a mixed headset.
+///
+/// Continuous on purpose. The floor is twenty seconds of *voiced* audio as
+/// the diarizer counts turns, not twenty seconds of wall clock, and a clip
+/// with a reader's pauses in it would sit near that line rather than over it.
+pub const OPERATOR_ENROLMENT: Fixture = Fixture {
+    name: "operator_enrolment",
+    wav: include_bytes!("../assets/operator_enrolment.wav"),
+    transcript: "This is a sample of my speaking voice, recorded so that the application can \
+                 tell which voice in a meeting belongs to me. I am reading a short passage \
+                 aloud, at a normal pace, in the room where I usually work, so that the \
+                 recording sounds like the meetings it will be compared against. There is \
+                 nobody else here and nothing else playing. When this finishes, the application \
+                 will listen to what I said, check that it heard exactly one person, and keep a \
+                 short recording along with the measurements it takes from it. If the voice \
+                 model is ever replaced, that kept recording is what lets it recognise me again \
+                 without going back through every meeting I have ever had.",
+    purpose: "the Operator's enrolment sample: one voice, no far end, over the MIN_OPERATOR_MS floor",
+};
+
 /// Digital silence. The classic Whisper hallucination trigger: given nothing,
 /// it confidently produces "Thank you for watching." Our record is immutable,
 /// so a hallucination here persists in History forever (ticket 07).
@@ -80,7 +108,13 @@ pub const ROOM_NOISE: Fixture = Fixture {
     purpose: "hallucination canary: room tone must transcribe to nothing",
 };
 
-pub const ALL: &[Fixture] = &[ENGLISH_MEETING, BILINGUAL_MEETING, SILENCE, ROOM_NOISE];
+pub const ALL: &[Fixture] = &[
+    ENGLISH_MEETING,
+    BILINGUAL_MEETING,
+    OPERATOR_ENROLMENT,
+    SILENCE,
+    ROOM_NOISE,
+];
 
 /// Clips that must produce no transcript at all.
 pub const CANARIES: &[Fixture] = &[SILENCE, ROOM_NOISE];

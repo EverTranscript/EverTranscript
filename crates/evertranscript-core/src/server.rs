@@ -2812,13 +2812,17 @@ impl Core {
         let written = self
             .store
             .write(move |connection| {
-                crate::diarize::operator::enrol(
+                // `remint`, not `enrol`: the vectors are new and the act is
+                // not. Enrolling would restamp `recorded_at` with today,
+                // so a voice-model upgrade would leave the Registry saying
+                // the Operator recorded themselves on the day of the
+                // upgrade.
+                crate::diarize::operator::remint(
                     connection,
+                    &enrolment.speaker_id,
                     &accepted.spans,
                     crate::diarize::live::EMBEDDING_MODEL,
                     crate::diarize::live::EMBEDDING_MODEL_VERSION,
-                    &enrolment.audio_path,
-                    enrolment.duration_ms,
                 )
             })
             .await;

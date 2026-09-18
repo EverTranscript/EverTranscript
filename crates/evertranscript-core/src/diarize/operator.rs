@@ -462,6 +462,24 @@ pub fn enrol(
     Ok(id)
 }
 
+/// Re-cuts the Operator's enrolment in a new model's space.
+///
+/// [`enrol`]'s counterpart for a voice-model change, and the difference is
+/// that nothing about the *act* is rewritten — see
+/// [`crate::store::speakers::remint`]. The Operator must already have a
+/// Speaker row: a re-mint is only reachable from an enrolment that exists.
+pub fn remint(
+    connection: &rusqlite::Connection,
+    speaker_id: &str,
+    spans: &[crate::store::speakers::EnrolmentSpan],
+    model: &str,
+    model_version: &str,
+) -> anyhow::Result<()> {
+    crate::store::speakers::remint(connection, speaker_id, spans, model, model_version)?;
+    super::cluster::refresh_voiceprint(connection, speaker_id)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

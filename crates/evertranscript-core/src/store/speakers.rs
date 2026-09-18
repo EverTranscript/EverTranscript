@@ -632,6 +632,46 @@ pub fn enrol(
     audio_path: &str,
     duration_ms: i64,
 ) -> Result<()> {
+    remint(connection, speaker_id, spans, model, model_version)?;
+    connection.execute(
+        "INSERT INTO speaker_enrolments (speaker_id, audio_path, duration_ms, recorded_at) \
+         VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(speaker_id) DO UPDATE SET \
+            audio_path = excluded.audio_path, \
+            duration_ms = excluded.duration_ms, \
+            recorded_at = excluded.recorded_at",
+        params![speaker_id, audio_path, duration_ms, now_rfc3339()],
+    )?;
+    connection.execute(
+        "UPDATE speakers SET confirmed = 1 WHERE id = ?1",
+        params![speaker_id],
+    )?;
+    Ok(())
+}
+
+/// Re-cuts the enrolment's exemplars in a new model's space.
+///
+/// [`enrol`] without the `speaker_enrolments` write, and that omission is
+/// the whole of it. A re-mint is not a second enrolment: the Operator
+/// recorded themselves once, and `audio_path`, `duration_ms` and above all
+/// `recorded_at` describe *that act*, not the vectors last taken from it.
+/// Writing the row again would carry `recorded_at = now`, so a voice-model
+/// upgrade would quietly restamp the Operator's enrolment with the date of
+/// the upgrade — a row in the Registry claiming a person did something on a
+/// day they did not.
+///
+/// The positives-go-negatives-stay rule is [`enrol`]'s and applies here for
+/// the same reason: a correction is the Operator's and survives a model
+/// change as far as this function is concerned. (`MODEL_CHANGE_WIPE` takes
+/// every exemplar including those, which is ADR-0037's call and a different
+/// one; this only says the re-mint does not take them.)
+pub fn remint(
+    connection: &Connection,
+    speaker_id: &str,
+    spans: &[EnrolmentSpan],
+    model: &str,
+    model_version: &str,
+) -> Result<()> {
     connection.execute(
         "DELETE FROM speaker_exemplars WHERE speaker_id = ?1 AND is_negative = 0",
         params![speaker_id],
@@ -656,19 +696,6 @@ pub fn enrol(
             },
         )?;
     }
-    connection.execute(
-        "INSERT INTO speaker_enrolments (speaker_id, audio_path, duration_ms, recorded_at) \
-         VALUES (?1, ?2, ?3, ?4) \
-         ON CONFLICT(speaker_id) DO UPDATE SET \
-            audio_path = excluded.audio_path, \
-            duration_ms = excluded.duration_ms, \
-            recorded_at = excluded.recorded_at",
-        params![speaker_id, audio_path, duration_ms, now_rfc3339()],
-    )?;
-    connection.execute(
-        "UPDATE speakers SET confirmed = 1 WHERE id = ?1",
-        params![speaker_id],
-    )?;
     Ok(())
 }
 
