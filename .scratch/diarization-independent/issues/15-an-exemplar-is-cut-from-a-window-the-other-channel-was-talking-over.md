@@ -65,10 +65,27 @@ this way.**
   unfiltered `observation.vector` to the centroid regardless, and `clean_runs`
   is same-channel only, so it says nothing about the far end.
 
-No exemplar in the real History is machine-shaped today (every usable row
-carries a sample window, and the counts match the reseed writes exactly), so
-the machine path is unmeasured here and its change is untested by the numbers
-below.
+**Correction, Q260 — that claim was wrong, and it was this ticket's own
+warning.** This section first read: *"no exemplar in the real History is
+machine-shaped today (every usable row carries a sample window, and the counts
+match the reseed writes exactly), so the machine path is unmeasured here."* The
+census says otherwise. Partitioning by the writer's own tell — a reseed row's
+vector **is** its window, so `voiced_ms == sample_end_ms - sample_start_ms`,
+while a machine row's vector is the cluster centroid against a 10s pointer, so
+the two disagree — the 1472 rows are:
+
+| shape | named / Operator | pseudonym |
+|---|---|---|
+| reseed (vector is the window) | 1407 | 1 |
+| **machine (centroid + pointer)** | **14**, over 8 Meetings | 50 |
+
+The 14 are the Operator's **nine**, all on mic, plus five on system for `Jack
+Ahn` ×2, `Hong Li`, `Marc Ammann` and `Ming Chen`. Five were written by the two
+Meetings recorded after Q235's install; the rest by live diarization after the
+04:58 bulk re-run, which reseeds the relearnable Speakers and leaves the newly
+recognised ones to the machine path. The mistake was reading `named` as a
+synonym for `reseed-shaped`; the bulk re-run makes that true of most rows, not
+all.
 
 ## What the measurement found
 
@@ -88,6 +105,26 @@ way, not a port error.
 
 All nine of the Operator's usable exemplars are on the **mic** channel. Six
 overlap system-channel speech and are dropped; three survive.
+
+**But all nine are machine-shaped (Q260), so this measured a different rule
+than the one specified.** The arithmetic below is sound — those are the nine
+stored vectors, and the centroid of the three kept really does reach 0.9811.
+What is not sound is calling the selector an overlapping *window*: a machine
+row's sample is a playback pointer from the middle of the longest same-channel
+clean run, and it did not produce the vector. So the six were dropped for where
+their pointer landed, which makes this a coarse per-Meeting selector — drop the
+whole mic cluster of a Meeting the far end talked through — and not the
+per-window rule the ticket specifies. That it works at all is explainable: a
+pointer drawn from a clean run in a Meeting full of far-end speech is itself
+likely to sit in far-end speech, so it proxies for "this cluster is
+contaminated". A proxy, not the rule.
+
+The shipped machine-path filter is the finer form of the same idea: it drops
+the contaminated **observations** before `centroid` consumes them, so a
+contaminated Meeting loses its bad windows instead of its whole cluster.
+Nothing in the stored record can show that, because the record keeps only the
+centroid — which makes the rebuild the first real measurement of it, and the
+Operator's after-vs-before the place to read it.
 
 | the Operator's centroid | vs `d859b1`, their own clean voice | vs Ming Chen `89fbf5` | vs Ming Chen `7f584e` |
 |---|---|---|---|

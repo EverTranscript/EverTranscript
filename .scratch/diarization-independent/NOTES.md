@@ -707,12 +707,27 @@ there. It is a laptop that sleeps, surfacing for seconds at a time — which is
 why remote work on it is one self-contained script fed over
 `ssh … 'bash -s'` rather than several round trips.
 
-**The installed app is still v1.1.1 and must not start.** Q234's migration left
-ReDimNet2 at `diarize-embedding.onnx`, 18 045 013 bytes, under the fixed
-filename v1.1.1 expects WeSpeaker's 26 535 549 at, so that build reads it as
-`Corrupted` on size and re-fetches WeSpeaker over it — after which Q227's lazy
-path rebuilds every Voiceprint back into the old space. Q235's install is the
-fix and has not happened.
+**The installed app is a build from `main` since 2026-09-17 15:35:52, and the
+"must not start" hazard is gone (Q259).** It read, until that install: *"the
+installed app is still v1.1.1 and must not start"* — because Q234's migration
+left ReDimNet2 at `diarize-embedding.onnx`, 18 045 013 bytes, under the fixed
+filename the WeSpeaker-era build expects 26 535 549 at, so that build reads it
+as `Corrupted` on size and re-fetches WeSpeaker over it, after which Q227's
+lazy path rebuilds every Voiceprint back into the old space.
+
+Q235's attended install is what closed it. Two Meetings were then recorded on
+that machine — 15:37:21 and 17:32:24 — and the hazard did **not** fire:
+`diarize-embedding.onnx` is still 18 045 013 bytes / `dcecdce7…`, matching
+`registry.rs:281`; the WeSpeaker sibling is untouched since 09-05; all 26
+stored Voiceprints and all 1472 exemplars are stamped `redimnet2-b3`/`1`, with
+no WeSpeaker rows and no mixed space; and the unified log shows no fetch.
+
+**The version string was never the identifier, which is the flaw in the old
+warning.** `Cargo.toml:16` puts `main` at `1.1.1` too, so "v1.1.1" named both
+the dangerous bundle and its replacement. What distinguishes them is the
+binary: `Contents/Resources/evertranscript`, mtime 15:37:07, yields
+`redimnet2-b3` 19 times against `wespeaker-voxceleb-resnet34-LM` once. Identify
+a build by what it links, not by what it calls itself.
 
 **Its login item is disabled, 2026-09-17 (Q241).**
 `~/Library/LaunchAgents/com.evertranscript.core.plist` carried `RunAtLoad` true
@@ -723,11 +738,14 @@ the plist is copied to
 `~/EverTranscript-backups/com.evertranscript.core.plist.disabled-20260917-132237`
 and otherwise left in place. Re-enable with `launchctl enable` once a build from
 `main` is installed. The embedding file read 18 045 013 bytes before and after.
+That build is now installed (above), so the re-enable is unblocked — it has not
+been done, and it is the user's call, not a cleanup step.
 
 Its `/tmp` also holds eleven scripts from two earlier sessions **on that
 machine** — audited 2026-09-17: none running, none in state `T`, no crontab, no
-plist referencing any of them. Four drive the installed v1.1.1 Core against the
-real History and two replace `/Applications/EverTranscript.app`, so none should
-be run before the install. They were kept rather than deleted because two,
+plist referencing any of them. Four drive the installed Core against the real
+History and two replace `/Applications/EverTranscript.app`; the install they
+were waiting on has happened, but they were written against the WeSpeaker-era
+bundle, so read each one before running it rather than trusting the label. They were kept rather than deleted because two,
 `et-sign.sh` and `et-swap.sh`, are cited as the install recipe in that host's own
 `local-macos-install-recipe.md`.
