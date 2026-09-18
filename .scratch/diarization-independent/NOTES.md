@@ -629,10 +629,17 @@ exemplars and a Voiceprint at **0.9960** against their own clean voice where
 they had **none at all**, attributed in all 12 Meetings instead of 6. Five
 named controls keep their identity (0.9536–1.0000); `Menggang Xu` is stranded
 with `forgotten = 0`, so named-with-a-vector stays 6 and the membership trades
-their recognition for the Operator's. The cost is pseudonym recognition: 373
-segments leave pseudonyms, 264 becoming unattributed (6.4% of all segments),
-and pseudonyms holding a vector fall 20 → 11. A bulk re-run re-derives
-attribution, so 264 is an upper bound on the filter's share.
+their recognition for the Operator's.
+
+**The cost, classified (Q263).** 265 segments lose their owner, and **every one
+is mic audio the system channel was talking over** — 2963 s of double-talk,
+**zero clean segments**, and **none owned by a named Speaker or the Operator**.
+The 20 → 11 fall in pseudonyms holding a vector is a net: **13 lost, 4 newly
+minted**. Eleven of the 13 held one exemplar in one Meeting and none matched a
+known voice above `MATCH_FLOOR` (best 0.5370), so they were unrecognisable
+fragments rather than voices; ten are mic-only and the rule's doing, three are
+system-channel and therefore re-run churn. 265 is still an upper bound, because
+a bulk re-run re-derives attribution anyway.
 
 **Two corrections the rebuild forced (Q260).** `named` is not a synonym for
 `reseed-shaped`: 64 of the 1472 rows are machine-written, including **all nine

@@ -241,9 +241,22 @@ rule's projection and is superseded by the mic-only ruling; measured on the
 rebuild, mic-only does not shrink the corpus at all — exemplars go 1472 →
 **1776** — because the reseed path enrols filtered windows for Speakers that
 previously had cluster centroids or nothing. What it costs instead is
-**pseudonym recognition**: 373 segments leave pseudonyms, 108 to the Operator
-and **264 to unattributed** (6.4% of all segments), and pseudonyms holding a
-vector fall 20 → 11. Those turns keep their text and lose a numbered label, not
-a name. A bulk re-run also re-derives attribution, so 264 is an upper bound on
-the filter's share — the comparison cannot separate the two. Whether that buys
-the Operator's Voiceprint is the exchange rate, and it is open on purpose.
+**pseudonym recognition**, and Q263 measured exactly what that means. **265**
+segments lose their owner (the net was 264 because one gained), and every one
+of them is **on the mic channel with the system channel talking over it** —
+2963 s of double-talk. **No clean segment lost an owner: zero.** All 265
+belonged to pseudonyms; **not one belonged to a named Speaker or the
+Operator.** Those turns keep their text and lose a numbered label, not a name.
+
+Pseudonyms holding a vector fall 20 → 11, but that is a **net**: **13 lost**
+their vector and 4 were newly minted. Eleven of the 13 held a single exemplar
+in a single Meeting, and none of the 13 matched any known voice above
+`MATCH_FLOOR` — the best was 0.5370. They were fragments that could never have
+been recognised, not people. Ten are mic-only and are the rule's doing; three
+are system-channel, which mic-only cannot touch, so those are re-run cluster
+churn rather than the filter.
+
+A bulk re-run also re-derives attribution, so 265 remains an upper bound on the
+filter's share. Whether that buys the Operator's Voiceprint is the exchange
+rate, and it is open on purpose — though Q263 narrows it considerably: the
+currency being spent is double-talk fragments, not speech.
