@@ -15,9 +15,14 @@ already in the record, because the product transcribes both channels.
 **Status:** **built, mic-only, and measured on a rebuilt copy of the real
 History** — Q257 specified it, Q258 escalated the direction and the advisor,
 for the user, ruled mic-only, `ea13e2b` built it, Q260 corrected a premise, Q261 measured the
-rebuild. All six acceptance criteria are met. **Not adopted for the real
-History:** the rebuild ran on an isolated copy, and whether the cost below is
-affordable is the open exchange-rate question.
+rebuild. All six acceptance criteria are met. **Adopted, and exercised on the real
+History 2026-09-18 (Q288).** The sign-and-swap put `6579ed0` on
+`macbook-pro-nickel` and the bulk re-run walked all 12 Meetings; every stop
+condition passed and nothing was restored. The rule held on the real record —
+reseed-shaped mic rows overlapping the far end went **27 of 27 → 0 of 133** —
+and **265 segments lost an owner, every one of them overlapped, none clean**.
+The exchange-rate framing above is superseded: the rate was assumed at 4:1 by
+Q231 and the DER bar closed by Q232 (see Q287).
 
 ## Why this is the ticket, and why it comes from 13's failure
 

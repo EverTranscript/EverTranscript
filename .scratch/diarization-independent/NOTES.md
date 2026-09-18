@@ -807,6 +807,17 @@ ssh, see `local-macos-install-recipe.md`) then `bash
 ~/EverTranscript-backups/et-swap.sh`. Everything below is the next session's,
 in order. No watcher is armed for it.
 
+> **Done, 2026-09-18 02:33 (Q288).** The swap landed and the re-run ran: 12/12
+> Meetings in 17m21s, `abandoned=0`, no error. Step 1 passed on `LC_UUID`
+> `0BEA34B2-…` and vindicated Q270 — the installed Core hashes `e9db6db5…`,
+> not the staged `325e4b82…`, so the original sha256 check would have produced
+> a false stop. Backup `EverTranscript.db.before-t15-20260918-020834`
+> (`integrity_check` ok) was taken and **not** needed. Operator 0.9960 from 139
+> exemplars across all 12 Meetings; five named controls 0.9536–1.0000; only
+> `Menggang Xu` lost a vector, at `forgotten = 0`; zero Speakers carry
+> `forgotten = 1`; 265 segments lost an owner and **zero of them were clean**.
+> Models unmoved. The steps below are kept as the record of what was run.
+
 **Where the artefacts are, and what erases them (Q270).** The two scripts were
 written to `/tmp`. The hazard is not the old 3-day `clean-tmps` sweep —
 **macOS 26.6 has no `/etc/periodic` at all**, no `periodic.conf`, and files
