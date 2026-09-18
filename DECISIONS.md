@@ -3118,3 +3118,36 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Supersedes:** Q256 — its `Outcome` reads `escalated` and its `Chosen` is `—`, but the question it escalated was answered by the user and acted on the same day, and ticket 13's Status, NOTES' header and every later entry already assume the answer. Everything Q256 measured and landed stands unchanged; only its open state is wrong
 **Ref:** 89146f3
+
+## Q273 — issues/13 — gate-resolution
+
+**Question:** Q255 escalated one thing after the mean-pairwise measure failed its AMI gate: *which measure the guard reads*, since no threshold move rescued the specified one and the alternative that worked was a change of measure rather than of number. Is that still open?
+**Options considered:** still open, awaiting a choice of measure / closed, because the decision that no guard ships removes the question
+**Chosen:** **Closed.** With Q272 ruling AMI's overlap rate representative and no guard shipping at the mint, there is no measure for the guard to read. All three measures stay on `main` as measurement surface and none is wired into `refresh_voiceprint`.
+**Decided-by:** human
+**Justification:** The user closed it, citing Q272. The two escalations were always one question asked twice: Q255 asked which measure, Q256 asked whether the corpus that failed the chosen one is representative, and Q272 answered the second in a way that dissolves the first — a guard that ships nothing reads nothing. The fourth option Q255 pointed at, per-Meeting averaging, is recorded in Q272 as never adopted and carrying its own blind spot: contamination uniform across Meetings blends every centroid alike and passes, which is arguably the likelier real case. Ticket 13's Status has said *"all three were withdrawn before shipping"* since `4e47e4b`/`fa7de85`, so this entry changes the journal to match what the ticket, NOTES and every later entry already say. **What does not close with it:** the defect the three measures kept pointing at is upstream and ticket 15 addressed it, but ticket 13 stays open for the residue no window filter can see — the in-room second voice — plus the quarter and the impurity blind spot.
+**Outcome:** applied
+**Supersedes:** Q255 — its `Outcome` reads `escalated` and its `Chosen` is `—`, but the choice it escalated was removed rather than made, by the same decision Q272 records. Everything it measured and landed stands
+**Ref:** (pending)
+
+## Q274 — diarization/06 — gate-resolution
+
+**Question:** Q177 left the twelve held-out cells frozen in Q172 **provisional** — "declared but unfrozen, re-chosen from the corrected dev curves before any held-out number is read". Held-out numbers have since been read. Does that assumption still need review?
+**Options considered:** still open / closed by what actually ran and what a human then ruled on it
+**Chosen:** **Closed.** The re-choice happened and was superseded by a fuller declaration: Q182 replaced the twelve cells with three declared matcher points across both clustering arms and all four model pairings, 24 replays, every one fixed before a test number was read. Q183 ran exactly that, Q185 — decided by the user — ruled on what the results do and do not establish, and Q226 — also the user's — adopted ReDimNet2-B3 on that record.
+**Decided-by:** human
+**Justification:** Closed in a sweep the user asked for after this pattern recurred three times (Q258→Q265, Q256→Q272, Q255→Q273): an entry whose `Outcome` still reads `assumed` when the thing it was waiting on has happened. Q177's assumption was a *hold* — do not read held-out until the cells are re-chosen — and holds expire by being honoured, not by being re-decided. The record shows it honoured: the declaration Q183 ran against was fixed in advance, and the constraint Q177 existed to protect (no retuning after a test number is read) is restated verbatim in Q182 and was not violated. A human then read the output twice over, first to correct how it was written up (Q185) and then to choose a model from it (Q226). Nothing is left for a reviewer to confirm.
+**Outcome:** applied
+**Supersedes:** Q177 — its provisional hold was honoured and then subsumed by Q182's fuller declaration; the held-out numbers it gated have been read and ruled on by the user
+**Ref:** (pending)
+
+## Q275 — diarization/06 — tradeoff
+
+**Question:** Q182 pre-registered what would run on held-out AMI test — three matcher points, both clustering arms, four model pairings, 24 replays, no point added, dropped or retuned after a test number is read — as an agent's assumption. Does it still need review?
+**Options considered:** still open / closed, the plan ran and a human adjudicated its output
+**Chosen:** **Closed.** The pre-registration was executed as written (Q183) and its output was ruled on by the user twice: Q185 corrected four ways the write-up overstated the grid, and Q226 chose the shipping embedding on the corrected record.
+**Decided-by:** human
+**Justification:** Same sweep as Q274, same reasoning. A pre-registration is an assumption that stops needing review once it has been honoured and its results adjudicated — the thing a reviewer would check is whether the points moved after the numbers were seen, and Q185's corrections are the evidence they did not: the user's objections were about *claims made from* the grid, not about the grid having been retuned. **The sweep's other verdicts, so the journal says why the rest stay as they are.** Nine entries still read `escalated` or `assumed` with nothing superseding them, and every one is deliberate. **Escalated, genuinely open and not diarization work:** Q104, whether Windows should read cloud calendars where ADR-0036 says the local store suffices; Q112, the 49.7% against pyannote's 18.8% DER, about two thirds of it turn placement rather than the embedding — both left untouched on the user's instruction. **Assumed, shipped, never ratified by a person, and each still a real question:** Q105, a recording ending 15 s after its app leaves the Watchlist; Q106, the 45 s auto-stop window for a calendar-named browser Meeting; Q109, a Knob switch not moving a Summary run already in flight; Q114, four long requests answered off the server loop; Q126, rule 1 naming *every* isolated-mic voice the Operator — which Q266 has since shown is a live hazard rather than a theoretical one, since an in-room second voice is exactly the case it names, so it is corroborated rather than closed; Q127, counting Bluetooth as headphones because CoreAudio reports transport and not form factor; Q186, `clear_voiceprint` leaving a Speaker that reads as never-enrolled. **Q186 deserves its half-closure said out loud:** the *data* behaviour it reported is now depended upon — Q267, the user's, makes `forgotten = 0` an expected result of the re-run and `forgotten = 1` a stop condition — but the question Q186 actually deferred was what the **Registry** should say when a recomputation comes back empty, and nothing has answered that. It stays open on the half that was never decided.
+**Outcome:** applied
+**Supersedes:** Q182 — its pre-registration ran as declared and the user adjudicated the result in Q185 and acted on it in Q226; there is nothing left to confirm
+**Ref:** (pending)
