@@ -12,10 +12,17 @@ vector filed under a confirmed name wins the ties it should lose.
 **Blocked by:** nothing technically. It is blocked on the user: three choices
 below have to be made before there is anything to build.
 
-**Status:** **held for user — and the choice list grew to four.** The measure itself is now open: the one specified was built, failed its AMI gate and was withdrawn before shipping (Q255). Named in Q246, measured in Q247, sharpened by
-Q248 and Q249. Deliberately not built — every remaining question is a
-judgement about what a Speaker silently loses, which is the same kind of call
-as `MATCH_FLOOR` and is not the agent's to take.
+**Status:** **not shipping; superseded in practice by ticket 15.** Three
+measures were built and all three were withdrawn before shipping: mean pairwise
+failed its AMI gate (Q255), and the two-way partition test cleared five of six
+predeclared criteria and failed the one that models production (Q256). The user
+ruled AMI's overlap rate representative and deferred the guard; `split`,
+`Split::is_two_voices`, `AGREEMENT_FLOOR` and `MINORITY_SHARE` stay on `main`
+as measurement surface, read by nothing in the mint. **The defect the three
+measures kept pointing at is upstream** — strict attribution passes the same
+partition test 16 of 16 — so ticket 15 addresses the cause and this ticket
+remains open for the residue no window filter can see. Named in Q246, measured
+in Q247, sharpened by Q248 and Q249.
 
 ## What to build
 
@@ -149,6 +156,23 @@ spot as asked — a record dominated three to one mints its dominant voice, and
 whether that voice is the *named* person is attribution's problem. On this
 History it is not theoretical: it is the only thing keeping the 230-exemplar
 `Ming Chen`'s Voiceprint.
+
+**A second blind spot, exposed by the purity check itself.** Because both
+halves of every refused AMI pool are impure — 0.629 in the minority, 0.525–0.777
+in the majority — the partition the test finds is not "the named voice here,
+the contaminant there". It is a cut through a uniformly mixed pool. So the
+measure cannot distinguish **one voice recorded with varied contamination**
+from **two voices**: both present as two groups whose centroids disagree, and
+the agreement score reads the same either way. A Speaker heard across several
+rooms, each with a different far end leaking in, scores like a record holding
+two people. This is not the quarter's blind spot restated — the quarter is
+about a minority too small to be noticed, this is about the test being unable
+to say *what* the two groups are once it has found them. Refusing is the safe
+act under both readings, which is why the fall-through to `clear_voiceprint` is
+still right; but a refusal is **not** evidence that a second person is present,
+and it must never be surfaced to the user as though it were. It is also the
+reason ticket 15 exists: removing the contamination upstream is a different
+kind of answer from scoring it at the mint.
 
 ## The AMI gate refused the first measure — Q255, 2026-09-17
 

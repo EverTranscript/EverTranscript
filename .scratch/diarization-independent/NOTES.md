@@ -528,7 +528,20 @@ remain escalated and were not carried over.
 That journal forked from main's at Q115 — both sides claim Q115–Q124 for
 different decisions — so it cannot be merged, only read.
 
-### The Voiceprint mint has no agreement check — ticket 13, held for user
+### The Voiceprint mint has no agreement check — ticket 13, **not shipping**
+
+**Q257/Q258, 2026-09-17: the defect is upstream, and ticket 15 is where it
+goes.** The user ruled AMI's overlap rate representative and deferred the
+guard, so nothing from ticket 13 ships; `split`, `Split::is_two_voices`,
+`AGREEMENT_FLOOR` and `MINORITY_SHARE` stay on `main` as measurement surface,
+read by nothing. The tell all three measures kept producing: **strict
+attribution passes the same partition test 16 of 16.** The pools are the
+defect, not the mint. `reseed::plan` enrols whole transcript segments including
+mic windows the far end talked over, and the product has both channels'
+transcript segments, so the purity signal AMI-strict approximates is a query
+here — see *An exemplar is cut from a window the other channel was talking
+over*, below. Ticket 13 stays open only for the residue no window filter can
+see: two people on one far-end call, recorded on one channel.
 
 **Q256, 2026-09-17: a third measure, built and not shipped.** The user's
 two-way partition test — refuse when the best two-way split's group centroids
@@ -597,6 +610,51 @@ All of it is one History of ten Meetings: evidence that a workable threshold
 exists, not a measurement of where it generalises.
 
 Ticket **14** below is the companion defect and moves this band: see there.
+
+### An exemplar is cut from a window the other channel was talking over — ticket 15, **specified and measured, not built (Q257)**
+
+Ticket file:
+`issues/15-an-exemplar-is-cut-from-a-window-the-other-channel-was-talking-over.md`.
+Measured read-only on the real History *before* anything was built, as
+instructed. The rule: drop an exemplar window when the other channel carries
+voiced speech intersecting it, any intersection, no threshold.
+
+**It repairs the Operator's record rather than refusing it** — which is what
+neither of ticket 13's measures could do. All nine of the Operator's usable
+exemplars are on mic; six overlap system speech and go. The surviving three
+score **0.9811** against the Operator's own clean voice (`d859b1`), where the
+blend of all nine sat at **0.6183**, and the far-end Ming Chen rows stay at
+0.3283/0.3164. The two centroids agree with each other at only 0.6227, so it is
+a different vector and not a rounding.
+
+**Five of the six named controls keep their identity and one is stranded.**
+Survival and the surviving centroid against the Voiceprint each carries today:
+Hong Li 48 of 153 (0.9443), Jack Ahn 160 of 890 (0.9713), Marc Ammann 29 of 59
+(0.9827), Ming Chen 36 of 79 (0.9701), Ming Chen 70 of 230 (0.8654).
+**`Menggang Xu` holds exactly one exemplar, on mic, overlapped — so the rule
+leaves them nothing and their Voiceprint is cleared.** Reported rather than
+softened, as instructed; clearing sets no forgotten mark, so the name and
+identity survive and only recognition is lost. Across every Speaker: 1472
+usable exemplars, **1115 dropped (76%)**, 15 Speakers left with none — that one
+named Speaker and fourteen pseudonyms.
+
+**The machine path does not select windows this way**, so the rule cannot be
+applied to its exemplar: its vector is the cluster centroid over every
+observation, and `sample` is a playback pointer taken from the middle of the
+longest *clean* run (`live.rs:858`). The filter belongs on the observations
+before `centroid` consumes them (`live.rs:865`). That path already computes
+`clean_runs`, but same-channel only, so it says nothing about the far end.
+
+**One thing is reported and not acted on (Q258, escalated).** The specified
+rule is symmetric; the channels are not. The mic recording can carry far-end
+speech leaking in from the speakers — Q246's path. The system recording is a
+tap of the output stream, so the Operator's voice has no route into it.
+Measuring the mic-only variant: the Operator's repair is **identical** (3 kept,
+0.9811, because all nine of their exemplars are on mic), while the controls
+keep 153/153, 866/890, 58/59, 79/79 and 230/230 — a ~2% drop rate instead of
+76%, since 1372 of their 1412 exemplars are system-channel. `Menggang Xu` is
+stranded under both. Whether the rule is symmetric or mic-only is a scoping
+call about which capture paths can carry contamination, and it is the user's.
 
 ### The exemplar cap took a tail, not a sample — ticket 14, **built (Q254)**
 
