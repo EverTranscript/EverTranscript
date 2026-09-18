@@ -772,23 +772,80 @@ handful of very long ones, so it is a weak signal — use the hash. Identify a
 build by the model it expects, not by what it calls itself.
 
 **Runbook: the real re-run, after the attended sign-and-swap (Q267).** The
-user decided this happens. The install is theirs — `bash /tmp/et-sign.sh`
-(expect `SIGN_OK`; it cannot be done over ssh, see
-`local-macos-install-recipe.md`) then `bash /tmp/et-swap.sh`. Everything below
-is the next session's, in order. No watcher is armed for it.
+user decided this happens. The install is theirs — `bash
+~/EverTranscript-backups/et-sign.sh` (expect `SIGN_OK`; it cannot be done over
+ssh, see `local-macos-install-recipe.md`) then `bash
+~/EverTranscript-backups/et-swap.sh`. Everything below is the next session's,
+in order. No watcher is armed for it.
 
-1. **Prove the installed binary is the staged one — by the embedded hash, not
-   the version string.** Both builds call themselves `1.1.1`.
+**Where the artefacts are, and what erases them (Q270).** The two scripts were
+written to `/tmp`. The hazard is not the old 3-day `clean-tmps` sweep —
+**macOS 26.6 has no `/etc/periodic` at all**, no `periodic.conf`, and files
+from 09-13 are still sitting in `/tmp` here, so nothing ages them out. It is
+the **reboot**: nothing in `/private/tmp` on this host predates the current
+boot (uptime 29 days; the oldest entry is a socket from 15:38 against a
+15:36:58 boot). One restart and the runbook's two dependencies are gone. The
+durable copies are
+`~/EverTranscript-backups/et-sign.sh` (sha `9fccea50c6c0942a…`, 1655 bytes,
+mtime 09-15 11:14) and `~/EverTranscript-backups/et-swap.sh` (sha
+`d9288492d3dc700e…`, 2656 bytes, mtime 09-17 15:33), byte-identical to the
+originals. `/tmp/et-sign.sh` and `/tmp/et-swap.sh` are the fallback while they
+last. They are **not** in the repository on purpose: `et-sign.sh` line 6 holds
+the signing identity `Apple Development: Frank Dai (CCDB33UUQ9)`.
+
+The staged bundle is at
+`~/github.com/EverTranscript/EverTranscript/packaging/out/installers/mac-arm64/EverTranscript.app`,
+mtime **2026-09-17 21:49:04**, built from `6579ed0`, Core `325e4b82…`,
+`LC_UUID 0BEA34B2-1DF5-3A11-BC86-B79A86007AAA`. **`packaging/build.sh` begins
+with `rm -rf out/`, so the next build destroys it** — and both scripts hardcode
+that path (`et-sign.sh:5`, `et-swap.sh:10`), so losing it leaves them nothing
+to sign or copy. `et-swap.sh`'s own failure message names that path as the
+reinstall source too; the rollback that survives a wipe is
+`~/EverTranscript-backups/EverTranscript.app.installed-20260917-153552`, which
+is the **pre-swap** bundle. If `out/` is gone, rebuild from `6579ed0` or later
+`main` (`./packaging/build.sh` then `CSC_IDENTITY_AUTO_DISCOVERY=false pnpm -C
+clients/electron package`, with mise's node on `PATH`) and **re-read the new
+bundle's `LC_UUID` before step 1** — a rebuild is a fresh link, so the UUID
+below no longer applies to it.
+
+1. **Prove the installed binary is the staged one — by `LC_UUID`, not by
+   sha256 and not by the version string.** Both builds call themselves `1.1.1`,
+   and **the sha256 is destroyed by the signing in the sign-and-swap above**
+   (Q270): `codesign` rewrites the `__LINKEDIT` signature blob and the
+   `LC_CODE_SIGNATURE` load command, so re-signing the staged Core ad-hoc took
+   it from `325e4b82…`/33,914,816 bytes to `e6bb2774…`/33,735,760 —
+   65,672 differing bytes before the blob even starts. `LC_UUID` is written by
+   the linker and `codesign` does not touch it; it was byte-identical before
+   and after that same re-sign.
    ```sh
-   shasum -a 256 /Applications/EverTranscript.app/Contents/Resources/evertranscript
+   otool -l /Applications/EverTranscript.app/Contents/Resources/evertranscript \
+     | awk '$1=="uuid"{print $2; exit}'
    ```
-   It must read `325e4b82…`, the bundle staged from `6579ed0`. The pre-swap
-   binary is `2a61646e…`; if that is what comes back, the swap did not happen
-   and there is nothing to re-run. Confirm the bundle still satisfies the TCC
-   requirement — `codesign -d --requirements - /Applications/EverTranscript.app`
-   must name `identifier "com.evertranscript.client"` and the
-   `Apple Development: Frank Dai (CCDB33UUQ9)` leaf, or the grants are gone and
-   the microphone will re-prompt.
+   | | `LC_UUID` | Core sha256 (unsigned) | mtime | built from |
+   |---|---|---|---|---|
+   | **staged, wanted** | `0BEA34B2-1DF5-3A11-BC86-B79A86007AAA` | `325e4b82…` | 09-17 21:49:04 | `6579ed0`, carries `ea13e2b` |
+   | pre-swap, unwanted | `6664C599-4D34-3038-AF5F-58CBE8B169B1` | `2a61646e…` | 09-17 15:37:07 | `daa20a1`, no filter |
+
+   `6664C599…` means the swap did not happen and there is nothing to re-run.
+   Beside it, confirm the build still expects ReDimNet2 —
+   `strings -a <core> | grep -c dcecdce7d52bbd4739b24d0874359ec564d43f4b3a392f0104f505593b566d41`
+   must be non-zero (it is 3 in both builds, so this guards the Q259 clobber
+   hazard and does **not** tell the two apart). Then confirm the bundle still
+   satisfies the TCC requirement — `codesign -d --requirements -
+   /Applications/EverTranscript.app` must name `identifier
+   "com.evertranscript.client"` and the `Apple Development: Frank Dai
+   (CCDB33UUQ9)` leaf, or the grants are gone and the microphone will
+   re-prompt. `codesign -d --verbose=2` on the Core should read
+   `Identifier=evertranscript` with `TeamIdentifier=9958A27J47`; `Signature=adhoc`
+   with `TeamIdentifier=not set` means the unsigned staged bundle was installed
+   and every grant is void.
+
+   *Why not a string from the filter:* there isn't one. `ea13e2b` added 76
+   lines of production code and **zero string literals** — the filter is
+   silent, `live.rs` and `cluster.rs` carry no `tracing` events at all, and
+   `overlaps_far_end` appears in neither binary's symbol table. The 4,622
+   strings present only in the staged Core are `__TEXT` merge artefacts, not
+   new text.
 
 2. **Back up and check integrity first, as Q234 did.**
    ```sh
