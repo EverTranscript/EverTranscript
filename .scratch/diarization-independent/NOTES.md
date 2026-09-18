@@ -771,6 +771,65 @@ returns 9 here, but that counts *lines* and this binary's string table is a
 handful of very long ones, so it is a weak signal — use the hash. Identify a
 build by the model it expects, not by what it calls itself.
 
+**Runbook: the real re-run, after the attended sign-and-swap (Q267).** The
+user decided this happens. The install is theirs — `bash /tmp/et-sign.sh`
+(expect `SIGN_OK`; it cannot be done over ssh, see
+`local-macos-install-recipe.md`) then `bash /tmp/et-swap.sh`. Everything below
+is the next session's, in order. No watcher is armed for it.
+
+1. **Prove the installed binary is the staged one — by the embedded hash, not
+   the version string.** Both builds call themselves `1.1.1`.
+   ```sh
+   shasum -a 256 /Applications/EverTranscript.app/Contents/Resources/evertranscript
+   ```
+   It must read `325e4b82…`, the bundle staged from `6579ed0`. The pre-swap
+   binary is `2a61646e…`; if that is what comes back, the swap did not happen
+   and there is nothing to re-run. Confirm the bundle still satisfies the TCC
+   requirement — `codesign -d --requirements - /Applications/EverTranscript.app`
+   must name `identifier "com.evertranscript.client"` and the
+   `Apple Development: Frank Dai (CCDB33UUQ9)` leaf, or the grants are gone and
+   the microphone will re-prompt.
+
+2. **Back up and check integrity first, as Q234 did.**
+   ```sh
+   DB=~/Documents/EverTranscript/.data/EverTranscript.db
+   BK=~/Library/Application\ Support/EverTranscript/backups/EverTranscript.db.before-t15-$(date +%Y%m%d-%H%M%S)
+   sqlite3 "file:$DB?mode=ro" ".backup '$BK'"
+   sqlite3 "$BK" 'PRAGMA integrity_check;'   # must print exactly: ok
+   ```
+   Record `shasum -a 256 "$DB"` before the request, so the re-run's effect is
+   attributable afterwards. `et-swap.sh` also takes its own backup at swap
+   time; this one is the re-run's.
+
+3. **Send the request.** Bulk only — `rerun::is_bulk_work` gates a per-Meeting
+   `diarize run` *out* of the reseed path, so only this exercises the filter.
+   Newline-delimited JSON-RPC on
+   `$EVERTRANSCRIPT_RUNTIME_DIR/evertranscript.sock`, and `initialize` must be
+   the first request on the connection or the Core answers `-32001`. Then
+   `diarize/rerunRequest` with `{}`, and poll `diarize/status` until
+   `rerun.remaining == 0`. It took ~18 min for 12 Meetings on the copy.
+
+4. **Expected result — repeat the Q261 measurement against the real record.**
+   The Operator mints a Voiceprint near **0.9960** against `d859b1` from ~139
+   exemplars, attributed in all 12 Meetings instead of 6. `Menggang Xu` ends
+   unrecognised with **`forgotten = 0`** — name and identity intact. About
+   **265** mic segments that the system channel talked over lose their
+   pseudonym label and go unattributed, and 13 pseudonyms lose vectors while ~4
+   are newly minted. Five named controls keep their identity at 0.9536–1.0000.
+
+5. **What would mean stop.** Restore from step 2's backup and do not continue if
+   any of these appear: the Operator's Voiceprint lands **below 0.62** against
+   `d859b1`, or agrees with a *named* Speaker above that floor — either means it
+   minted somebody else. A **named** Speaker other than `Menggang Xu` loses its
+   vector, or any Speaker gains `forgotten = 1`. Segments losing an owner run
+   far past ~265, or **any clean (non-overlapped) segment loses its owner** —
+   Q263 measured that as exactly zero, so a non-zero count means the filter is
+   not doing what was measured. Exemplars stamped anything but
+   `redimnet2-b3`/`1`, or `diarize-embedding.onnx` moving off 18 045 013 bytes /
+   `dcecdce7…`, which would mean a model re-fetch. Also stop if the request is
+   refused with `-32001` after `initialize` — that is a protocol mismatch, not
+   a retry.
+
 **Its login item is disabled, 2026-09-17 (Q241).**
 `~/Library/LaunchAgents/com.evertranscript.core.plist` carried `RunAtLoad` true
 on that v1.1.1 binary, so the next login would have done exactly the above with

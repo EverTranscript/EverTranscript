@@ -227,14 +227,25 @@ the user's call in the same way `MATCH_FLOOR` is. Q258 carries it.
       `Ming Chen` 0.9740 — and the sixth is `Menggang Xu`, stranded. Named
       Speakers holding a vector is 6 before and 6 after; the membership trades
       `Menggang Xu`'s recognition for the Operator's
-- [x] Whether the rule is symmetric or mic-only is settled (Q258) before the
-      drop rate is treated as acceptable. The user ruled **mic-only**
+- [x] Whether the rule is symmetric or mic-only is settled before the drop rate
+      is treated as acceptable. Q258 escalated it; the user ruled **mic-only**,
+      carried by **Q265**, which supersedes Q258 so the choice is recorded in
+      one place rather than read as two answers
 
 ## What this does not claim
 
 It does not replace ticket 13. A record can hold two voices without either
 window overlapping the other channel — two people on the same far-end call,
 recorded on one system channel, is the case the drop rule cannot see.
+
+**Its mirror is the in-room second voice, and it bears on Q266.** The rule
+reads a mic window as suspect only while the system channel is speaking. A
+person sitting in the room with the Operator speaks in the far end's silences,
+so their windows survive and land in the Operator's Voiceprint. This is why
+ticket 15 narrows Q245's escalation to a one-window confirmation rather than
+removing it: the surviving group is the one that spoke when the far end was
+silent, which is the Operator *if nobody else was in the room* — and nothing in
+the record establishes that.
 
 It does not claim the cost is affordable. The 76% above was the **symmetric**
 rule's projection and is superseded by the mic-only ruling; measured on the
