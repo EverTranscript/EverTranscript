@@ -3151,3 +3151,80 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Supersedes:** Q182 — its pre-registration ran as declared and the user adjudicated the result in Q185 and acted on it in Q226; there is nothing left to confirm
 **Ref:** 0398905
+
+## Q276 — issues/02 — gate-resolution
+
+**Question:** Q105 assumed, and shipped, that a recording ends 15 s after the Operator removes its app from the Watchlist — the same 15 s a microphone release gets. Does that stand?
+**Options considered:** as written / stop at once on removal / let the Meeting run to its own end
+**Chosen:** **As written, ratified.** The recording ends 15 s after the removal is read, exactly as when the app releases the microphone. Adding an app that already holds the microphone still starts recording at the next event.
+**Decided-by:** human
+**Justification:** The user ratified it unchanged. The symmetry is the argument: the trigger needs Watchlist membership *and* a hot microphone in the same app, so a removal and a release are the same event seen from two sides, and giving them different tails would be an asymmetry nobody asked for. Nothing in the code changes; this entry exists because Q105 was an agent's assumption and is now a person's decision.
+**Outcome:** applied
+**Supersedes:** Q105 — same question, same answer, decided by a human rather than assumed
+**Ref:** (pending)
+
+## Q277 — issues/07 — gate-resolution
+
+**Question:** Q106 assumed, and shipped, a 45 s auto-stop continuity window for a calendar-named browser Meeting that went quiet more than 3 minutes before its scheduled end, 15 s for every other quiet, and no use of anarlog's 10-minute end grace. Does that stand?
+**Options considered:** as written / one window for every case / adopt the 10-minute grace as well
+**Chosen:** **As written, ratified.** 45 s on the three-way conjunction — calendar-named, browser app, quiet more than 3 min before the scheduled end — 15 s otherwise, and the 10-minute end grace stays unused.
+**Decided-by:** human
+**Justification:** The user ratified it unchanged, including the deliberate omission. The 45 s is the 15 s window plus the 30 s anarlog's "Did your meeting end?" prompt waits before stopping, so the longer window is borrowed from a competitor's measured behaviour rather than picked; the conjunction is what keeps it from widening the window for a quiet that has nothing to do with a scheduled meeting. Declining the 10-minute grace stays declined: it would hold a recording open long after the room emptied, which is the cost the short window exists to avoid.
+**Outcome:** applied
+**Supersedes:** Q106 — same question, same answer, decided by a human rather than assumed
+**Ref:** (pending)
+
+## Q278 — issues/08 — gate-resolution
+
+**Question:** Q109 assumed, and shipped, that a Summary run reads the Knob once and keeps the Backends it built, while a switch saves immediately and takes effect on the next run. Does that stand?
+**Options considered:** as written / move the remaining chunks to the new Backend mid-run / block the switch until the run finishes
+**Chosen:** **As written, ratified.** A run reads the Knob once and keeps its Backends; a switch saves at once and the next run uses it. Chunks not yet sent still go to the Backend the run started on, Cloud to Local included.
+**Decided-by:** human
+**Justification:** The user ratified it unchanged and named the reason in their own words — a record never comes from two models under one label. That is the whole argument: moving the remaining chunks would produce a Summary whose provenance line is a lie, and blocking the switch would make a settings control hang on work the Operator cannot see. Keeping the Backends for the life of a run is the only option where the label stays true.
+**Outcome:** applied
+**Supersedes:** Q109 — same question, same answer, decided by a human rather than assumed
+**Ref:** (pending)
+
+## Q279 — issues/07 — gate-resolution
+
+**Question:** Q114 assumed, and shipped, that the four requests able to run for minutes — `calendar/requestAccess`, `summary/generate`, `models/fetch`, `audio/check` — are answered from tasks of their own through the connection's writer, and that everything else stays on the server loop in order. Does that stand?
+**Options considered:** as written / only the calendar request, as originally agreed / every request off the loop
+**Chosen:** **As written, ratified.** The four long requests answer off the loop; everything else stays on it, in order. A Summary run still takes a Core lock, so runs remain serialised.
+**Decided-by:** human
+**Justification:** The user ratified it unchanged: the four off the loop, everything else in order. Widening the original fix from one request to four was the right generalisation — the same defect sat under all four and fixing only the named one leaves three live — and stopping at four is what keeps ordering guarantees for every short request, which is a property the protocol relies on. The Core lock is what keeps concurrency off the loop from becoming concurrency in the work.
+**Outcome:** applied
+**Supersedes:** Q114 — same question, same answer, decided by a human rather than assumed
+**Ref:** (pending)
+
+## Q280 — issues/11 — gate-resolution
+
+**Question:** Q127 assumed, and shipped, that Bluetooth counts as headphones, because CoreAudio reports a transport type and cannot tell AirPods from a Bluetooth speaker. Does that stand?
+**Options considered:** as written / refuse to guess and report `None` for Bluetooth / probe further
+**Chosen:** **As written, ratified.** Bluetooth and BluetoothLE report `Some(true)`; built-in resolves through the data source; HDMI, DisplayPort and AirPlay report `Some(false)`; USB, aggregate and everything else report `None`.
+**Decided-by:** human
+**Justification:** The user ratified it unchanged. The mapping is a bet on the common case, and it is the safe direction of bet only because of what consumes it: `Some(true)` is one of two conditions rule 1 needs, and as of Q281 rule 1 no longer enrols a room on that fact alone. A Bluetooth speaker wrongly read as headphones now costs a refused rule rather than a colleague named "You", which is what makes the guess affordable.
+**Outcome:** applied
+**Supersedes:** Q127 — same question, same answer, decided by a human rather than assumed
+**Ref:** (pending)
+
+## Q281 — issues/11 — deviation
+
+**Question:** Q126 asked whether rule 1 should follow ticket 11 as written — an isolated microphone makes **every** mic-channel cluster the Operator — or be narrowed to fire only when that microphone carries a single voice. It was shipped as written and flagged. Which is it?
+**Options considered:** as written / narrow to a single cluster / a new confidence threshold on the second voice
+**Chosen:** **Narrowed.** `Identified::IsolatedMic` is returned only when the isolated microphone carries exactly one cluster. With more than one, rule 1 declines and the Meeting falls through to rule 2, which is thresholded and already refuses a colleague. No new constant.
+**Decided-by:** human
+**Justification:** The user flipped it, and the reason is the whole of 2026-09-17: a second voice folded into the Operator's identity is being confidently wrong about another person (Q248), and the in-room second voice is precisely the residue no window filter reaches (Q266) — so the one rule that would enrol a room with no act at all must not be the rule that does it. This is a deviation from ticket 11's own words ("makes every mic-channel cluster of that Meeting the Operator"), taken deliberately and by the person whose spec it is. **What changed:** one condition in `operator::identify` (`clusters.len() == 1` in place of `!clusters.is_empty()`), the doc comments that asserted the old behaviour, and the test — `an_isolated_microphone_identifies_the_operator_with_no_act` keeps the single-voice case and the two-voice half moves to `a_second_voice_on_an_isolated_microphone_refuses_rule_one`, which asserts `Nobody` for the shared-room fixture and `Dominant` for two voices where one clears the floor, so the narrowing is shown to withhold the no-act enrolment without withholding the Operator. Reverting the condition makes it fail `left: IsolatedMic([Cluster(0), Cluster(1)])` against `right: Nobody`. **What did not change:** the payload stays a `Vec<Cluster>`, because `attach_operator`'s fold is the guard against the two-"You" defect its own comment records and deleting a Speaker-merging path to tidy a type would be the wrong trade; it is now defensive rather than reachable from rule 1, and the unit test that exercises it constructs the variant directly. **It cannot touch the nickel re-run:** `mic_isolated` was NULL or 0 on every real Meeting (Q246), so rule 1 never fired there and nothing already recorded is re-decided by this.
+**Outcome:** applied
+**Supersedes:** Q126 — its own question offered this narrowing as the alternative, and the flagged confirmation has come back the other way
+**Ref:** (pending)
+
+## Q282 — diarization/06 — gate-resolution
+
+**Question:** Q186 reported that `clear_voiceprint` nulls the model stamp without marking `forgotten`, so a Speaker whose recomputation came back empty reads in the Registry exactly like one never enrolled, and deferred the real question: should there be a fourth state?
+**Options considered:** a fourth Registry state / keep the stamp, as the model-change wipe does / no fourth state, the two readings are correctly identical
+**Chosen:** **No fourth state.** A Speaker whose recomputation emptied and one never enrolled are in the same position — name and identity kept, `forgotten = 0`, a vector minted again when evidence arrives — so one Registry reading for both is correct. The words that reading uses must be "no Voiceprint" rather than anything like "never enrolled".
+**Decided-by:** human
+**Justification:** The user decided it. The test is whether the Operator could act differently on the two, and they could not: both are relearnable, both keep their name, neither was chosen. A fourth sentence would draw a distinction with nothing behind it. **Nothing shipped needed changing.** `clear_voiceprint` already leaves the name, `is_operator` and `forgotten` untouched and nulls only the vector, both stamp columns and `confirmed`, which is the behaviour this ratifies; `registry.voiceprint.none` already reads "No Voiceprint" / "无声纹" in both locales, so the wording condition was already met and no string moved. What was wrong was the record of intent: `App.tsx`'s comment called the third state "a voice never enrolled", which is now a state the decision says does not exist on its own, and `clear_voiceprint` carried no note that nulling the stamp was deliberate. Both comments now say so, and name the contrast — the model-change wipe in `store::schema` *does* keep its stamp, because a model change is something that happened **to** the Speaker and the Registry owes an explanation for it. Q267's dependence on `forgotten = 0` as an expected re-run result is unaffected and now has a decision under it rather than an assumption.
+**Outcome:** applied
+**Supersedes:** Q186 — it reported the behaviour and deferred the Registry question; the question is now answered and the behaviour ratified rather than fixed
+**Ref:** (pending)

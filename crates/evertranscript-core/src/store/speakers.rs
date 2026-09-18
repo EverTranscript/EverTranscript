@@ -340,6 +340,16 @@ pub fn delete_voiceprint(connection: &Connection, id: &str) -> Result<bool> {
 /// Blanks the Voiceprint columns and the confirmation that was about them,
 /// leaving the exemplars in place. The half of [`delete_voiceprint`] a
 /// recomputation uses when the evidence that is left yields no vector.
+///
+/// Nulling the stamp is deliberate, and so is the Registry sentence it
+/// selects. A Speaker whose recomputation came back empty and one that was
+/// never enrolled are in the same position — name and identity kept,
+/// `forgotten` untouched, a vector minted again as soon as evidence
+/// arrives — so they read alike rather than through a fourth state that
+/// would distinguish two situations nobody can act on differently. This
+/// was raised as a defect and decided to be none; the wipe in
+/// [`crate::store::schema`] is the case that *does* keep its stamp,
+/// because a model change is a thing that happened **to** the Speaker.
 pub fn clear_voiceprint(connection: &Connection, id: &str) -> Result<usize> {
     Ok(connection.execute(
         "UPDATE speakers

@@ -93,14 +93,18 @@ pub struct MeetingFacts {
 /// Which clusters are the Operator, and which rule said so.
 ///
 /// The rule is part of the answer rather than a log line because the three
-/// differ in how much they are trusted downstream and in how many voices
-/// they can name at once, and a caller that only got `Option<Cluster>` back
-/// could not tell the isolated-mic case — where every mic voice is the same
-/// person — from a match on one of several.
+/// differ in how much they are trusted downstream, and a caller that only
+/// got `Option<Cluster>` back could not tell a fact about the recording —
+/// rule 1, which needs no threshold — from a thresholded judgement about
+/// who spoke most, or from a match made on evidence out of History.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Identified {
-    /// Rule 1. Nothing but the room reached the microphone, so every voice
-    /// on it is the Operator, confirmed without any act.
+    /// Rule 1. Nothing but the room reached the microphone and exactly one
+    /// voice was on it, so that voice is the Operator, confirmed without any
+    /// act. A second voice on an isolated microphone is a person in the
+    /// room, not the Operator, and the rule refuses rather than enrolling
+    /// them — see [`identify`]. The payload stays a `Vec` because
+    /// `attach_operator` still has to survive being handed several.
     IsolatedMic(Vec<Cluster>),
     /// Rule 2. One voice held the mic channel, by share, by margin, and for
     /// long enough to be worth enrolling.
@@ -153,8 +157,17 @@ pub fn identify(
     known: Option<&SeedVoice>,
     facts: &MeetingFacts,
 ) -> Identified {
-    // 1. The microphone heard the room and nothing else. There is no
-    //    inference to make and nothing for a threshold to get wrong.
+    // 1. The microphone heard the room and nothing else, and one voice was
+    //    on it. There is no inference to make and nothing for a threshold to
+    //    get wrong.
+    //
+    //    A second voice on that microphone is somebody in the room, and this
+    //    is the only rule that would enrol them with no act at all. Naming
+    //    them "You" is being confidently wrong about another person (Q248),
+    //    in exactly the case no window filter can reach (Q266) — so more
+    //    than one cluster falls through to rule 2, which is thresholded and
+    //    already refuses a colleague. The isolated fact is still true; it
+    //    just stops being sufficient once it names more than one voice.
     if facts.mic_isolated == Some(true) {
         let mut clusters: Vec<Cluster> = diarization
             .turns
@@ -164,7 +177,7 @@ pub fn identify(
             .collect();
         clusters.sort_unstable();
         clusters.dedup();
-        if !clusters.is_empty() {
+        if clusters.len() == 1 {
             return Identified::IsolatedMic(clusters);
         }
     }
@@ -368,15 +381,41 @@ mod tests {
             Identified::IsolatedMic(vec![Cluster(0)]),
             "5.8 seconds is under the dominance floor and rule 1 does not care"
         );
+    }
 
-        // Two voices in a room the far end could not reach are both the
-        // Operator's microphone — which is the one case where "You" names
-        // more than one cluster.
+    #[test]
+    fn a_second_voice_on_an_isolated_microphone_refuses_rule_one() {
+        // The fact is still true: the far end could not reach that
+        // microphone. It has stopped being sufficient, because it now names
+        // two voices and only one of them is the person holding the laptop.
+        // Enrolling both as "You" would be confidently wrong about somebody
+        // else, with no act to correct it — so rule 1 declines and the
+        // thresholded rule gets its turn.
         let d = run(FixtureDiarizer::shared_room());
+        let facts = MeetingFacts {
+            mic_isolated: Some(true),
+        };
         assert_eq!(
             identify(&d, None, &facts),
-            Identified::IsolatedMic(vec![Cluster(0), Cluster(1)])
+            Identified::Nobody,
+            "6.5s against 7.3s clears neither the dominance floor nor the margin, \
+             so rule 2 refuses the colleague rather than guessing between them"
         );
+
+        // And the refusal is rule 1's alone. The same two voices, with one
+        // of them dominant enough for rule 2, still name that one — the
+        // narrowing withholds the no-act enrolment, it does not withhold the
+        // Operator.
+        let d = diarization(vec![
+            Turn::new(AudioChannel::Mic, 0, MIN_OPERATOR_MS, 0),
+            Turn::new(
+                AudioChannel::Mic,
+                MIN_OPERATOR_MS + 500,
+                MIN_OPERATOR_MS + 2_000,
+                1,
+            ),
+        ]);
+        assert_eq!(identify(&d, None, &facts), Identified::Dominant(Cluster(0)));
     }
 
     #[test]
