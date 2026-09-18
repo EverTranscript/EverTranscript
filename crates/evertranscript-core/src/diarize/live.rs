@@ -344,6 +344,21 @@ fn slot(channel: AudioChannel) -> usize {
     usize::from(channel == AudioChannel::System)
 }
 
+/// Whether this observation heard the far end as well as its own voice.
+///
+/// Only ever true on the mic channel: the microphone picks the speakers up,
+/// and the system recording is a tap of the output stream that nothing of the
+/// mic's can reach, so the test is deliberately asymmetric (DECISIONS Q258).
+/// `spans` is every stretch the system channel was active, on the capture
+/// clock.
+fn overlaps_far_end(observation: &Observation, spans: &[(u64, u64)]) -> bool {
+    observation.channel == AudioChannel::Mic
+        && observation
+            .runs
+            .iter()
+            .any(|&(start, end)| spans.iter().any(|&(from, to)| from < end && to > start))
+}
+
 /// The grid cells a span covers, clamped to what exists.
 ///
 /// **Both edges round to the nearest cell rather than outward.** Flooring
@@ -717,6 +732,25 @@ pub fn assemble(observed: &Observed, canonical: &BTreeMap<Cluster, Cluster>) -> 
     let mut clean = Vec::new();
     let mut grouped: BTreeMap<Cluster, Vec<(Vec<f32>, i64, bool)>> = BTreeMap::new();
 
+    // Where the far end was talking. A mic observation overlapping any of it
+    // heard two people and is not evidence about either, so it is kept out of
+    // the centroid below — ticket 15, and **one-directional on purpose**
+    // (DECISIONS Q258): the speakers leak into the microphone, while the
+    // system channel is a tap of the output stream that the mic cannot reach.
+    //
+    // Not the same thing as `clean_runs`, which is same-channel only and so
+    // says nothing about the other recording. And applied here rather than to
+    // the exemplar afterwards, because the exemplar's vector is the centroid
+    // of *all* these observations and its `sample` is only a playback pointer
+    // — dropping it would discard a whole run's evidence over one window that
+    // did not produce the vector.
+    let far_end: Vec<(u64, u64)> = observed
+        .observations
+        .iter()
+        .filter(|observation| observation.channel == AudioChannel::System)
+        .flat_map(|observation| observation.runs.iter().copied())
+        .collect();
+
     // How many windows looked at each instant, per channel.
     let mut width = [0_usize; CHANNELS.len()];
     for (channel, _, end) in &observed.windows {
@@ -782,11 +816,19 @@ pub fn assemble(observed: &Observed, canonical: &BTreeMap<Cluster, Cluster>) -> 
                 .iter()
                 .map(|(start, end)| Turn::new(observation.channel, *start, *end, voice.index())),
         );
-        grouped.entry(voice).or_default().push((
-            observation.vector.clone(),
-            observation.voiced_ms() as i64,
-            false,
-        ));
+        // `voiced_ms` stays the whole voice's, not the surviving windows':
+        // it is what `MIN_SPEAKER_MS` reads, and a voice that plainly spoke
+        // should not fail to become a Speaker because the far end talked over
+        // it. A cluster whose every window overlapped yields no centroid and
+        // so no embedding at all — a state this module already produces and
+        // `persist_with` already handles, keeping the turns.
+        if !overlaps_far_end(observation, &far_end) {
+            grouped.entry(voice).or_default().push((
+                observation.vector.clone(),
+                observation.voiced_ms() as i64,
+                false,
+            ));
+        }
     }
 
     let mut turns = Vec::new();
@@ -1861,5 +1903,120 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Ticket 15: a mic window the far end talked over is not evidence about
+    /// the mic voice, so it must not reach that voice's centroid.
+    ///
+    /// The two mic observations carry *different* vectors, so the assembled
+    /// embedding says which of them survived rather than merely that one did.
+    #[test]
+    fn a_mic_observation_the_far_end_talked_over_does_not_reach_the_centroid() {
+        let mut clean = Observation {
+            channel: AudioChannel::Mic,
+            cluster: Cluster(0),
+            window: 0,
+            local: 0,
+            vector: vec![1.0, 0.0],
+            runs: vec![(0, 1000)],
+            clean_runs: vec![(0, 1000)],
+        };
+        let mut talked_over = clean.clone();
+        talked_over.vector = vec![0.0, 1.0];
+        talked_over.runs = vec![(4000, 5000)];
+        talked_over.clean_runs = vec![(4000, 5000)];
+        let far_end = Observation {
+            channel: AudioChannel::System,
+            cluster: Cluster(1),
+            window: 0,
+            local: 0,
+            vector: vec![0.0, 1.0],
+            runs: vec![(4500, 4800)],
+            clean_runs: vec![(4500, 4800)],
+        };
+
+        let both = assemble(
+            &observed(vec![clean.clone(), talked_over.clone(), far_end.clone()]),
+            &BTreeMap::new(),
+        );
+        let mic = both.embeddings.get(&Cluster(0)).expect("the mic voice");
+        assert_eq!(
+            mic.vector,
+            vec![1.0, 0.0],
+            "only the window it had to itself is in the centroid"
+        );
+        assert_eq!(
+            mic.voiced_ms, 2000,
+            "and `voiced_ms` still counts the whole voice, because \
+             MIN_SPEAKER_MS asks how much it spoke, not how much was clean"
+        );
+
+        // The far end keeps its own vector: the system channel is a tap of
+        // the output stream, so the mic talking across it proves nothing
+        // about it (DECISIONS Q258).
+        clean.channel = AudioChannel::System;
+        clean.cluster = Cluster(1);
+        talked_over.channel = AudioChannel::System;
+        talked_over.cluster = Cluster(1);
+        let mut across = far_end.clone();
+        across.channel = AudioChannel::Mic;
+        across.cluster = Cluster(0);
+        let reversed = assemble(
+            &observed(vec![clean, talked_over, across]),
+            &BTreeMap::new(),
+        );
+        let system = reversed.embeddings.get(&Cluster(1)).expect("the far end");
+        assert!(
+            (system.vector[0] - system.vector[1]).abs() < 1e-6 && system.vector[0] > 0.7,
+            "both its windows are still averaged in, not one of them: {:?}",
+            system.vector
+        );
+    }
+
+    /// And the filter is on the observations, not on the exemplar afterwards.
+    ///
+    /// A voice whose every window was talked over yields **no embedding at
+    /// all** rather than a contaminated one — the state `persist_with`
+    /// already handles by keeping the turns. Pinned so that a later reader
+    /// does not move this check onto the exemplar, where the vector is the
+    /// centroid of every window and `sample` is only a playback pointer.
+    #[test]
+    fn a_voice_talked_over_throughout_yields_no_embedding_and_keeps_its_turns() {
+        let buried = Observation {
+            channel: AudioChannel::Mic,
+            cluster: Cluster(0),
+            window: 0,
+            local: 0,
+            vector: vec![1.0, 0.0],
+            runs: vec![(0, 1000)],
+            clean_runs: vec![(0, 1000)],
+        };
+        let far_end = Observation {
+            channel: AudioChannel::System,
+            cluster: Cluster(1),
+            window: 0,
+            local: 0,
+            vector: vec![0.0, 1.0],
+            runs: vec![(0, 1000)],
+            clean_runs: vec![(0, 1000)],
+        };
+
+        let diarization = assemble(&observed(vec![buried, far_end]), &BTreeMap::new());
+        assert!(
+            !diarization.embeddings.contains_key(&Cluster(0)),
+            "no vector is minted from audio that was never this voice alone"
+        );
+        assert!(
+            diarization.embeddings.contains_key(&Cluster(1)),
+            "the far end is unaffected"
+        );
+        assert!(
+            diarization
+                .turns
+                .iter()
+                .any(|turn| turn.cluster == Cluster(0) && turn.channel == AudioChannel::Mic),
+            "and the words it said are still there to be attributed — losing \
+             the vector must not lose the turns"
+        );
     }
 }

@@ -175,6 +175,21 @@ pub fn plan(connection: &Connection, meeting_id: &str) -> Result<Option<Plan>> {
           WHERE segment_id = ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
     )?;
 
+    // Where the far end was talking, read off the rows already in hand rather
+    // than asked for again. A mic range overlapping any of it heard two
+    // people, so it teaches neither — ticket 15. **One-directional on
+    // purpose** (DECISIONS Q258): the speakers leak into the microphone,
+    // while the system channel is a tap of the output stream the mic cannot
+    // reach, so a system range is not dropped for the Operator talking across
+    // it.
+    let far_end: Vec<(i64, i64)> = segments
+        .iter()
+        .filter(|(_, channel, start, end, _)| {
+            AudioChannel::parse(channel) == Some(AudioChannel::System) && end > start
+        })
+        .map(|(_, _, start, end, _)| (*start, *end))
+        .collect();
+
     let mut ranges = Vec::new();
     for (segment_id, channel, start_ms, end_ms, machine) in segments {
         let Some(channel) = AudioChannel::parse(&channel) else {
@@ -210,7 +225,20 @@ pub fn plan(connection: &Connection, meeting_id: &str) -> Result<Option<Plan>> {
             None => (machine, None),
         };
 
-        if let Some(owner) = owner.as_ref().filter(|id| eligible.contains(*id)) {
+        // Positives only. A negative never reaches a centroid — `centroid`
+        // filters the flag and `seeds` reads the Voiceprint column — so
+        // dropping one would buy nothing and lose the other half of a
+        // correction, which the module doc says has to survive the model
+        // change.
+        let overlapped = channel == AudioChannel::Mic
+            && far_end
+                .iter()
+                .any(|&(start, end)| start < sample.end_ms && end > sample.start_ms);
+        if let Some(owner) = owner
+            .as_ref()
+            .filter(|id| eligible.contains(*id))
+            .filter(|_| !overlapped)
+        {
             ranges.push(Range {
                 segment_id: segment_id.clone(),
                 speaker_id: owner.clone(),
@@ -456,12 +484,25 @@ mod tests {
     }
 
     fn segment(connection: &Connection, id: &str, sequence: i64, span: (i64, i64), owner: &str) {
+        segment_on(connection, id, sequence, "mic", span, owner);
+    }
+
+    /// The same, on a named channel — for the fixtures where which channel a
+    /// range came from is the point.
+    fn segment_on(
+        connection: &Connection,
+        id: &str,
+        sequence: i64,
+        channel: &str,
+        span: (i64, i64),
+        owner: &str,
+    ) {
         connection
             .execute(
                 "INSERT INTO transcript_segments \
                     (id, meeting_id, sequence, channel, start_ms, end_ms, text, speaker_id) \
-                 VALUES (?1, 'm1', ?2, 'mic', ?3, ?4, 'hello', ?5)",
-                params![id, sequence, span.0, span.1, owner],
+                 VALUES (?1, 'm1', ?2, ?3, ?4, ?5, 'hello', ?6)",
+                params![id, sequence, channel, span.0, span.1, owner],
             )
             .expect("segment");
     }
@@ -1122,6 +1163,118 @@ mod tests {
             cluster::resolve(&clusters, &seeds).get(&Cluster(0)),
             Some(&cluster::Resolved::Existing("alice".to_string())),
             "the voice the Meeting taught is the voice it now finds"
+        );
+    }
+
+    /// Ticket 15: a mic range the far end talked over teaches nobody.
+    ///
+    /// Asserted through the write path rather than on the query, so what is
+    /// pinned is which exemplars a rebuild actually leaves behind.
+    #[test]
+    fn a_mic_range_the_far_end_talked_over_is_not_enrolled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut connection = history();
+        speaker(&connection, "alice", Some("Alice"));
+        speaker(&connection, "far", None);
+        segment(&connection, "s1", 1, (1000, 2000), "alice");
+        segment(&connection, "s2", 2, (3000, 4000), "alice");
+        // Across the second one only, and only partly: an intersection is an
+        // intersection, there is no threshold to clear.
+        segment_on(&connection, "f1", 3, "system", (3500, 3800), "far");
+
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+        let alice = held(&connection, "alice");
+        assert_eq!(alice.len(), 1, "one of her two windows survives");
+        assert_eq!(
+            alice[0]
+                .sample
+                .map(|sample| (sample.start_ms, sample.end_ms)),
+            Some((1000, 2000)),
+            "and it is the one she had to herself"
+        );
+        assert!(
+            speakers::get(&connection, "alice")
+                .expect("get")
+                .expect("row")
+                .has_voiceprint,
+            "she is still recognizable from it"
+        );
+    }
+
+    /// And the rule is one-directional, because the channels are.
+    ///
+    /// The microphone picks the speakers up, so mic audio can carry the far
+    /// end. The system channel is a tap of the output stream, which the
+    /// Operator's voice has no route into — so a system range is kept
+    /// however much the Operator talked across it (DECISIONS Q258).
+    #[test]
+    fn a_system_range_the_operator_talked_over_is_still_enrolled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut connection = history();
+        speaker(&connection, "alice", Some("Alice"));
+        speaker(&connection, "bob", Some("Bob"));
+        // Bob is the far end and Alice talks straight across him.
+        segment_on(&connection, "f1", 1, "system", (1000, 2000), "bob");
+        segment(&connection, "s1", 2, (1200, 1800), "alice");
+
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+        assert_eq!(
+            held(&connection, "bob").len(),
+            1,
+            "Bob's own recording is not contaminated by Alice talking"
+        );
+        assert!(
+            held(&connection, "alice").is_empty(),
+            "and Alice's mic window, which heard them both, teaches nothing"
+        );
+    }
+
+    /// A Speaker the rule leaves nothing loses recognition and keeps identity.
+    ///
+    /// The same contract as the negative-only case above, reached the other
+    /// way: `clear_voiceprint`, not `delete_voiceprint`, so no forgotten mark
+    /// is set and a later Meeting can still teach her.
+    #[test]
+    fn a_speaker_talked_over_throughout_loses_the_vector_but_not_her_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut connection = history();
+        speaker(&connection, "alice", Some("Alice"));
+        speaker(&connection, "far", None);
+        segment(&connection, "s1", 1, (1000, 2000), "alice");
+
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(1));
+        assert!(
+            speakers::get(&connection, "alice")
+                .expect("get")
+                .expect("row")
+                .has_voiceprint,
+            "clean to begin with"
+        );
+
+        // Now the far end turns out to have been talking over her one window.
+        segment_on(&connection, "f1", 2, "system", (1000, 2000), "far");
+        assert_eq!(rebuild(&mut connection, dir.path()), Ok(0));
+
+        assert!(
+            held(&connection, "alice").is_empty(),
+            "the contaminated evidence is withdrawn, not re-derived"
+        );
+        let row = speakers::get(&connection, "alice")
+            .expect("get")
+            .expect("row");
+        assert!(!row.has_voiceprint, "so the vector goes with it");
+        assert_eq!(
+            row.display_name.as_deref(),
+            Some("Alice"),
+            "she is still Alice"
+        );
+        assert!(
+            speakers::relearnable(&connection)
+                .expect("relearnable")
+                .iter()
+                .any(|speaker| speaker.id == "alice"),
+            "and still someone a later Meeting can teach — the drop costs \
+             recognition, never identity"
         );
     }
 }
