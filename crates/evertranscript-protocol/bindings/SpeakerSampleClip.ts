@@ -9,6 +9,9 @@ export type SpeakerSampleClip = {
  */
 audioBase64: string, mimeType: string, 
 /**
- * Where it was cut from, so a Client can open that Meeting.
+ * Where it was cut from, so a Client can open that Meeting. Absent for
+ * the Operator's enrolment, which is not from a Meeting: it is a
+ * recording they made of themselves on purpose, and there is nothing to
+ * open.
  */
-meetingId: string, channel: AudioChannel, startMs: number, endMs: number, };
+meetingId?: string, channel: AudioChannel, startMs: number, endMs: number, };

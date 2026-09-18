@@ -49,6 +49,8 @@ use evertranscript_protocol::SettingsSetParams;
 use evertranscript_protocol::Speaker;
 use evertranscript_protocol::SpeakerChangedParams;
 use evertranscript_protocol::SpeakerDetailResponse;
+use evertranscript_protocol::SpeakerEnrolResponse;
+use evertranscript_protocol::SpeakerEnrolmentResponse;
 use evertranscript_protocol::SpeakerJoinPreview;
 use evertranscript_protocol::SpeakerListResponse;
 use evertranscript_protocol::SpeakerMeeting;
@@ -400,7 +402,13 @@ fn speaker_to_wire(
     row: crate::store::speakers::Speaker,
 ) -> Result<Speaker> {
     let seen = crate::store::speakers::appearances(connection, &row.id)?;
-    let has_sample = crate::store::speakers::sample_source(connection, &row.id)?.is_some();
+    // Either kind of recording. The Operator's enrolment is not cut from a
+    // Meeting and so has no `sample_source`, and a row that could not be
+    // played back would be the one row in the Registry holding a biometric
+    // the Operator deliberately gave — inspectable only by trusting the
+    // label, which is what ADR-0008 traded storage for.
+    let has_sample = crate::store::speakers::sample_source(connection, &row.id)?.is_some()
+        || crate::store::speakers::enrolment(connection, &row.id)?.is_some();
     Ok(Speaker {
         id: row.id,
         display_name: row.display_name,
@@ -1627,15 +1635,25 @@ impl Core {
         let source = self
             .store
             .read(move |connection| {
+                // The Operator's own recording first, where there is one. It
+                // is better evidence of their voice than any window cut out
+                // of a Meeting — they made it on purpose and said so — and
+                // it is what rule 0 is deciding from, so it is what the
+                // Registry has to be able to play back.
+                if let Some((audio_path, sample)) =
+                    crate::store::speakers::enrolment_sample(connection, &id)?
+                {
+                    return Ok(Some((None, sample, audio_path)));
+                }
                 let Some(source) = crate::store::speakers::sample_source(connection, &id)? else {
                     return Ok(None);
                 };
                 let audio_path = crate::store::meetings::get(connection, &source.meeting_id)?
                     .and_then(|meeting| meeting.audio_path);
-                Ok(audio_path.map(|path| (source, path)))
+                Ok(audio_path.map(|path| (Some(source.meeting_id), source.sample, path)))
             })
             .await?;
-        let Some((source, audio_path)) = source else {
+        let Some((meeting_id, sample, audio_path)) = source else {
             return Ok(SpeakerSampleResponse { sample: None });
         };
         let path = self.history_dir.join(audio_path);
@@ -1643,7 +1661,6 @@ impl Core {
             return Ok(SpeakerSampleResponse { sample: None });
         }
 
-        let sample = source.sample;
         let clip = tokio::task::spawn_blocking(move || {
             audio::sample::cut(
                 &path,
@@ -1658,12 +1675,194 @@ impl Core {
             sample: Some(SpeakerSampleClip {
                 audio_base64: base64::engine::general_purpose::STANDARD.encode(&clip.bytes),
                 mime_type: clip.mime_type.to_string(),
-                meeting_id: source.meeting_id,
+                meeting_id,
                 channel: sample.channel,
                 start_ms: sample.start_ms,
                 end_ms: sample.end_ms,
             }),
         })
+    }
+
+    /// Records the Operator and makes that recording their identity.
+    ///
+    /// **The one act in this product that states a voice rather than
+    /// inferring one.** Everything else `diarize::operator` knows about who
+    /// owns this laptop is read off a Meeting nobody confirmed, and is
+    /// silently wrong in exactly one case — somebody else in the room, whose
+    /// words then carry the Operator's name in a record that is immutable by
+    /// design. There is no filter for that case, because nothing in the
+    /// audio distinguishes it. A person saying "this is me" does.
+    ///
+    /// Three things have to be true of the recording before it is allowed to
+    /// become an identity, and `diarize::enrol` asks all three. They are
+    /// asked of the *models*, not of the peak meter, because "is this one
+    /// voice" is not a question a level has an opinion about.
+    ///
+    /// The Core records rather than the Client for the reason `audio::check`
+    /// spells out: a microphone grant belongs to the process that asked for
+    /// it, and the Core is the process that captures Meetings. A check the
+    /// Client ran in its own process would prove something true about
+    /// Electron.
+    pub async fn enrol_operator(&self, seconds: u64) -> Result<SpeakerEnrolResponse> {
+        use evertranscript_protocol::SpeakerEnrolRefusal;
+
+        let refused = |refusal: SpeakerEnrolRefusal,
+                       detail: Option<String>,
+                       voiced_ms: u64,
+                       voices_heard: u32| SpeakerEnrolResponse {
+            accepted: false,
+            refusal: Some(refusal),
+            detail,
+            voiced_ms,
+            voices_heard,
+            speaker: None,
+        };
+
+        let segmentation = self.models_dir.join("diarize-segmentation.onnx");
+        let embedding = self.models_dir.join("diarize-embedding.onnx");
+        if !segmentation.exists() || !embedding.exists() {
+            // An error rather than a refusal: nothing about the Operator's
+            // voice was judged, and telling them to try speaking differently
+            // would be a lie about what went wrong.
+            anyhow::bail!("the diarization models are not downloaded yet");
+        }
+
+        let recorded = match audio::enrol::record(seconds).await {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                return Ok(refused(
+                    SpeakerEnrolRefusal::CouldNotRecord,
+                    Some(error.to_string()),
+                    0,
+                    0,
+                ));
+            }
+        };
+        let duration_ms = recorded.duration_ms() as i64;
+
+        let outcome = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let mic = crate::diarize::runner::resample_to_model_rate(
+                &recorded.samples,
+                recorded.sample_rate,
+            );
+            let mut diarizer = crate::diarize::live::LiveDiarizer::load(&segmentation, &embedding)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            Ok((
+                crate::diarize::enrol::analyse(&mic, &mut diarizer)?,
+                recorded.samples,
+            ))
+        })
+        .await??;
+        let (accepted, samples) = match outcome {
+            (crate::diarize::enrol::Outcome::Accepted(accepted), samples) => (accepted, samples),
+            (crate::diarize::enrol::Outcome::Refused(why), _) => {
+                use crate::diarize::enrol::Refused;
+                return Ok(match why {
+                    Refused::Silent => refused(SpeakerEnrolRefusal::Silent, None, 0, 0),
+                    Refused::TooLittleSpeech { voiced_ms, .. } => {
+                        refused(SpeakerEnrolRefusal::TooLittleSpeech, None, voiced_ms, 1)
+                    }
+                    Refused::MoreThanOneVoice { voices } => refused(
+                        SpeakerEnrolRefusal::MoreThanOneVoice,
+                        None,
+                        0,
+                        voices as u32,
+                    ),
+                    Refused::NothingEmbeddable => {
+                        refused(SpeakerEnrolRefusal::NothingEmbeddable, None, 0, 1)
+                    }
+                });
+            }
+        };
+        let voiced_ms = accepted.voiced_ms;
+
+        // Kept, and this is the whole reason a model change stops costing
+        // the Operator their name: the wipe takes vectors, and a recording
+        // is not a vector. One file, replaced each time somebody enrols —
+        // an Operator has one voice, and keeping the old ones would be
+        // storing biometrics nothing reads.
+        let mut sink = audio::sink::AudioSink::new(&self.audio_dir(), "enrolment")?;
+        let mut interleaved = Vec::with_capacity(samples.len() * 2);
+        for sample in &samples {
+            interleaved.push(*sample);
+            // No far end in an enrolment. Silence keeps the file the shape
+            // every other reader of kept audio expects: left is mic, right
+            // is system, always.
+            interleaved.push(0.0);
+        }
+        sink.write(&audio::StereoBlock {
+            offset: audio::CaptureOffset::ZERO,
+            samples: interleaved,
+        })
+        .await?;
+        if let Some(reason) = sink.disabled_reason() {
+            anyhow::bail!("could not encode the enrolment recording: {reason}");
+        }
+        let path = sink
+            .finalize()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the enrolment recording wrote nothing"))?;
+        let relative = Self::history_relative(&self.history_dir, &path);
+
+        let speaker = self
+            .store
+            .write(move |connection| {
+                let id = crate::diarize::operator::enrol(
+                    connection,
+                    &accepted.spans,
+                    crate::diarize::live::EMBEDDING_MODEL,
+                    crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                    &relative,
+                    duration_ms,
+                )?;
+                let row = crate::store::speakers::get(connection, &id)?
+                    .ok_or_else(|| anyhow::anyhow!("the Operator vanished while enrolling"))?;
+                speaker_to_wire(connection, row)
+            })
+            .await?;
+        let _ = self
+            .notifications
+            .send(ServerNotification::SpeakerChanged(SpeakerChangedParams {
+                speaker: speaker.clone(),
+            }));
+        info!(voiced_ms, "the Operator enrolled their voice");
+        Ok(SpeakerEnrolResponse {
+            accepted: true,
+            refusal: None,
+            detail: None,
+            voiced_ms,
+            voices_heard: 1,
+            speaker: Some(speaker),
+        })
+    }
+
+    /// Whether the Operator has enrolled, and whether it is what decides
+    /// today. First-run reads this to know whether to offer the step.
+    pub async fn operator_enrolment(&self) -> Result<SpeakerEnrolmentResponse> {
+        self.store
+            .read(|connection| {
+                let Some(speaker) = crate::store::speakers::operator(connection)? else {
+                    return Ok(SpeakerEnrolmentResponse { enrolment: None });
+                };
+                let Some(enrolment) = crate::store::speakers::enrolment(connection, &speaker.id)?
+                else {
+                    return Ok(SpeakerEnrolmentResponse { enrolment: None });
+                };
+                Ok(SpeakerEnrolmentResponse {
+                    enrolment: Some(evertranscript_protocol::SpeakerEnrolment {
+                        speaker_id: enrolment.speaker_id.clone(),
+                        duration_ms: enrolment.duration_ms,
+                        recorded_at: enrolment.recorded_at,
+                        active: crate::store::speakers::is_enrolled(
+                            connection,
+                            &speaker.id,
+                            crate::diarize::live::EMBEDDING_MODEL,
+                            crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                        )?,
+                    }),
+                })
+            })
+            .await
     }
 
     /// Re-assigns a segment to a different Speaker (story 29b).
@@ -2197,31 +2396,25 @@ impl Core {
                 };
 
                 let gate = diarize::operator::match_gate_met(&diarization);
-                let known = diarize::operator::known_operator(
+                let operator = diarize::operator::known_operator(
                     &transaction,
                     diarize::live::EMBEDDING_MODEL,
                     diarize::live::EMBEDDING_MODEL_VERSION,
                 )?;
-                let withheld = (!gate).then(|| known.as_ref().map(|seed| seed.speaker_id.clone()));
-                let withheld = withheld.flatten();
 
                 let assigned = diarize::cluster::persist(
                     &transaction,
                     &meeting_id,
                     &diarization.embeddings,
                     &reconciliation.voices(),
-                    withheld.as_deref(),
+                    operator.withheld(gate),
                     &rebuilt_evidence,
                 )?;
 
                 let facts = diarize::operator::MeetingFacts {
                     mic_isolated: crate::store::meetings::mic_isolated(&transaction, &meeting_id)?,
                 };
-                let found = diarize::operator::identify(
-                    &diarization,
-                    gate.then_some(known.as_ref()).flatten(),
-                    &facts,
-                );
+                let found = diarize::operator::identify(&diarization, operator.print(gate), &facts);
 
                 let written = diarize::reconcile::apply(
                     &transaction,
@@ -2516,7 +2709,123 @@ impl Core {
     /// this is one `sqlite_master` lookup, and where it does enqueue, it has
     /// to establish its oldest-first order before the catch-up adds whatever
     /// a previous Core left. Neither one starts a model.
+    /// Mints the Operator's Voiceprint again from their enrolment clip.
+    ///
+    /// **The structural answer to Q236.** `MODEL_CHANGE_WIPE` takes every
+    /// vector and every exemplar, because old and new cannot be compared,
+    /// and ticket 12 earns the rest of History back by walking it — which
+    /// took seventeen minutes on the first real History and left the
+    /// Operator unnamed on four Meetings while it ran. The enrolment clip is
+    /// not a vector, so the wipe does not reach it. Seconds of work on a
+    /// half-minute of audio puts the Operator back before the first Meeting
+    /// is walked, and rule 0 names them in every Meeting recorded from then
+    /// on whether or not the backlog has reached that Meeting yet.
+    ///
+    /// The clip is re-analysed rather than re-embedded. A pure re-embed
+    /// would need the spans, and the spans lived on the exemplars the wipe
+    /// deleted — but it would also be the wrong thing to want: the new
+    /// model's own segmentation is what every other voice in this History is
+    /// about to be cut by, and the three gates in `diarize::enrol` are worth
+    /// asking again of a recording that is about to become an identity in a
+    /// space nothing has been heard in yet.
+    ///
+    /// Nothing here is fatal. An Operator whose clip is gone, whose models
+    /// are not downloaded, or whose recording the new model refuses, is an
+    /// Operator who has to be recognized the old way — which is the product
+    /// as it was before any of this, and is what the backlog is for.
+    async fn remint_the_enrolment(&self) {
+        let enrolment = self
+            .store
+            .read(|connection| {
+                let Some(speaker) = crate::store::speakers::operator(connection)? else {
+                    return Ok(None);
+                };
+                // Already minted in this space — an ordinary start, which is
+                // every start but the one after a swap.
+                if crate::store::speakers::is_enrolled(
+                    connection,
+                    &speaker.id,
+                    crate::diarize::live::EMBEDDING_MODEL,
+                    crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                )? {
+                    return Ok(None);
+                }
+                crate::store::speakers::enrolment(connection, &speaker.id)
+            })
+            .await;
+        let enrolment = match enrolment {
+            Ok(Some(enrolment)) => enrolment,
+            Ok(None) => return,
+            Err(error) => {
+                warn!(%error, "could not look for the Operator's enrolment");
+                return;
+            }
+        };
+
+        let audio_path = self.history_dir.join(&enrolment.audio_path);
+        let segmentation = self.models_dir.join("diarize-segmentation.onnx");
+        let embedding = self.models_dir.join("diarize-embedding.onnx");
+        if !audio_path.exists() || !segmentation.exists() || !embedding.exists() {
+            info!(
+                "the Operator's enrolment cannot be re-minted yet;                  History earns their Voiceprint back the long way"
+            );
+            return;
+        }
+
+        // The models are CPU-bound C++, and this runs on the way up.
+        let analysed = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let decoded = crate::diarize::runner::decode(&audio_path)?;
+            let mut diarizer = crate::diarize::live::LiveDiarizer::load(&segmentation, &embedding)
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+            Ok(crate::diarize::enrol::analyse(&decoded.mic, &mut diarizer)?)
+        })
+        .await;
+        let accepted = match analysed {
+            Ok(Ok(crate::diarize::enrol::Outcome::Accepted(accepted))) => accepted,
+            Ok(Ok(crate::diarize::enrol::Outcome::Refused(refused))) => {
+                warn!(
+                    reason = refused.as_str(),
+                    "the new model would not take the Operator's enrolment recording"
+                );
+                return;
+            }
+            Ok(Err(error)) => {
+                warn!(%error, "could not re-mint the Operator's enrolment");
+                return;
+            }
+            Err(error) => {
+                warn!(%error, "the enrolment re-mint did not finish");
+                return;
+            }
+        };
+
+        let written = self
+            .store
+            .write(move |connection| {
+                crate::diarize::operator::enrol(
+                    connection,
+                    &accepted.spans,
+                    crate::diarize::live::EMBEDDING_MODEL,
+                    crate::diarize::live::EMBEDDING_MODEL_VERSION,
+                    &enrolment.audio_path,
+                    enrolment.duration_ms,
+                )
+            })
+            .await;
+        match written {
+            Ok(_) => info!(
+                model = crate::diarize::live::EMBEDDING_MODEL,
+                "the Operator's enrolment was re-minted in the new embedding"
+            ),
+            Err(error) => warn!(%error, "could not write the re-minted enrolment"),
+        }
+    }
+
     pub async fn rerun_if_the_model_changed(&self) {
+        // Before the gate, not after it. The gate is what decides whether
+        // History is owed a walk; the Operator's own identity does not need
+        // to wait behind that walk to be true again.
+        self.remint_the_enrolment().await;
         let enqueued = self
             .store
             .write(|connection| {
@@ -3989,6 +4298,19 @@ impl Server {
                 })
             }
 
+            // Half a minute of recording, then both models over what it
+            // heard. Off the loop for the same reason `audio/check` is:
+            // every other Client keeps being served while somebody talks.
+            ClientRequest::SpeakerEnrol(params) => {
+                let seconds = params
+                    .seconds
+                    .unwrap_or(audio::enrol::DEFAULT_SECONDS)
+                    .clamp(5, 120);
+                self.answer_later(connection_id, id, async move {
+                    Ok(serde_json::to_value(core.enrol_operator(seconds).await?)?)
+                })
+            }
+
             ClientRequest::SummaryGenerate(params) => {
                 self.answer_later(connection_id, id, async move {
                     core.summarize_meeting(&params.id).await?;
@@ -4252,6 +4574,10 @@ impl Server {
                 self.core.speaker_sample(&params.id).await?,
             )?),
 
+            ClientRequest::SpeakerEnrolment(_) => {
+                Ok(serde_json::to_value(self.core.operator_enrolment().await?)?)
+            }
+
             ClientRequest::TranscriptReassign(params) => Ok(serde_json::to_value(
                 self.core
                     .reassign_segment(&params.segment_id, &params.speaker_id)
@@ -4308,6 +4634,7 @@ impl Server {
             // `dispatch_request` answers these off the loop, never here.
             ClientRequest::ModelsFetch(_)
             | ClientRequest::AudioCheck(_)
+            | ClientRequest::SpeakerEnrol(_)
             | ClientRequest::SummaryGenerate(_)
             | ClientRequest::CalendarRequestAccess(_) => {
                 anyhow::bail!("this request is answered off the server loop")

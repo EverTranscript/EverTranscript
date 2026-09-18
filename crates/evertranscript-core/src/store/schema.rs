@@ -470,6 +470,7 @@ const MIGRATIONS: &[&str] = &[
     ONE_OPERATOR,
     MODEL_CHANGE_WIPE,
     MODEL_CHANGE_RERUN,
+    THE_ENROLMENT,
 ];
 
 /// 15 — the wipe a model change owes.
@@ -621,6 +622,46 @@ pub const MODEL_CHANGE_RERUN: &str = r#"
     VALUES
         (1, 'wespeaker-voxceleb-resnet34-LM', '2', 0, 0, 0,
          strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'));
+"#;
+
+/// 17 — the voice the Operator gave on purpose.
+///
+/// Every other Voiceprint in this schema is inferred: `diarize::operator`
+/// reads the mic channel and decides who owns the laptop, and it can be
+/// wrong about a colleague in the room without anything looking wrong
+/// afterwards. An enrolment is the other kind of evidence — a person
+/// recorded themselves and said so — and it outranks the channel entirely.
+///
+/// **The row exists for the audio path, and the audio path exists because of
+/// [`MODEL_CHANGE_WIPE`].** That migration takes every vector and every
+/// exemplar, correctly: old and new embeddings cannot be compared. It leaves
+/// the Operator unrecognized until a bulk re-run relearns them from their
+/// attributed clusters, which on the first real History cost seventeen
+/// minutes and did not return four Meetings at all. A kept clip is immune to
+/// that: the vectors go, the audio does not, and the Operator is re-embedded
+/// in the new space before the backlog is touched.
+///
+/// Relative to the History directory, like `meetings.audio_path`, so moving
+/// a History moves its enrolment with it.
+///
+/// **Why the exemplars themselves carry no new marking.** An enrolment's
+/// exemplars are ordinary rows with `meeting_id` NULL and `source`
+/// `'operator'`, which is already an unambiguous signature: an
+/// Operator-sourced exemplar comes from a correction, and a correction is
+/// always about a segment of some Meeting. Spelling it a third way would
+/// mean a new value in `source`'s `CHECK`, and that is a `STRICT` table —
+/// changing the constraint rebuilds it, which is a large and reversible-only
+/// -by-restore operation to buy a synonym. This table is the authority; the
+/// signature is how the exemplars are found.
+const THE_ENROLMENT: &str = r#"
+    CREATE TABLE speaker_enrolments (
+        speaker_id   TEXT PRIMARY KEY NOT NULL
+                     REFERENCES speakers(id) ON DELETE CASCADE,
+        -- Where the clip is, relative to the History directory.
+        audio_path   TEXT NOT NULL,
+        duration_ms  INTEGER NOT NULL,
+        recorded_at  TEXT NOT NULL
+    ) STRICT;
 "#;
 
 /// Applies every migration the database has not seen yet.
@@ -945,7 +986,7 @@ mod tests {
 
     // ---- Ticket 05: the wipe that is written but not registered ----
 
-    /// The wipe and the re-run are one upgrade: adjacent, in that order, last.
+    /// The wipe and the re-run are one upgrade: adjacent, and in that order.
     ///
     /// Until 2026-09-17 two tests here asserted the opposite — that neither
     /// was in `MIGRATIONS` — because appending them is the whole of activating
@@ -953,12 +994,16 @@ mod tests {
     /// behind it. The swap happened (Q226) and the user said to register
     /// (Q228). What is left to guard is the pairing: a wipe registered without
     /// its re-run directly behind it leaves a History nobody is recognized in.
+    ///
+    /// This also asserted the pair was *last*, which it was when it was
+    /// written and which the reason above never needed: the danger is a
+    /// migration landing *between* them, not one landing after. Relaxed when
+    /// `THE_ENROLMENT` was appended behind them.
     #[test]
     fn the_wipe_and_the_rerun_are_registered_as_a_pair() {
         let wipe = before(MODEL_CHANGE_WIPE);
         let rerun = before(MODEL_CHANGE_RERUN);
         assert_eq!(rerun, wipe + 1, "the re-run is the other half, and follows");
-        assert_eq!(rerun, MIGRATIONS.len() - 1);
     }
 
     /// A History as the current build leaves one, on disk.

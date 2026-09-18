@@ -365,6 +365,31 @@ client_request_definitions! {
         params: SpeakerGetParams,
         response: SpeakerSampleResponse,
     },
+    /// Records the Operator saying something, and makes it their identity.
+    ///
+    /// The one place in this product where a voice is identified by an act
+    /// rather than inferred from a recording nobody confirmed. Everything
+    /// else about a Speaker is a guess the Operator may correct afterwards;
+    /// this is a statement, and `diarize::operator` rule 0 treats it as one.
+    ///
+    /// Long-running: the Core records for `seconds`, then runs both models
+    /// over what it heard. It records rather than the Client for the same
+    /// reason `audio/check` does — a grant belongs to the process that asks,
+    /// and the Core is the process that captures Meetings.
+    ///
+    /// **Replaces.** An Operator who enrols again replaces what was there,
+    /// including exemplars learned from Meetings; their corrections marking
+    /// a voice as *not* theirs are kept, because those are acts too.
+    SpeakerEnrol => "speaker/enrol" {
+        params: SpeakerEnrolParams,
+        response: SpeakerEnrolResponse,
+    },
+    /// Whether the Operator has enrolled, and when. What first-run reads to
+    /// know whether to offer the step, and the Registry to label the row.
+    SpeakerEnrolment => "speaker/enrolment" {
+        params: SpeakerEnrolmentParams,
+        response: SpeakerEnrolmentResponse,
+    },
     /// Re-assigns a segment to a different Speaker (story 29b). Appends a
     /// hint; the machine's attribution is preserved beneath it.
     TranscriptReassign => "transcript/reassign" {
@@ -1424,6 +1449,100 @@ pub struct SpeakerSampleResponse {
     pub sample: Option<SpeakerSampleClip>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerEnrolParams {
+    /// How long to listen. Longer is better evidence and worse to sit
+    /// through; the Core clamps whatever arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number")]
+    pub seconds: Option<u64>,
+}
+
+/// Why a recording was not taken as an identity.
+///
+/// Kept apart rather than collapsed into one message because each sends the
+/// Operator somewhere different: `Silent` to System Settings, `MoreThanOneVoice`
+/// to a quieter room, `TooLittleSpeech` back to the button.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum SpeakerEnrolRefusal {
+    /// Every sample was zero. On macOS this is what a refused microphone
+    /// looks like: the grant reads as given and nothing arrives.
+    Silent,
+    /// Some speech, but not enough of it to be an identity.
+    TooLittleSpeech,
+    /// Somebody else was talking. Refused outright rather than resolved in
+    /// favour of the loudest voice — guessing is the thing this replaces.
+    MoreThanOneVoice,
+    /// One voice, long enough, and no span of it could be embedded.
+    NothingEmbeddable,
+    /// Capture could not be started at all, which is a different answer from
+    /// started and heard nothing.
+    CouldNotRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerEnrolResponse {
+    pub accepted: bool,
+    /// Absent when accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refusal: Option<SpeakerEnrolRefusal>,
+    /// What the capture layer said, when it said anything. For the log and
+    /// for a Client that wants to show the machine's own words.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub detail: Option<String>,
+    /// How much of the recording was speech.
+    #[ts(type = "number")]
+    pub voiced_ms: u64,
+    /// How many voices were heard in it. More than one is a refusal.
+    #[ts(type = "number")]
+    pub voices_heard: u32,
+    /// The Operator, as they now stand. Absent on a refusal, which changes
+    /// nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub speaker: Option<Speaker>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerEnrolmentParams {}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerEnrolment {
+    pub speaker_id: String,
+    #[ts(type = "number")]
+    pub duration_ms: i64,
+    pub recorded_at: String,
+    /// Whether the enrolment is the Operator's identity *right now*. False in
+    /// the window after a voice-model change, where the recording is still
+    /// here and the vectors taken from it are not — the Core mints them again
+    /// on the next start, and until it does the Operator is recognized the
+    /// old way.
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SpeakerEnrolmentResponse {
+    /// Absent when the Operator has never enrolled, which is every
+    /// installation that skipped the step.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub enrolment: Option<SpeakerEnrolment>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -1433,8 +1552,13 @@ pub struct SpeakerSampleClip {
     /// (ADR-0026), and a clip is a few tens of kilobytes.
     pub audio_base64: String,
     pub mime_type: String,
-    /// Where it was cut from, so a Client can open that Meeting.
-    pub meeting_id: String,
+    /// Where it was cut from, so a Client can open that Meeting. Absent for
+    /// the Operator's enrolment, which is not from a Meeting: it is a
+    /// recording they made of themselves on purpose, and there is nothing to
+    /// open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub meeting_id: Option<String>,
     pub channel: AudioChannel,
     #[ts(type = "number")]
     pub start_ms: i64,

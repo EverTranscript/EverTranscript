@@ -1524,12 +1524,18 @@ async fn run_speakers(command: SpeakerCommand) -> Result<()> {
                 .clone()
                 .unwrap_or_else(|| std::path::PathBuf::from(format!("{id}.mp3")));
             std::fs::write(&out, bytes)?;
+            // No Meeting for the Operator's enrolment: they recorded it of
+            // themselves, and there is nothing to name.
+            let from = match &clip.meeting_id {
+                Some(meeting_id) => format!("Meeting {meeting_id}"),
+                None => "their enrolment".to_string(),
+            };
             println!(
-                "Wrote {} — {} on the {} channel of Meeting {}, {:.1}s to {:.1}s.",
+                "Wrote {} — {} on the {} channel of {}, {:.1}s to {:.1}s.",
                 out.display(),
                 clip.mime_type,
                 clip.channel.as_str(),
-                clip.meeting_id,
+                from,
                 clip.start_ms as f64 / 1000.0,
                 clip.end_ms as f64 / 1000.0,
             );

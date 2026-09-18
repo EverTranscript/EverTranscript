@@ -19,6 +19,7 @@
 pub mod aec;
 pub mod check;
 pub mod dsp;
+pub mod enrol;
 pub mod fixture;
 pub mod joiner;
 pub mod leg;

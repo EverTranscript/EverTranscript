@@ -30,3 +30,33 @@ Prior art: anarlog ships exactly this (embedded two-stage DTLN-style AEC ONNX, d
 > archive should not carry irreversible processing that the product cannot yet
 > prove correct on real audio.
 - The AudioSource test seam feeds dual-channel fixtures, and echo-contaminated fixture audio becomes a required test case.
+
+> **Amended 2026-09-18: an enrolment outranks the channel, and every rule
+> built on it.**
+> The 2026-08-27 correction already stepped back from "the mic channel *is*
+> the Operator" to "is where the Operator is", and the implementation carried
+> that as three rules in `diarize::operator` — an isolated mic, a dominant
+> share, a Voiceprint match. All three are inferences from a recording nobody
+> confirmed, and the residue the correction left is the case none of them can
+> reach: a second person in the room, whose words are then attributed to the
+> Operator by name, confidently, in a record ADR-0009 makes immutable. Q281
+> narrowed the first rule to refuse the *ambiguous* form of it; nothing
+> narrows the unambiguous one, because nothing in the audio distinguishes it.
+>
+> A person saying "this is me" does. The Operator may now record half a minute
+> of themselves, which becomes **rule 0**: if an enrolment exists, the
+> Operator is whichever cluster it matches, and if it matches nothing the
+> answer is *nobody* rather than a fall-through to the three rules. Falling
+> through would re-admit precisely the guess the enrolment was taken to
+> replace.
+>
+> Rule 0 is also **not gated by `match_gate_met`**, where rule 3 is. That gate
+> exists because rule 3's evidence is inferred, and its own reasoning — a
+> monologue is a case where a Voiceprint match says nothing the dominance rule
+> does not say better — is about how far an *inference* may be trusted.
+> Nothing under rule 0 is inferred and dominance does not run.
+>
+> The channel is not demoted where nobody has enrolled: an installation that
+> skips the step is the product exactly as this ADR's 2026-08-27 form
+> describes it. What changes is that the failure is now the Operator's to
+> close rather than one the product can only narrow.

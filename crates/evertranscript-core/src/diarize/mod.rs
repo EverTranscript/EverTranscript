@@ -33,6 +33,7 @@
 //! fifty minutes. [`fixture`] exists to produce the ugly shapes on purpose.
 
 pub mod cluster;
+pub mod enrol;
 pub mod fbank;
 pub mod fixture;
 pub mod live;

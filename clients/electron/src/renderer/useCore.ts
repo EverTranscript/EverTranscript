@@ -21,6 +21,9 @@ import type { PostureResponse } from "@protocol/PostureResponse";
 import type { DiarizeRerun } from "@protocol/DiarizeRerun";
 import type { DiarizeStatusResponse } from "@protocol/DiarizeStatusResponse";
 import type { SpeakerDetailResponse } from "@protocol/SpeakerDetailResponse";
+import type { SpeakerEnrolResponse } from "@protocol/SpeakerEnrolResponse";
+import type { SpeakerEnrolment } from "@protocol/SpeakerEnrolment";
+import type { SpeakerEnrolmentResponse } from "@protocol/SpeakerEnrolmentResponse";
 import type { SpeakerListResponse } from "@protocol/SpeakerListResponse";
 import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
 import type { SummaryBackendsResponse } from "@protocol/SummaryBackendsResponse";
@@ -718,6 +721,80 @@ export function useCalendarAccess(): {
  * Electron; the process that records Meetings is the Core, and it is the one
  * whose permission matters.
  */
+/**
+ * The Operator's enrolment: whether there is one, and the act of making one.
+ *
+ * The only place in this Client that creates identity rather than correcting
+ * it. Everywhere else the Operator is told who the Core thinks somebody is
+ * and may disagree; here they say who they are, and the Core stops guessing.
+ *
+ * The request takes as long as the recording plus both models, so `recording`
+ * is what the button reads rather than a spinner nobody explained. A refusal
+ * comes back as an answer, not an error — the models ran and said no, which
+ * is something the Operator can do something about — and `error` is kept for
+ * the other kind: a Core that could not be asked at all.
+ */
+export function useEnrolment(): {
+  enrolment: SpeakerEnrolment | null;
+  result: SpeakerEnrolResponse | null;
+  recording: boolean;
+  error: string | null;
+  enrol: (seconds?: number) => void;
+  refresh: () => Promise<void>;
+} {
+  const [enrolment, setEnrolment] = useState<SpeakerEnrolment | null>(null);
+  const [result, setResult] = useState<SpeakerEnrolResponse | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const response =
+        await window.evertranscript.request<SpeakerEnrolmentResponse>(
+          "speaker/enrolment",
+          {},
+        );
+      setEnrolment(response.enrolment ?? null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const enrol = useCallback(
+    (seconds?: number) => {
+      if (recording) return;
+      setRecording(true);
+      setError(null);
+      // The previous answer goes now rather than when the next one lands: an
+      // "accepted" sitting on screen while a new recording runs is a claim
+      // about a recording that has not been judged yet.
+      setResult(null);
+      void (async () => {
+        try {
+          const response =
+            await window.evertranscript.request<SpeakerEnrolResponse>(
+              "speaker/enrol",
+              seconds === undefined ? {} : { seconds },
+            );
+          setResult(response);
+          if (response.accepted) await refresh();
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+          setRecording(false);
+        }
+      })();
+    },
+    [recording, refresh],
+  );
+
+  return { enrolment, result, recording, error, enrol, refresh };
+}
+
 export function useAudioCheck(): {
   report: AudioCheckResponse | null;
   checking: boolean;

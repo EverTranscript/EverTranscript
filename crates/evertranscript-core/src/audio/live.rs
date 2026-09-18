@@ -246,6 +246,30 @@ impl LiveSource {
     }
 }
 
+impl LiveSource {
+    /// Starts the microphone and **only** the microphone.
+    ///
+    /// For capture that is about the Operator's own voice and nothing else —
+    /// the enrolment. A recording made to answer "what do you sound like?"
+    /// has no use for the far end, and opening a system-audio tap to throw
+    /// its samples away would mean the product taps the machine's output
+    /// during a step whose entire purpose is a person recording themselves.
+    /// Refusing at the source is a cheaper promise to keep than one made in
+    /// a comment above a filter.
+    ///
+    /// Unlike [`AudioSource::start`], a missing microphone is fatal: there is
+    /// no second leg to degrade to.
+    pub fn start_microphone_only(
+        &mut self,
+        clock: CaptureClock,
+        events: mpsc::Sender<CaptureEvent>,
+    ) -> Result<()> {
+        let name = self.start_microphone(clock, events)?;
+        self.description = format!("live ({name}, microphone only)");
+        Ok(())
+    }
+}
+
 impl AudioSource for LiveSource {
     fn start(&mut self, clock: CaptureClock, events: mpsc::Sender<CaptureEvent>) -> Result<()> {
         // Both legs are attempted, and neither can veto the other: a failure

@@ -26,7 +26,11 @@ const englishOnMac: Partial<Record<MessageKey, string>> = {
   "backend.warning.cancel": "Keep Summary Local",
   "backend.key.save": "Save Key",
   "backend.key.clear": "Forget Key",
+  "onboarding.enrol.record": "Record My Voice",
+  "onboarding.enrol.again": "Record It Again",
   "registry.sample.play": "Play Voice",
+  "registry.enrol": "Enrol My Voice",
+  "registry.reenrol": "Record It Again",
   "registry.rename": "Name This Voice",
   "registry.rerun.stop": "Stop the Update",
 };
@@ -146,6 +150,29 @@ const en = {
   "onboarding.calendar.granted": "Calendar access granted. Scheduled meetings will arm and name their Meeting.",
   "onboarding.calendar.withheld":
     "Not granted. To allow it later: System Settings › Privacy & Security › Calendars.",
+  "onboarding.enrol.title": "Your own voice (optional)",
+  "onboarding.enrol.body":
+    "Say something for about half a minute and EverTranscript will know which voice in a meeting is yours. Without this it works it out from the recording, which is usually right and is quietly wrong when somebody else is in the room with you — their words then carry your name.",
+  "onboarding.enrol.privacy":
+    "The recording is kept on this machine, in your History folder, and is used for one thing: to recognize you again after a voice-model update. Delete your Voiceprint in Voices to remove it.",
+  "onboarding.enrol.skipCost":
+    "Skip: your voice is worked out from your meetings, as it is today.",
+  "onboarding.enrol.prompt":
+    "Talk normally — read this paragraph aloud if nothing comes to mind. Pauses are fine; it is forty seconds of wall clock, not of talking.",
+  "onboarding.enrol.record": "Record my voice",
+  "onboarding.enrol.again": "Record it again",
+  "onboarding.enrol.recording": "Listening — keep talking…",
+  "onboarding.enrol.accepted": "Done. EverTranscript knows your voice.",
+  "onboarding.enrol.done": "Your voice is enrolled.",
+  "onboarding.enrol.refusal.silent":
+    "Nothing arrived from the microphone. On macOS a refused microphone looks exactly like this: System Settings › Privacy & Security › Microphone.",
+  "onboarding.enrol.refusal.tooLittleSpeech":
+    "Not enough speech to go on. Try again and keep talking through it.",
+  "onboarding.enrol.refusal.moreThanOneVoice":
+    "More than one voice in that recording. Somewhere quieter, or ask them to hold on — a second voice folded into yours would be permanent.",
+  "onboarding.enrol.refusal.nothingEmbeddable":
+    "That recording could not be turned into a voice profile. Try again.",
+  "onboarding.enrol.refusal.couldNotRecord": "The microphone could not be started.",
   "posture.title": "What it knows",
   "posture.open": "What it knows",
   "posture.holds": "What it holds",
@@ -229,6 +256,14 @@ const en = {
     "No Voiceprint — cleared when the voice model changed. This voice is recognized again the next time it is heard.",
   "registry.voiceprint.confirmed": "Voiceprint · confirmed by you",
   "registry.voiceprint.unconfirmed": "Voiceprint · unconfirmed",
+  "registry.enrol": "Enrol my voice",
+  "registry.reenrol": "Record it again",
+  "registry.enrol.hint":
+    "Record half a minute of yourself and EverTranscript stops working out which voice is yours. It replaces what it learned from your meetings, and survives a voice-model update.",
+  "registry.enrol.recording": "Listening — keep talking…",
+  "registry.voiceprint.enrolled": "Voiceprint · recorded by you",
+  "registry.voiceprint.enrolled.stale":
+    "Voiceprint · your recording is here, and is rebuilt the next time the Core starts",
   "registry.rename": "Name this voice",
   "registry.rename.hint":
     "Naming relabels every past appearance, and confirms the Voiceprint for future matching.",
@@ -413,6 +448,26 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "onboarding.calendar.asking": "等待你的回答…",
     "onboarding.calendar.granted": "已授权访问日历。日程中的会议将提前准备并命名对应的会议记录。",
     "onboarding.calendar.withheld": "未授权。以后可在 系统设置 › 隐私与安全性 › 日历 中允许。",
+    "onboarding.enrol.title": "你自己的声音（可选）",
+    "onboarding.enrol.body":
+      "说上半分钟左右的话，EverTranscript 就能知道会议里哪个声音是你的。不做这一步，它会从录音中推断——通常是对的，但当房间里还有其他人时会悄悄弄错：那个人说的话会挂上你的名字。",
+    "onboarding.enrol.privacy":
+      "这段录音保存在这台设备上的 History 文件夹里，只用于一件事：在语音模型更新后重新认出你。在“声音”里删除你的声纹即可将其移除。",
+    "onboarding.enrol.skipCost": "跳过后：仍像现在这样，从你的会议中推断你的声音。",
+    "onboarding.enrol.prompt":
+      "正常说话即可——想不出说什么就把这段念出来。中间停顿没关系；这是四十秒的实际时长，不是四十秒的说话时间。",
+    "onboarding.enrol.record": "录下我的声音",
+    "onboarding.enrol.again": "重新录一次",
+    "onboarding.enrol.recording": "正在听——请继续说……",
+    "onboarding.enrol.accepted": "完成。EverTranscript 已认得你的声音。",
+    "onboarding.enrol.done": "你的声音已登记。",
+    "onboarding.enrol.refusal.silent":
+      "麦克风没有传来任何声音。在 macOS 上，被拒绝的麦克风正是这个样子：系统设置 › 隐私与安全性 › 麦克风。",
+    "onboarding.enrol.refusal.tooLittleSpeech": "语音太少，无法据此判断。请再试一次，并持续说话。",
+    "onboarding.enrol.refusal.moreThanOneVoice":
+      "这段录音里不止一个人的声音。请换个安静的地方，或请对方稍等——把第二个声音混进你的身份里是不可逆的。",
+    "onboarding.enrol.refusal.nothingEmbeddable": "这段录音无法生成声纹。请再试一次。",
+    "onboarding.enrol.refusal.couldNotRecord": "麦克风无法启动。",
     "posture.title": "它知道什么",
     "posture.open": "它知道什么",
     "posture.holds": "它保存了什么",
@@ -493,6 +548,13 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
       "无声纹——语音模型更换时已清除。下次听到这个声音时会重新识别。",
     "registry.voiceprint.confirmed": "声纹 · 已由你确认",
     "registry.voiceprint.unconfirmed": "声纹 · 未确认",
+    "registry.enrol": "登记我的声音",
+    "registry.reenrol": "重新录一次",
+    "registry.enrol.hint":
+      "录下半分钟你自己的声音，EverTranscript 就不必再推断哪个声音是你的。它会取代从会议中学到的内容，并在语音模型更新后依然有效。",
+    "registry.enrol.recording": "正在听——请继续说……",
+    "registry.voiceprint.enrolled": "声纹 · 由你亲自录制",
+    "registry.voiceprint.enrolled.stale": "声纹 · 你的录音仍在，将在下次启动 Core 时重建",
     "registry.rename": "为这个声音命名",
     "registry.rename.hint": "命名会重新标注该讲话人过去的全部记录，并确认其声纹以用于后续匹配。",
     "registry.join.held": "在这里已经是一位讲话人，出现于",

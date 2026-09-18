@@ -62,6 +62,12 @@ You can see every voice profile it holds, and delete any of them, in the Voice \
 Registry. Deleting one stops recognition and changes nothing about what was \
 said.
 
+If you enrol your own voice during setup, that recording of you is kept on \
+this machine alongside the profiles — a few seconds of your actual speech, \
+not only a fingerprint of it — so you can be recognised again after a voice \
+model is updated. It is optional, it can be skipped, and deleting your voice \
+profile removes it.
+
 ## Auto-Record is ON
 
 Once set up, EverTranscript starts recording by itself when a meeting app is \
@@ -126,6 +132,10 @@ EverTranscript 不会替你征求任何人的同意，不会在会议中自报�
 
 你可以在「声音档案」中查看它保存的全部声音特征并逐条删除。删除只会停止识别，\
 不会改变任何已记录的内容。
+
+如果你在设置过程中登记了自己的声音，那段录音会与这些特征一并保存在本机——那是你\
+实际说话的几十秒音频，而不只是它的数学特征——以便在语音模型更新后重新认出你。\
+这一步是可选的，可以跳过，删除你的声音特征也会一并删除这段录音。
 
 ## 自动录制默认开启
 
@@ -253,6 +263,25 @@ mod tests {
         // still has.
         assert!(BRIEFING_EN.contains("does not ask anyone for consent"));
         assert!(BRIEFING_EN.contains("yours to do"));
+    }
+
+    #[test]
+    fn both_briefings_disclose_the_kept_enrolment_recording() {
+        // ADR-0011 folds voice-profiling disclosure into the Briefing, and
+        // the enrolment adds a fact none of that copy covered: audio of the
+        // Operator, kept indefinitely, on purpose. A fingerprint of a voice
+        // and a recording of one are different things to agree to, and the
+        // paragraph above this one only ever described the first.
+        assert!(
+            BRIEFING_EN.contains("that recording of you is kept on this machine"),
+            "the enrolment keeps audio, and the Briefing has to say so"
+        );
+        assert!(
+            BRIEFING_EN.contains("It is optional, it can be skipped"),
+            "and that nothing is lost by refusing it"
+        );
+        assert!(BRIEFING_ZH.contains("那段录音会与这些特征一并保存在本机"));
+        assert!(BRIEFING_ZH.contains("这一步是可选的，可以跳过"));
     }
 
     #[test]

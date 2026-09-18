@@ -527,6 +527,151 @@ pub fn add_exemplar(connection: &Connection, exemplar: NewExemplar<'_>) -> Resul
     Ok(id)
 }
 
+/// One stretch of an enrolment clip, embedded.
+///
+/// The coordinates are into the clip itself rather than a Meeting, which is
+/// the whole difference between this and every other exemplar: there is no
+/// recording of a conversation behind it, only the recording the Operator
+/// made of themselves.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnrolmentSpan {
+    pub vector: Vec<f32>,
+    pub voiced_ms: i64,
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+/// A voice the Operator gave on purpose, and where the clip of it lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Enrolment {
+    pub speaker_id: String,
+    /// Relative to the History directory, like `meetings.audio_path`.
+    pub audio_path: String,
+    pub duration_ms: i64,
+    pub recorded_at: String,
+}
+
+/// The enrolment a Speaker has, if any.
+pub fn enrolment(connection: &Connection, speaker_id: &str) -> Result<Option<Enrolment>> {
+    Ok(connection
+        .query_row(
+            "SELECT speaker_id, audio_path, duration_ms, recorded_at \
+               FROM speaker_enrolments WHERE speaker_id = ?1",
+            params![speaker_id],
+            |row| {
+                Ok(Enrolment {
+                    speaker_id: row.get(0)?,
+                    audio_path: row.get(1)?,
+                    duration_ms: row.get(2)?,
+                    recorded_at: row.get(3)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
+/// Whether this Speaker's Voiceprint stands on an act rather than on
+/// inference, in the given embedding space.
+///
+/// Both halves are required and neither is sufficient. The row says a clip
+/// was recorded; the exemplars say something in *this* space was built from
+/// it, and after [`crate::store::schema`]'s model-change wipe there is a row
+/// with nothing behind it until the clip has been re-embedded. Answering
+/// from the row alone would let `identify` take a rule-0 decision with no
+/// vector to decide with.
+pub fn is_enrolled(
+    connection: &Connection,
+    speaker_id: &str,
+    model: &str,
+    model_version: &str,
+) -> Result<bool> {
+    if enrolment(connection, speaker_id)?.is_none() {
+        return Ok(false);
+    }
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM speaker_exemplars \
+          WHERE speaker_id = ?1 AND meeting_id IS NULL AND source = 'operator' \
+            AND is_negative = 0 AND model = ?2 AND model_version = ?3",
+        params![speaker_id, model, model_version],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Records an enrolment, replacing whatever the machine had inferred.
+///
+/// **The positives go and the negatives stay.** The positives are the
+/// system's own guesses about which voice owns the microphone, and the
+/// enrolment is the answer they were guessing at — keeping them would leave
+/// a wrong voice inside the identity, diluted rather than removed, which is
+/// the failure this whole surface exists to end. The negatives are
+/// different in kind: each one is the Operator saying "that was not me"
+/// about a specific segment, and ADR-0009 keeps the Operator's corrections
+/// whatever else changes. [`crate::diarize::cluster::centroid`] filters
+/// them out anyway, so they cost the enrolment nothing and still stop the
+/// same wrong match recurring.
+///
+/// **Not [`delete_voiceprint`]**, which would also set `forgotten` — the
+/// mark that means *the Operator deliberately forgot this voice* and which
+/// [`relearnable`] reads to exclude a Speaker from every future re-run.
+/// Enrolling is the opposite act.
+///
+/// Sets `confirmed`, extending ADR-0008's "naming is confirmation": putting
+/// your own voice on the record on purpose is a stronger statement than
+/// putting a name to somebody else's.
+///
+/// Leaves `transcript_segments` alone. This changes who will be recognized,
+/// not who was — repairing the attribution already written is a re-run, and
+/// a separate decision.
+pub fn enrol(
+    connection: &Connection,
+    speaker_id: &str,
+    spans: &[EnrolmentSpan],
+    model: &str,
+    model_version: &str,
+    audio_path: &str,
+    duration_ms: i64,
+) -> Result<()> {
+    connection.execute(
+        "DELETE FROM speaker_exemplars WHERE speaker_id = ?1 AND is_negative = 0",
+        params![speaker_id],
+    )?;
+    for span in spans {
+        add_exemplar(
+            connection,
+            NewExemplar {
+                speaker_id,
+                meeting_id: None,
+                vector: &span.vector,
+                model,
+                model_version,
+                voiced_ms: span.voiced_ms,
+                from_operator: true,
+                is_negative: false,
+                sample: Some(Sample {
+                    channel: AudioChannel::Mic,
+                    start_ms: span.start_ms,
+                    end_ms: span.end_ms,
+                }),
+            },
+        )?;
+    }
+    connection.execute(
+        "INSERT INTO speaker_enrolments (speaker_id, audio_path, duration_ms, recorded_at) \
+         VALUES (?1, ?2, ?3, ?4) \
+         ON CONFLICT(speaker_id) DO UPDATE SET \
+            audio_path = excluded.audio_path, \
+            duration_ms = excluded.duration_ms, \
+            recorded_at = excluded.recorded_at",
+        params![speaker_id, audio_path, duration_ms, now_rfc3339()],
+    )?;
+    connection.execute(
+        "UPDATE speakers SET confirmed = 1 WHERE id = ?1",
+        params![speaker_id],
+    )?;
+    Ok(())
+}
+
 /// The anonymous Speakers a Meeting's previous Diarization run taught
 /// History about — the ones whose evidence from it a re-run withdraws.
 pub fn anonymous_speakers_heard_in(
@@ -699,6 +844,45 @@ pub fn sample_source(connection: &Connection, speaker_id: &str) -> Result<Option
         .optional()?;
     Ok(found
         .and_then(|(meeting_id, sample)| sample.map(|sample| SampleSource { meeting_id, sample })))
+}
+
+/// Where the Operator's enrolment can be played from, if they have one.
+///
+/// The clip's path, and a window into it. The window is the first enrolment
+/// exemplar's, so the Registry plays the stretch the identity was actually
+/// taken from — and falls back to the head of the recording when there is no
+/// exemplar to ask. That fallback is not a nicety: it is the whole of the
+/// window after a voice-model change, where the wipe has taken the exemplars
+/// and the recording is still sitting there. A Registry that answered "there
+/// is nothing to play" then would be telling the Operator their enrolment was
+/// gone, which is exactly the thing it survives.
+pub fn enrolment_sample(
+    connection: &Connection,
+    speaker_id: &str,
+) -> Result<Option<(String, Sample)>> {
+    let Some(enrolment) = enrolment(connection, speaker_id)? else {
+        return Ok(None);
+    };
+    let window = connection
+        .query_row(
+            "SELECT sample_channel, sample_start_ms, sample_end_ms \
+               FROM speaker_exemplars \
+              WHERE speaker_id = ?1 AND meeting_id IS NULL AND source = 'operator' \
+                AND is_negative = 0 AND sample_channel IS NOT NULL \
+              ORDER BY id LIMIT 1",
+            params![speaker_id],
+            |row| sample_from_row(row, 0),
+        )
+        .optional()?
+        .flatten()
+        .unwrap_or(Sample {
+            channel: AudioChannel::Mic,
+            start_ms: 0,
+            // Bounded: the Registry plays a voice to be recognized, not
+            // the whole half minute somebody sat through recording.
+            end_ms: enrolment.duration_ms.min(8_000),
+        });
+    Ok(Some((enrolment.audio_path, window)))
 }
 
 /// Re-assigns a segment to a different Speaker (story 29b).
@@ -1272,6 +1456,166 @@ mod tests {
         assert!(
             stale.iter().all(|exemplar| exemplar.source.is_some()),
             "every one can be rebuilt"
+        );
+    }
+
+    #[test]
+    fn enrolling_replaces_what_was_learned_and_keeps_what_was_corrected() {
+        // The "replace" half of the enrolment decision, and its one
+        // deliberate exception. Exemplars learned from Meetings go: the
+        // enrolment *is* the identity, and joining it to inferences would
+        // leave whatever the inference was wrong about inside it. Negatives
+        // stay, because a negative is the Operator saying "that was not me"
+        // — an act like this one, protected by ADR-0009, and already kept
+        // out of the centroid.
+        use evertranscript_protocol::AudioChannel;
+        let connection = db();
+        let meeting = meetings::start(&connection, None, None).expect("meeting");
+        let operator = create(&connection, true).expect("operator");
+        for is_negative in [false, true] {
+            add_exemplar(
+                &connection,
+                NewExemplar {
+                    speaker_id: &operator.id,
+                    meeting_id: Some(&meeting.id),
+                    vector: &[1.0, 0.0],
+                    model: "m",
+                    model_version: "1",
+                    voiced_ms: 4_000,
+                    from_operator: false,
+                    is_negative,
+                    sample: None,
+                },
+            )
+            .expect("exemplar");
+        }
+
+        enrol(
+            &connection,
+            &operator.id,
+            &[EnrolmentSpan {
+                vector: vec![0.0, 1.0],
+                voiced_ms: 3_000,
+                start_ms: 0,
+                end_ms: 3_000,
+            }],
+            "m",
+            "1",
+            ".data/audio/enrolment.mp3",
+            30_000,
+        )
+        .expect("enrol");
+
+        let rows = exemplars(&connection, &operator.id).expect("rows");
+        assert_eq!(rows.len(), 2, "the enrolment and the correction");
+        let positives: Vec<_> = rows.iter().filter(|row| !row.is_negative).collect();
+        assert_eq!(positives.len(), 1, "the learned positive is gone");
+        assert_eq!(positives[0].vector, vec![0.0, 1.0]);
+        assert_eq!(
+            positives[0].sample,
+            Some(Sample {
+                channel: AudioChannel::Mic,
+                start_ms: 0,
+                end_ms: 3_000,
+            })
+        );
+        assert!(
+            rows.iter().any(|row| row.is_negative),
+            "the correction stays"
+        );
+
+        let row = get(&connection, &operator.id).expect("get").expect("there");
+        assert!(
+            row.confirmed,
+            "enrolling is a stronger confirmation than naming"
+        );
+        assert!(
+            !row.forgotten,
+            "replacing is not forgetting; a forgotten Speaker is never relearned"
+        );
+    }
+
+    #[test]
+    fn an_enrolment_is_not_the_identity_until_it_is_in_this_models_space() {
+        // The window after a voice-model change. `MODEL_CHANGE_WIPE` takes
+        // every exemplar and cannot reach the recording, so the row outlives
+        // the vectors it stands for. Rule 0 must not fire in that window: it
+        // outranks every other rule, and it would be deciding with nothing.
+        let connection = db();
+        let operator = create(&connection, true).expect("operator");
+        enrol(
+            &connection,
+            &operator.id,
+            &[EnrolmentSpan {
+                vector: vec![0.0, 1.0],
+                voiced_ms: 3_000,
+                start_ms: 0,
+                end_ms: 3_000,
+            }],
+            "m",
+            "1",
+            ".data/audio/enrolment.mp3",
+            30_000,
+        )
+        .expect("enrol");
+        assert!(is_enrolled(&connection, &operator.id, "m", "1").expect("enrolled"));
+        assert!(
+            !is_enrolled(&connection, &operator.id, "m", "2").expect("other space"),
+            "a vector from another model says nothing about this one"
+        );
+
+        connection
+            .execute("DELETE FROM speaker_exemplars", [])
+            .expect("the wipe");
+        assert!(
+            enrolment(&connection, &operator.id).expect("row").is_some(),
+            "the recording survives the wipe, which is the whole point of keeping it"
+        );
+        assert!(
+            !is_enrolled(&connection, &operator.id, "m", "1").expect("after the wipe"),
+            "a row with nothing behind it is not an identity"
+        );
+    }
+
+    #[test]
+    fn the_enrolment_plays_back_even_after_a_model_change() {
+        // The Registry is half of what ADR-0008 traded for storing
+        // Voiceprints at all. An Operator who opens it during the window
+        // above must not be told their enrolment is gone.
+        let connection = db();
+        let operator = create(&connection, true).expect("operator");
+        enrol(
+            &connection,
+            &operator.id,
+            &[EnrolmentSpan {
+                vector: vec![0.0, 1.0],
+                voiced_ms: 3_000,
+                start_ms: 1_200,
+                end_ms: 4_200,
+            }],
+            "m",
+            "1",
+            ".data/audio/enrolment.mp3",
+            30_000,
+        )
+        .expect("enrol");
+
+        let (path, window) = enrolment_sample(&connection, &operator.id)
+            .expect("query")
+            .expect("something to play");
+        assert_eq!(path, ".data/audio/enrolment.mp3");
+        assert_eq!((window.start_ms, window.end_ms), (1_200, 4_200));
+
+        connection
+            .execute("DELETE FROM speaker_exemplars", [])
+            .expect("the wipe");
+        let (_, fallback) = enrolment_sample(&connection, &operator.id)
+            .expect("query")
+            .expect("still something to play");
+        assert_eq!(
+            (fallback.start_ms, fallback.end_ms),
+            (0, 8_000),
+            "the head of the recording, bounded"
         );
     }
 

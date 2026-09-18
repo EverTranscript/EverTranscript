@@ -15,6 +15,7 @@ import {
   useAudioCheck,
   useCalendarAccess,
   useCore,
+  useEnrolment,
   useMeetingWriting,
   useRegistry,
   useSettings,
@@ -921,6 +922,15 @@ function RegistryPanel({
     stopping,
     stopRerun,
   } = useRegistry();
+  // Read here rather than folded into `useRegistry`: it is one row's fact,
+  // and the Registry already refetches its list when a Speaker changes.
+  const {
+    enrolment,
+    result: enrolResult,
+    recording: enrolling,
+    error: enrolError,
+    enrol,
+  } = useEnrolment();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
@@ -995,10 +1005,22 @@ function RegistryPanel({
       // distinction the Operator cannot act on. Saying this much is the
       // point of the Registry; saying more would not be.
       if (speaker.forgotten) return t("registry.voiceprint.forgotten");
+      // The window after a voice-model change, for an Operator who enrolled:
+      // the vectors are gone with everyone else's and the recording they made
+      // is not, so the Core mints it again on its next start. "Cleared" would
+      // be true of the vector and false about what the Operator owns.
+      if (speaker.isOperator && enrolment && !enrolment.active) {
+        return t("registry.voiceprint.enrolled.stale");
+      }
       return speaker.voiceprintModel
         ? t("registry.voiceprint.cleared")
         : t("registry.voiceprint.none");
     }
+    // "Confirmed by you" is true of a name as well, and an enrolment is a
+    // different and stronger thing: the Operator recorded this one on
+    // purpose, and it is what decides every Meeting rather than one input
+    // among several.
+    if (speaker.isOperator && enrolment) return t("registry.voiceprint.enrolled");
     return speaker.confirmed
       ? t("registry.voiceprint.confirmed")
       : t("registry.voiceprint.unconfirmed");
@@ -1186,6 +1208,26 @@ function RegistryPanel({
                       : t("registry.sample.play")}
                   </button>
                 ) : null}
+                {/* Only the Operator's row. Everybody else is identified by
+                    being named in a transcript, which is the Operator's
+                    judgement about somebody else's voice; this is the one
+                    identity that can be stated rather than judged, and only
+                    the person at the keyboard can state it. */}
+                {speaker.isOperator ? (
+                  <button
+                    type="button"
+                    disabled={enrolling}
+                    onClick={() => enrol()}
+                    className="push"
+                    data-testid="registry-enrol"
+                  >
+                    {enrolling
+                      ? t("registry.enrol.recording")
+                      : enrolment
+                        ? t("registry.reenrol")
+                        : t("registry.enrol")}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => {
@@ -1207,6 +1249,23 @@ function RegistryPanel({
                 ) : null}
               </div>
             </div>
+
+            {speaker.isOperator && (enrolling || enrolResult || enrolError) ? (
+              <div className="mt-2" data-testid="registry-enrol-result">
+                {enrolling ? (
+                  <p className="text-xs text-ink-muted">{t("registry.enrol.hint")}</p>
+                ) : null}
+                {enrolResult && !enrolResult.accepted && enrolResult.refusal ? (
+                  <p className="text-sm text-recording">
+                    {t(`onboarding.enrol.refusal.${enrolResult.refusal}`)}
+                    {enrolResult.detail ? ` ${enrolResult.detail}` : ""}
+                  </p>
+                ) : null}
+                {enrolError ? (
+                  <p className="text-sm text-recording">{enrolError}</p>
+                ) : null}
+              </div>
+            ) : null}
 
             {playingId === speaker.id ? (
               <div className="mt-2" data-testid="registry-sample">
@@ -1770,6 +1829,10 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
     "briefing",
     "permissions",
     "models",
+    // After the models, not straight after the Briefing: enrolling runs both
+    // of them over what it records, and a step that can only fail until a
+    // download finishes is a step that teaches the Operator to skip.
+    "enrol",
     "folder",
     "backend",
     "calendar",
@@ -1831,6 +1894,17 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
               {t("onboarding.models.body")}
             </p>
             <ModelDownload />
+          </section>
+        ) : null}
+
+        {current === "enrol" ? (
+          <section>
+            <h2 className="text-sm font-medium">{t("onboarding.enrol.title")}</h2>
+            <p className="mt-2 text-sm text-ink-muted">{t("onboarding.enrol.body")}</p>
+            <EnrolPanel />
+            <p className="mt-2 text-xs text-ink-muted">
+              {t("onboarding.enrol.skipCost")}
+            </p>
           </section>
         ) : null}
 
@@ -1912,6 +1986,66 @@ function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
  * past a truthful "no" would be worse than the silence it replaces. The
  * verdict is information, not a gate.
  */
+/**
+ * Saying who you are, rather than being guessed at.
+ *
+ * This is the only control in the product that *creates* an identity. Every
+ * other thing the Registry offers corrects one the Core inferred, and
+ * inference has a failure nothing in the audio can catch: a second person in
+ * the room, whose words then carry the Operator's name in a record that is
+ * immutable by design.
+ *
+ * Never blocking, and offered rather than urged. An Operator who skips is
+ * exactly where the product was before this existed.
+ *
+ * A refusal is drawn where the button is, in its own words per reason: they
+ * lead somewhere different — System Settings, a quieter room, or simply
+ * talking for longer — and one sentence covering all three would send most
+ * people to the wrong place.
+ */
+function EnrolPanel(): React.ReactElement {
+  const { enrolment, result, recording, error, enrol } = useEnrolment();
+
+  return (
+    <div className="mt-3">
+      <p className="text-xs text-ink-muted">{t("onboarding.enrol.privacy")}</p>
+      {recording ? (
+        <p className="mt-3 text-sm" data-testid="enrol-recording">
+          {t("onboarding.enrol.recording")}
+        </p>
+      ) : (
+        <p className="mt-3 text-xs text-ink-muted">{t("onboarding.enrol.prompt")}</p>
+      )}
+      <button
+        type="button"
+        disabled={recording}
+        onClick={() => enrol()}
+        className="push mt-2"
+        data-testid="enrol-record"
+      >
+        {enrolment
+          ? t("onboarding.enrol.again")
+          : t("onboarding.enrol.record")}
+      </button>
+      {result?.accepted ? (
+        <p className="mt-2 text-xs text-ink-muted" data-testid="enrol-accepted">
+          {t("onboarding.enrol.accepted")}
+        </p>
+      ) : null}
+      {result && !result.accepted && result.refusal ? (
+        <p className="mt-2 text-sm text-recording" data-testid="enrol-refused">
+          {t(`onboarding.enrol.refusal.${result.refusal}`)}
+          {result.detail ? ` ${result.detail}` : ""}
+        </p>
+      ) : null}
+      {error ? <p className="mt-2 text-sm text-recording">{error}</p> : null}
+      {enrolment && !result ? (
+        <p className="mt-2 text-xs text-ink-muted">{t("onboarding.enrol.done")}</p>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * The one button that makes the Calendars prompt appear (ADR-0036).
  *

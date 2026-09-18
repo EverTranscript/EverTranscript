@@ -9,9 +9,18 @@
 //! across the table says, and does it silently — the transcript looks
 //! perfectly plausible, it is just wrong about who was talking.
 //!
-//! So the channel narrows the field and never decides it. Three rules do,
+//! So the channel narrows the field and never decides it. Four rules do,
 //! in this order (ADR-0029 as amended):
 //!
+//! 0. **Enrolment.** The Operator recorded themselves and said so, and that
+//!    recording matched a voice here. Every rule below it is a guess about
+//!    who owns the laptop, made from a recording nobody confirmed; this one
+//!    is a person's own account of their own voice, and it is the only
+//!    evidence in this file that did not have to be inferred. **When an
+//!    enrolment exists, it is the whole of the answer** — a miss means the
+//!    Operator did not speak here, and the rules below do not get a turn.
+//!    Falling through to them would re-admit exactly the guess the
+//!    enrolment was recorded to replace.
 //! 1. **Isolated mic.** The far end could not have reached the microphone —
 //!    headphones were the only playing output and the microphone was never
 //!    swapped — so every mic-channel voice is the Operator, confirmed
@@ -33,6 +42,15 @@
 //! Dominance comes before the match because it needs no Voiceprint and
 //! cannot be misled by one: a Meeting the Operator plainly dominates is the
 //! Operator's, whatever History believes about a voice that sounds similar.
+//!
+//! **Rule 0 is not gated, and rule 3 is.** The gate exists because rule 3's
+//! evidence is inferred: thirty seconds and one voice is a monologue, where
+//! a match says nothing dominance does not already say better. Under rule 0
+//! dominance never runs, so the gate would not be withholding a weaker
+//! answer in favour of a stronger one — it would be refusing the only
+//! answer there is, and a short solo Meeting would come back with no
+//! Operator in it. The gate is about how far an inference may be trusted,
+//! and an enrolment is not an inference.
 //!
 //! **There is only ever one.** Migration 14 makes a second flagged row a
 //! constraint violation, and [`crate::store::speakers::set_operator`] moves
@@ -99,6 +117,11 @@ pub struct MeetingFacts {
 /// who spoke most, or from a match made on evidence out of History.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Identified {
+    /// Rule 0. The voice the Operator enrolled is in this Meeting. The only
+    /// outcome here resting on an act rather than on a reading of the
+    /// recording, and so the only one that cannot be wrong about a
+    /// colleague: somebody else's voice does not match the clip.
+    Enrolled(Cluster),
     /// Rule 1. Nothing but the room reached the microphone and exactly one
     /// voice was on it, so that voice is the Operator, confirmed without any
     /// act. A second voice on an isolated microphone is a person in the
@@ -121,9 +144,9 @@ impl Identified {
     pub fn clusters(&self) -> &[Cluster] {
         match self {
             Identified::IsolatedMic(clusters) => clusters,
-            Identified::Dominant(cluster) | Identified::Recognized(cluster) => {
-                std::slice::from_ref(cluster)
-            }
+            Identified::Enrolled(cluster)
+            | Identified::Dominant(cluster)
+            | Identified::Recognized(cluster) => std::slice::from_ref(cluster),
             Identified::Nobody => &[],
         }
     }
@@ -144,19 +167,48 @@ pub fn match_gate_met(diarization: &Diarization) -> bool {
     speech >= MIN_DIARIZED_MS && diarization.clusters().len() >= MIN_SPEAKERS_FOR_MATCH
 }
 
-/// Which clusters are the Operator, by the three rules in order.
+/// How the Operator's Voiceprint came to exist.
 ///
-/// `known` is the Operator's existing Voiceprint, and the caller must have
-/// already withheld it when [`match_gate_met`] is false: passing it here in
-/// a Meeting under the gate would let rule 3 fire on evidence the rule says
-/// is inadmissible, and — worse — it would mean the general resolve had
-/// carried that Voiceprint among all its seeds and matched on it anyway,
-/// which is what would make the gate decorative.
+/// Two vectors of the same shape that mean entirely different things, which
+/// is why this is a type and not a `bool` beside the seed. A caller holding
+/// `Option<&SeedVoice>` and a flag can pass the flag of one and the vector
+/// of the other; this cannot be assembled wrongly.
+#[derive(Debug, Clone, Copy)]
+pub enum OperatorPrint<'a> {
+    /// From an act: the Operator recorded themselves. Rule 0 — decides
+    /// outright, ungated, and nothing below it runs.
+    Enrolled(&'a SeedVoice),
+    /// From the record, by inference over past Meetings. Rule 3's evidence,
+    /// and only where [`match_gate_met`] holds — the caller withholds it
+    /// otherwise, because the general resolve would match on it anyway and
+    /// leave the gate decorative.
+    Learned(Option<&'a SeedVoice>),
+}
+
+/// Which clusters are the Operator, by the four rules in order.
+///
+/// `print` decides which rules run at all: an [`OperatorPrint::Enrolled`]
+/// answers on its own, and only [`OperatorPrint::Learned`] reaches the three
+/// rules that read the recording. See the module documentation for why a
+/// miss under rule 0 is [`Identified::Nobody`] rather than a fall-through.
 pub fn identify(
     diarization: &Diarization,
-    known: Option<&SeedVoice>,
+    print: OperatorPrint<'_>,
     facts: &MeetingFacts,
 ) -> Identified {
+    // 0. The Operator's own recording of their own voice. Not gated, not
+    //    ordered behind the channel, and not followed by anything: the
+    //    rules below exist to guess at what this one was told.
+    let known = match print {
+        OperatorPrint::Enrolled(enrolled) => {
+            return match matching_mic_cluster(diarization, enrolled) {
+                Some(cluster) => Identified::Enrolled(cluster),
+                None => Identified::Nobody,
+            };
+        }
+        OperatorPrint::Learned(known) => known,
+    };
+
     // 1. The microphone heard the room and nothing else, and one voice was
     //    on it. There is no inference to make and nothing for a threshold to
     //    get wrong.
@@ -191,24 +243,35 @@ pub fn identify(
 
     // 3. A Voiceprint matched. Last because it is the only rule whose
     //    evidence comes from outside this recording.
-    if let Some(known) = known {
-        let mic_clusters: BTreeMap<Cluster, Embedding> = diarization
-            .embeddings
-            .iter()
-            .filter(|(cluster, _)| speaks_on_mic(diarization, **cluster))
-            .map(|(cluster, embedding)| (*cluster, embedding.clone()))
-            .collect();
-        let matched = resolve(&mic_clusters, std::slice::from_ref(known));
-        let found = matched.into_iter().find_map(|(cluster, outcome)| {
-            matches!(outcome, Resolved::Existing(ref id) if *id == known.speaker_id)
-                .then_some(cluster)
-        });
-        if let Some(cluster) = found {
-            return Identified::Recognized(cluster);
-        }
+    if let Some(known) = known
+        && let Some(cluster) = matching_mic_cluster(diarization, known)
+    {
+        return Identified::Recognized(cluster);
     }
 
     Identified::Nobody
+}
+
+/// The mic-channel cluster this seed matches, where one does.
+///
+/// Shared by rules 0 and 3, which differ in what the seed *means* and not at
+/// all in how it is compared: the same `resolve`, at the same threshold,
+/// against the same candidates. Two copies would be two places for the
+/// threshold to drift, and a rule-0 match that scored differently from a
+/// rule-3 match would be very hard to explain to anyone.
+fn matching_mic_cluster(diarization: &Diarization, seed: &SeedVoice) -> Option<Cluster> {
+    let mic_clusters: BTreeMap<Cluster, Embedding> = diarization
+        .embeddings
+        .iter()
+        .filter(|(cluster, _)| speaks_on_mic(diarization, **cluster))
+        .map(|(cluster, embedding)| (*cluster, embedding.clone()))
+        .collect();
+    resolve(&mic_clusters, std::slice::from_ref(seed))
+        .into_iter()
+        .find_map(|(cluster, outcome)| {
+            matches!(outcome, Resolved::Existing(ref id) if *id == seed.speaker_id)
+                .then_some(cluster)
+        })
 }
 
 /// The voice that held the mic channel, where one did.
@@ -268,36 +331,135 @@ pub fn ensure_operator_speaker(connection: &rusqlite::Connection) -> anyhow::Res
     Ok(crate::store::speakers::create(connection, true)?.id)
 }
 
+/// The Operator's Voiceprint and what kind of evidence it is.
+///
+/// The owned form of [`OperatorPrint`], which borrows. A caller reads this
+/// once, holds it, and asks it for the borrowed view — and for what to
+/// withhold from the general resolve, because those two answers have to
+/// agree and used to be computed separately at the call site.
+#[derive(Debug, Clone)]
+pub enum OperatorEvidence {
+    /// The Operator enrolled, and the clip has been embedded in this space.
+    Enrolled(SeedVoice),
+    /// Whatever inference has built, if anything.
+    Learned(Option<SeedVoice>),
+}
+
+impl OperatorEvidence {
+    /// The borrowed view [`identify`] takes, given whether this Meeting
+    /// clears [`match_gate_met`].
+    ///
+    /// The gate reaches only the learned half: see the module documentation
+    /// for why an enrolment is not something a gate about inference applies
+    /// to.
+    pub fn print(&self, gate: bool) -> OperatorPrint<'_> {
+        match self {
+            Self::Enrolled(seed) => OperatorPrint::Enrolled(seed),
+            Self::Learned(known) => {
+                OperatorPrint::Learned(gate.then_some(known.as_ref()).flatten())
+            }
+        }
+    }
+
+    /// The Speaker to keep out of the general resolve, where one must be.
+    ///
+    /// Withholding is the other half of the gate: below it the Operator's
+    /// Voiceprint is kept out of the *whole* resolve, or the general pass
+    /// carries it among every other seed and matches on it anyway, which
+    /// would leave the gate looking like a rule and behaving like a
+    /// comment. An enrolment is never withheld — there is no gate above it
+    /// to enforce.
+    pub fn withheld(&self, gate: bool) -> Option<&str> {
+        match self {
+            Self::Enrolled(_) => None,
+            Self::Learned(known) => (!gate)
+                .then_some(known.as_ref())
+                .flatten()
+                .map(|seed| seed.speaker_id.as_str()),
+        }
+    }
+}
+
 /// The Operator's Voiceprint, for seeding — in the given embedding space,
 /// since one from another space would match nothing, or worse, something.
 ///
-/// Returns `None` when the Operator's Voiceprint was made by a different
-/// embedding, which is the same answer as having none: [`identify`] then has
-/// only rules 1 and 2, and the channel decides. That is the correct
-/// behaviour after a model change and the reason this takes a model at all
+/// Reports [`OperatorEvidence::Learned(None)`](OperatorEvidence::Learned)
+/// when the Operator's Voiceprint was made by a different embedding, which
+/// is the same answer as having none: [`identify`] then has only rules 1 and
+/// 2, and the channel decides. That is the correct behaviour after a model
+/// change and the reason this takes a model at all.
+///
+/// An enrolment is only `Enrolled` once its clip has been embedded in *this*
+/// space, which is what [`crate::store::speakers::is_enrolled`] checks. A
+/// model change leaves the row standing with nothing behind it until the
+/// re-embed runs, and answering `Enrolled` in that window would take a
+/// rule-0 decision with no vector to decide with.
 pub fn known_operator(
     connection: &rusqlite::Connection,
     model: &str,
     model_version: &str,
-) -> anyhow::Result<Option<SeedVoice>> {
+) -> anyhow::Result<OperatorEvidence> {
     let Some(speaker) = crate::store::speakers::operator(connection)? else {
-        return Ok(None);
+        return Ok(OperatorEvidence::Learned(None));
     };
     if !speaker.has_voiceprint {
-        return Ok(None);
+        return Ok(OperatorEvidence::Learned(None));
     }
-    Ok(
-        crate::store::speakers::voiceprints(connection, model, model_version)?
-            .into_iter()
-            .find(|(id, _, _)| *id == speaker.id)
-            .map(|(speaker_id, vector, confirmed)| SeedVoice {
-                speaker_id,
-                vector,
-                confirmed,
-                model: model.to_string(),
-                model_version: model_version.to_string(),
-            }),
-    )
+    let seed = crate::store::speakers::voiceprints(connection, model, model_version)?
+        .into_iter()
+        .find(|(id, _, _)| *id == speaker.id)
+        .map(|(speaker_id, vector, confirmed)| SeedVoice {
+            speaker_id,
+            vector,
+            confirmed,
+            model: model.to_string(),
+            model_version: model_version.to_string(),
+        });
+    match seed {
+        Some(seed)
+            if crate::store::speakers::is_enrolled(
+                connection,
+                &speaker.id,
+                model,
+                model_version,
+            )? =>
+        {
+            Ok(OperatorEvidence::Enrolled(seed))
+        }
+        other => Ok(OperatorEvidence::Learned(other)),
+    }
+}
+
+/// Records the Operator's enrolment and rebuilds their Voiceprint from it.
+///
+/// The orchestration rather than the storage: [`crate::store::speakers::enrol`]
+/// writes the rows, and the recomputation that turns them into a Voiceprint
+/// lives in [`super::cluster`], so the one call that has to do both belongs
+/// here beside the rules that read the result.
+///
+/// Returns the Operator's Speaker id, minting the row if this History has
+/// never had one — enrolling is exactly the moment a History with no
+/// Operator acquires one.
+pub fn enrol(
+    connection: &rusqlite::Connection,
+    spans: &[crate::store::speakers::EnrolmentSpan],
+    model: &str,
+    model_version: &str,
+    audio_path: &str,
+    duration_ms: i64,
+) -> anyhow::Result<String> {
+    let id = ensure_operator_speaker(connection)?;
+    crate::store::speakers::enrol(
+        connection,
+        &id,
+        spans,
+        model,
+        model_version,
+        audio_path,
+        duration_ms,
+    )?;
+    super::cluster::refresh_voiceprint(connection, &id)?;
+    Ok(id)
 }
 
 #[cfg(test)]
@@ -338,7 +500,7 @@ mod tests {
         // most Operators are in most of the time.
         let d = run(FixtureDiarizer::solo());
         assert_eq!(
-            identify(&d, None, &unsaid()),
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
             Identified::Dominant(Cluster(0))
         );
     }
@@ -351,16 +513,22 @@ mod tests {
         // it — and `clean_two_speaker`, which used to pass this test with
         // 5.8 seconds, is on the wrong side of the new floor by design.
         let d = run(FixtureDiarizer::clean_two_speaker());
-        assert_eq!(identify(&d, None, &unsaid()), Identified::Nobody);
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
+            Identified::Nobody
+        );
 
         let d = diarization(vec![Turn::new(AudioChannel::Mic, 0, 10_000, 0)]);
-        assert_eq!(identify(&d, None, &unsaid()), Identified::Nobody);
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
+            Identified::Nobody
+        );
 
         // And the floor is a floor, not a ban: the same recording, long
         // enough, does enroll.
         let d = diarization(vec![Turn::new(AudioChannel::Mic, 0, MIN_OPERATOR_MS, 0)]);
         assert_eq!(
-            identify(&d, None, &unsaid()),
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
             Identified::Dominant(Cluster(0))
         );
     }
@@ -377,7 +545,7 @@ mod tests {
             mic_isolated: Some(true),
         };
         assert_eq!(
-            identify(&d, None, &facts),
+            identify(&d, OperatorPrint::Learned(None), &facts),
             Identified::IsolatedMic(vec![Cluster(0)]),
             "5.8 seconds is under the dominance floor and rule 1 does not care"
         );
@@ -396,7 +564,7 @@ mod tests {
             mic_isolated: Some(true),
         };
         assert_eq!(
-            identify(&d, None, &facts),
+            identify(&d, OperatorPrint::Learned(None), &facts),
             Identified::Nobody,
             "6.5s against 7.3s clears neither the dominance floor nor the margin, \
              so rule 2 refuses the colleague rather than guessing between them"
@@ -415,7 +583,10 @@ mod tests {
                 1,
             ),
         ]);
-        assert_eq!(identify(&d, None, &facts), Identified::Dominant(Cluster(0)));
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(None), &facts),
+            Identified::Dominant(Cluster(0))
+        );
     }
 
     #[test]
@@ -427,7 +598,7 @@ mod tests {
         assert_eq!(
             identify(
                 &d,
-                None,
+                OperatorPrint::Learned(None),
                 &MeetingFacts {
                     mic_isolated: Some(true)
                 }
@@ -445,7 +616,7 @@ mod tests {
         // still reads perfectly plausibly.
         let d = run(FixtureDiarizer::shared_room());
         assert_eq!(
-            identify(&d, None, &unsaid()),
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
             Identified::Nobody,
             "unidentified is the honest answer here"
         );
@@ -493,8 +664,125 @@ mod tests {
             model_version: "1".into(),
         };
         assert_eq!(
-            identify(&d, Some(&known), &unsaid()),
+            identify(&d, OperatorPrint::Learned(Some(&known)), &unsaid()),
             Identified::Recognized(Cluster(0))
+        );
+    }
+
+    /// One voice with an embedding on the mic channel, and a `SeedVoice`
+    /// that either matches it or does not. Enough to exercise rule 0, which
+    /// asks one question of one vector.
+    fn one_mic_voice(vector: Vec<f32>) -> Diarization {
+        let mut d = diarization(vec![Turn::new(AudioChannel::Mic, 0, 4_000, 0)]);
+        d.embeddings
+            .insert(Cluster(0), Embedding::new(vector, "fixture", "1", 4_000));
+        d
+    }
+
+    fn seed_of(vector: Vec<f32>) -> SeedVoice {
+        SeedVoice {
+            speaker_id: "you".into(),
+            vector,
+            confirmed: true,
+            model: "fixture".into(),
+            model_version: "1".into(),
+        }
+    }
+
+    /// The whole point of rule 0: a Meeting the Operator does not dominate,
+    /// where the channel would have named somebody else or nobody, and the
+    /// enrolment names the right voice regardless.
+    #[test]
+    fn an_enrolment_names_its_voice_where_the_channel_would_not() {
+        let mut d = one_mic_voice(vec![1.0, 0.0]);
+        // A second, louder voice on the same microphone — the shared-room
+        // case rule 1 refuses and rule 2 cannot resolve.
+        d.turns.push(Turn::new(AudioChannel::Mic, 4_000, 60_000, 1));
+        d.embeddings.insert(
+            Cluster(1),
+            Embedding::new(vec![0.0, 1.0], "fixture", "1", 56_000),
+        );
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
+            Identified::Dominant(Cluster(1)),
+            "without an enrolment the loud voice takes the name"
+        );
+
+        let enrolled = seed_of(vec![1.0, 0.0]);
+        assert_eq!(
+            identify(&d, OperatorPrint::Enrolled(&enrolled), &unsaid()),
+            Identified::Enrolled(Cluster(0)),
+            "the enrolment names the voice that recorded it, not the loud one"
+        );
+    }
+
+    /// A miss is `Nobody`, and specifically not a fall-through.
+    ///
+    /// The fall-through is the tempting version and the wrong one: the rules
+    /// below rule 0 are the guess the enrolment was recorded to replace, so
+    /// reaching them on a miss would put the guess back in exactly the
+    /// Meetings where the trusted answer said no. Asserted against a
+    /// diarization dominance *would* resolve, so a regression shows up as a
+    /// name rather than as nothing.
+    #[test]
+    fn an_enrolment_that_matches_nothing_does_not_fall_through() {
+        let d = one_mic_voice(vec![0.0, 1.0]);
+        let mut d = d;
+        d.turns.clear();
+        d.turns
+            .push(Turn::new(AudioChannel::Mic, 0, MIN_OPERATOR_MS + 5_000, 0));
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
+            Identified::Dominant(Cluster(0)),
+            "dominance would name this voice"
+        );
+
+        let elsewhere = seed_of(vec![1.0, 0.0]);
+        assert_eq!(
+            identify(&d, OperatorPrint::Enrolled(&elsewhere), &unsaid()),
+            Identified::Nobody,
+            "the Operator did not speak here, and the channel does not get a vote"
+        );
+    }
+
+    /// Rule 3 is withheld below [`match_gate_met`]; rule 0 is not. A solo
+    /// Meeting shorter than the gate is the case that would otherwise come
+    /// back with no Operator in it at all.
+    #[test]
+    fn an_enrolment_decides_in_a_meeting_too_small_for_rule_three() {
+        let d = one_mic_voice(vec![1.0, 0.0]);
+        assert!(
+            !match_gate_met(&d),
+            "four seconds and one voice is under the gate"
+        );
+
+        let enrolled = seed_of(vec![1.0, 0.0]);
+        assert_eq!(
+            identify(&d, OperatorPrint::Enrolled(&enrolled), &unsaid()),
+            Identified::Enrolled(Cluster(0))
+        );
+    }
+
+    /// Rule 1's fact is still true and no longer sufficient. An isolated
+    /// microphone says the far end could not reach it; it does not say the
+    /// one voice on it is the person who enrolled.
+    #[test]
+    fn an_enrolment_outranks_an_isolated_microphone() {
+        let d = one_mic_voice(vec![0.0, 1.0]);
+        let facts = MeetingFacts {
+            mic_isolated: Some(true),
+        };
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(None), &facts),
+            Identified::IsolatedMic(vec![Cluster(0)]),
+            "rule 1 takes it when there is no enrolment"
+        );
+
+        let elsewhere = seed_of(vec![1.0, 0.0]);
+        assert_eq!(
+            identify(&d, OperatorPrint::Enrolled(&elsewhere), &facts),
+            Identified::Nobody,
+            "a colleague alone in the room on an isolated mic is not the Operator"
         );
     }
 
@@ -551,7 +839,10 @@ mod tests {
             match_gate_met(&d),
             "the match is admissible; the voice is not"
         );
-        assert_eq!(identify(&d, Some(&known), &unsaid()), Identified::Nobody);
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(Some(&known)), &unsaid()),
+            Identified::Nobody
+        );
     }
 
     #[test]
@@ -559,7 +850,10 @@ mod tests {
         // A meeting the Operator only listened to. Real, and it must not
         // produce a division by zero or a fabricated "You".
         let d = diarization(vec![Turn::new(AudioChannel::System, 0, 10_000, 0)]);
-        assert_eq!(identify(&d, None, &unsaid()), Identified::Nobody);
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
+            Identified::Nobody
+        );
     }
 
     #[test]
@@ -574,7 +868,10 @@ mod tests {
             Turn::new(AudioChannel::Mic, 32_000, 39_000, 2),
             Turn::new(AudioChannel::Mic, 39_000, 46_000, 3),
         ]);
-        assert_eq!(identify(&d, None, &unsaid()), Identified::Nobody);
+        assert_eq!(
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
+            Identified::Nobody
+        );
     }
 
     #[test]
@@ -593,7 +890,7 @@ mod tests {
             Turn::new(AudioChannel::System, 25_000, 45_000, 2),
         ]);
         assert_eq!(
-            identify(&d, None, &unsaid()),
+            identify(&d, OperatorPrint::Learned(None), &unsaid()),
             Identified::Nobody,
             "a phantom room-mate must not be quietly folded into You"
         );
@@ -676,37 +973,119 @@ mod tests {
         );
     }
 
+    /// The learned seed, asserting the evidence is learned rather than
+    /// enrolled. Every case below is inference, and a test that accepted
+    /// either kind would not notice rule 0 firing where it should not.
+    fn learned(evidence: &OperatorEvidence) -> Option<&SeedVoice> {
+        match evidence {
+            OperatorEvidence::Learned(seed) => seed.as_ref(),
+            OperatorEvidence::Enrolled(_) => panic!("expected learned evidence, not an enrolment"),
+        }
+    }
+
     #[test]
     fn the_operator_is_not_offered_as_a_seed_until_they_have_a_voiceprint() {
         let mut connection = rusqlite::Connection::open_in_memory().expect("open");
         crate::store::schema::migrate(&mut connection).expect("migrate");
-        assert!(
-            known_operator(&connection, "m", "1")
-                .expect("none yet")
-                .is_none()
-        );
+        assert!(learned(&known_operator(&connection, "m", "1").expect("none yet")).is_none());
 
         let id = ensure_operator_speaker(&connection).expect("create");
-        assert!(
-            known_operator(&connection, "m", "1")
-                .expect("still none")
-                .is_none()
-        );
+        assert!(learned(&known_operator(&connection, "m", "1").expect("still none")).is_none());
 
         crate::store::speakers::set_voiceprint(&connection, &id, &[1.0, 0.0], "m", "1")
             .expect("voiceprint");
         assert_eq!(
-            known_operator(&connection, "m", "1")
-                .expect("now")
-                .map(|seed| seed.speaker_id),
+            learned(&known_operator(&connection, "m", "1").expect("now"))
+                .map(|seed| seed.speaker_id.clone()),
             Some(id.clone())
         );
         // A Voiceprint from another front end is not the Operator's voice
         // as this model hears it.
+        assert!(learned(&known_operator(&connection, "m", "2").expect("other space")).is_none());
+    }
+
+    /// A Voiceprint alone is inference; an enrolment is an act. The
+    /// difference decides which rules run at all, so it is read from the
+    /// record rather than assumed from the presence of a vector.
+    #[test]
+    fn an_enrolment_is_told_apart_from_a_voiceprint_inference_built() {
+        let mut connection = rusqlite::Connection::open_in_memory().expect("open");
+        crate::store::schema::migrate(&mut connection).expect("migrate");
+        let id = ensure_operator_speaker(&connection).expect("create");
+        crate::store::speakers::set_voiceprint(&connection, &id, &[1.0, 0.0], "m", "1")
+            .expect("voiceprint");
         assert!(
-            known_operator(&connection, "m", "2")
-                .expect("other space")
-                .is_none()
+            matches!(
+                known_operator(&connection, "m", "1").expect("learned"),
+                OperatorEvidence::Learned(Some(_))
+            ),
+            "a Voiceprint with no enrolment behind it is inference"
+        );
+
+        enrol(
+            &connection,
+            &[crate::store::speakers::EnrolmentSpan {
+                vector: vec![1.0, 0.0],
+                voiced_ms: 25_000,
+                start_ms: 0,
+                end_ms: 25_000,
+            }],
+            "m",
+            "1",
+            "audio/enrolment-you.mp3",
+            25_000,
+        )
+        .expect("enrol");
+        assert!(matches!(
+            known_operator(&connection, "m", "1").expect("enrolled"),
+            OperatorEvidence::Enrolled(_)
+        ));
+
+        // The model-change window: the wipe takes every vector and leaves
+        // the enrolment row standing. Until the clip is re-embedded there is
+        // nothing for rule 0 to decide with, and claiming otherwise would
+        // name the Operator from an empty hand.
+        assert!(
+            matches!(
+                known_operator(&connection, "m", "2").expect("other space"),
+                OperatorEvidence::Learned(None)
+            ),
+            "an enrolment in another space is not evidence in this one"
+        );
+    }
+
+    /// The gate is about how far an inference may be trusted, so it reaches
+    /// the learned half and not the enrolled one — in both directions, since
+    /// withholding and the rule have to agree about the same Meeting.
+    #[test]
+    fn the_match_gate_reaches_inference_and_not_an_enrolment() {
+        let seed = SeedVoice {
+            speaker_id: "you".to_string(),
+            vector: vec![1.0, 0.0],
+            confirmed: true,
+            model: "m".to_string(),
+            model_version: "1".to_string(),
+        };
+
+        let learned = OperatorEvidence::Learned(Some(seed.clone()));
+        assert!(matches!(
+            learned.print(true),
+            OperatorPrint::Learned(Some(_))
+        ));
+        assert!(matches!(learned.print(false), OperatorPrint::Learned(None)));
+        assert_eq!(learned.withheld(false), Some("you"));
+        assert_eq!(learned.withheld(true), None);
+
+        let enrolled = OperatorEvidence::Enrolled(seed);
+        assert!(matches!(enrolled.print(true), OperatorPrint::Enrolled(_)));
+        assert!(
+            matches!(enrolled.print(false), OperatorPrint::Enrolled(_)),
+            "an enrolment decides in a Meeting too small for rule 3"
+        );
+        assert_eq!(
+            enrolled.withheld(false),
+            None,
+            "there is no gate above an enrolment to enforce by withholding"
         );
     }
 }

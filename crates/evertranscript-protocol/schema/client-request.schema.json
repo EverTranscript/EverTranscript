@@ -565,6 +565,40 @@
       ]
     },
     {
+      "description": "Records the Operator saying something, and makes it their identity.\n\nThe one place in this product where a voice is identified by an act\nrather than inferred from a recording nobody confirmed. Everything\nelse about a Speaker is a guess the Operator may correct afterwards;\nthis is a statement, and `diarize::operator` rule 0 treats it as one.\n\nLong-running: the Core records for `seconds`, then runs both models\nover what it heard. It records rather than the Client for the same\nreason `audio/check` does — a grant belongs to the process that asks,\nand the Core is the process that captures Meetings.\n\n**Replaces.** An Operator who enrols again replaces what was there,\nincluding exemplars learned from Meetings; their corrections marking\na voice as *not* theirs are kept, because those are acts too.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "speaker/enrol"
+        },
+        "params": {
+          "$ref": "#/$defs/SpeakerEnrolParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Whether the Operator has enrolled, and when. What first-run reads to\nknow whether to offer the step, and the Registry to label the row.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "speaker/enrolment"
+        },
+        "params": {
+          "$ref": "#/$defs/SpeakerEnrolmentParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
       "description": "Re-assigns a segment to a different Speaker (story 29b). Appends a\nhint; the machine's attribution is preserved beneath it.",
       "type": "object",
       "properties": {
@@ -987,6 +1021,23 @@
           ]
         }
       }
+    },
+    "SpeakerEnrolParams": {
+      "type": "object",
+      "properties": {
+        "seconds": {
+          "description": "How long to listen. Longer is better evidence and worse to sit\nthrough; the Core clamps whatever arrives.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "SpeakerEnrolmentParams": {
+      "type": "object"
     },
     "SpeakerGetParams": {
       "type": "object",
