@@ -24,15 +24,16 @@
 use evertranscript_protocol::AudioChannel;
 
 use super::Cancel;
+use super::Diarization;
 use super::DiarizeError;
 use super::Diarizer;
 use super::MeetingAudio;
 use super::Turn;
 use super::fbank::SAMPLE_RATE;
-use super::live::LiveDiarizer;
 use super::live::MAX_SPAN_MS;
 use super::live::MIN_SPAN_MS;
 use super::operator::MIN_OPERATOR_MS;
+use super::runner::Embed;
 use crate::store::speakers::EnrolmentSpan;
 
 /// Why a recording was not accepted as an enrolment.
@@ -85,19 +86,22 @@ pub enum Outcome {
     Refused(Refused),
 }
 
-/// Reads an enrolment recording and either accepts it or says why not.
+/// Runs the segmenter over an enrolment recording.
 ///
-/// `mic` is the clip at [`SAMPLE_RATE`], as `super::runner::decode` returns
-/// it — the same decode a Meeting goes through, so an enrolment re-read from
-/// disk months later is judged by the same arithmetic as one just recorded.
+/// Split from [`analyse`] because the two models are reached through one
+/// `&mut`: `LiveDiarizer` owns its embedder, so a caller cannot hold the
+/// diarizer and hand out an embed closure at the same time. Sequencing them
+/// is what the Meeting path already does (`runner::rebuild` then
+/// `Diarizer::diarize`, server.rs), and it is also what lets a test drive
+/// this half from `super::fixture::FixtureDiarizer`.
 ///
 /// The far end is passed as silence rather than as nothing. There is no far
 /// end in an enrolment, and silence is what that looks like to every model
 /// downstream; an empty slice would be a second, untested shape of input for
 /// no gain.
-pub fn analyse(mic: &[f32], diarizer: &mut LiveDiarizer) -> Result<Outcome, DiarizeError> {
+pub fn listen(mic: &[f32], diarizer: &mut dyn Diarizer) -> Result<Diarization, DiarizeError> {
     let silence = vec![0.0_f32; mic.len()];
-    let diarization = diarizer.diarize(
+    diarizer.diarize(
         MeetingAudio {
             mic,
             system: &silence,
@@ -105,8 +109,25 @@ pub fn analyse(mic: &[f32], diarizer: &mut LiveDiarizer) -> Result<Outcome, Diar
         },
         &mut |_| {},
         &Cancel::new(),
-    )?;
+    )
+}
 
+/// Judges what [`listen`] heard, and either accepts it or says why not.
+///
+/// `mic` is the clip at [`SAMPLE_RATE`], as `super::runner::decode` returns
+/// it — the same decode a Meeting goes through, so an enrolment re-read from
+/// disk months later is judged by the same arithmetic as one just recorded.
+///
+/// `embed` is a closure rather than the diarizer's own embedder because the
+/// embedder that matters is the one the *caller* is about to write vectors
+/// with, which after a model change is not the one that produced the last
+/// ones. `runner::rebuild` and `super::reseed::embed_ranges` take the same
+/// shape for the same reason.
+pub fn analyse(
+    mic: &[f32],
+    diarization: &Diarization,
+    embed: &mut Embed<'_>,
+) -> Result<Outcome, DiarizeError> {
     let voiced_ms: u64 = diarization.turns.iter().map(Turn::duration_ms).sum();
     let voices = diarization.clusters().len();
     if let Some(refused) = refuse(mic, voiced_ms, voices) {
@@ -125,7 +146,7 @@ pub fn analyse(mic: &[f32], diarizer: &mut LiveDiarizer) -> Result<Outcome, Diar
         if to <= from {
             continue;
         }
-        if let Some(vector) = diarizer.embedder().embed(&mic[from..to])? {
+        if let Some(vector) = embed(&mic[from..to])? {
             spans.push(EnrolmentSpan {
                 vector,
                 voiced_ms: (end_ms - start_ms) as i64,
@@ -180,6 +201,96 @@ fn samples_at(millis: u64, len: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diarize::fixture::FixtureDiarizer;
+
+    /// Ten seconds of something, at the rate the models run at.
+    ///
+    /// Non-zero because [`refuse`] reads all-zero as a refused microphone,
+    /// and the fixture diarizer answers from its script rather than from
+    /// what is in the buffer — so the content only has to be *not silence*.
+    fn audible(seconds: usize) -> Vec<f32> {
+        vec![0.5_f32; seconds * SAMPLE_RATE as usize]
+    }
+
+    /// An embedder that returns a fixed vector and records what it was
+    /// shown, so a test can assert on the spans the model was actually
+    /// handed. The pattern `super::reseed`'s tests already use.
+    fn embedder(
+        seen: &mut Vec<usize>,
+    ) -> impl FnMut(&[f32]) -> Result<Option<Vec<f32>>, DiarizeError> + '_ {
+        move |samples| {
+            seen.push(samples.len());
+            Ok(Some(vec![1.0, samples.len() as f32]))
+        }
+    }
+
+    #[test]
+    fn one_voice_is_accepted_with_the_spans_the_diarizer_cut() {
+        // Ten seconds of buffer against a fifty-minute script: every turn
+        // past the first falls off the end of the audio, which is the case
+        // `samples_at`'s clamp exists for. One span comes back, and it is
+        // the first turn clipped to what the embedder takes.
+        let mic = audible(10);
+        let mut diarizer = FixtureDiarizer::solo();
+        let heard = listen(&mic, &mut diarizer).expect("listen");
+
+        let mut seen = Vec::new();
+        let outcome = analyse(&mic, &heard, &mut embedder(&mut seen)).expect("analyse");
+
+        let Outcome::Accepted(accepted) = outcome else {
+            panic!("expected an acceptance, got {outcome:?}");
+        };
+        assert_eq!(accepted.spans.len(), 1);
+        assert_eq!(accepted.spans[0].start_ms, 0);
+        assert_eq!(accepted.spans[0].end_ms, MAX_SPAN_MS as i64);
+        assert_eq!(accepted.spans[0].voiced_ms, MAX_SPAN_MS as i64);
+        assert_eq!(seen, vec![mic.len()], "the model saw the span, whole");
+
+        // Voiced time, not wall clock: the number that meets
+        // `MIN_OPERATOR_MS` is the sum of the diarizer's turns.
+        assert_eq!(
+            accepted.voiced_ms,
+            heard.turns.iter().map(Turn::duration_ms).sum::<u64>()
+        );
+        assert!(accepted.voiced_ms >= MIN_OPERATOR_MS);
+    }
+
+    #[test]
+    fn a_colleague_in_the_room_is_refused_out_of_the_diarization_itself() {
+        // The case this whole feature exists for, reached the way the
+        // product reaches it — a real run over a shared-room timeline,
+        // counting the clusters that came back, rather than a count handed
+        // to `refuse` by the test.
+        let mic = audible(20);
+        let mut diarizer = FixtureDiarizer::shared_room();
+        let heard = listen(&mic, &mut diarizer).expect("listen");
+
+        let mut seen = Vec::new();
+        assert_eq!(
+            analyse(&mic, &heard, &mut embedder(&mut seen)).expect("analyse"),
+            Outcome::Refused(Refused::MoreThanOneVoice { voices: 3 })
+        );
+        assert!(
+            seen.is_empty(),
+            "a refused recording is never embedded: the refusal comes first"
+        );
+    }
+
+    #[test]
+    fn one_voice_the_model_cannot_embed_is_refused_rather_than_enrolled_empty() {
+        // `Ok(None)` is what the real embedder returns for a span it has too
+        // little of. Every span answering that way leaves nothing to be an
+        // identity, and writing that would enrol the Operator as a Speaker
+        // with no vectors — recognized by rule 0 against nothing at all.
+        let mic = audible(10);
+        let mut diarizer = FixtureDiarizer::solo();
+        let heard = listen(&mic, &mut diarizer).expect("listen");
+
+        assert_eq!(
+            analyse(&mic, &heard, &mut |_| Ok(None)).expect("analyse"),
+            Outcome::Refused(Refused::NothingEmbeddable)
+        );
+    }
 
     #[test]
     fn a_refused_microphone_reads_as_silence_rather_than_as_a_short_recording() {

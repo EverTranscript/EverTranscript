@@ -1727,7 +1727,11 @@ impl Core {
             anyhow::bail!("the diarization models are not downloaded yet");
         }
 
-        let recorded = match audio::enrol::record(seconds).await {
+        // The same seam a Meeting is captured through, so an enrolment is
+        // not the one recording in the product that only a microphone can
+        // reach.
+        let source = (self.source_factory.lock().await)();
+        let recorded = match audio::enrol::record(source, seconds).await {
             Ok(recorded) => recorded,
             Err(error) => {
                 return Ok(refused(
@@ -1747,10 +1751,11 @@ impl Core {
             );
             let mut diarizer = crate::diarize::live::LiveDiarizer::load(&segmentation, &embedding)
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
-            Ok((
-                crate::diarize::enrol::analyse(&mic, &mut diarizer)?,
-                recorded.samples,
-            ))
+            let heard = crate::diarize::enrol::listen(&mic, &mut diarizer)?;
+            let outcome = crate::diarize::enrol::analyse(&mic, &heard, &mut |samples| {
+                diarizer.embedder().embed(samples)
+            })?;
+            Ok((outcome, recorded.samples))
         })
         .await??;
         let (accepted, samples) = match outcome {
@@ -2777,7 +2782,12 @@ impl Core {
             let decoded = crate::diarize::runner::decode(&audio_path)?;
             let mut diarizer = crate::diarize::live::LiveDiarizer::load(&segmentation, &embedding)
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
-            Ok(crate::diarize::enrol::analyse(&decoded.mic, &mut diarizer)?)
+            let heard = crate::diarize::enrol::listen(&decoded.mic, &mut diarizer)?;
+            Ok(crate::diarize::enrol::analyse(
+                &decoded.mic,
+                &heard,
+                &mut |samples| diarizer.embedder().embed(samples),
+            )?)
         })
         .await;
         let accepted = match analysed {

@@ -205,6 +205,13 @@ async fn a_meeting_records_even_when_capture_cannot_start() {
         ) -> anyhow::Result<()> {
             anyhow::bail!("no audio hardware here")
         }
+        fn start_microphone_only(
+            &mut self,
+            _clock: evertranscript_core::audio::CaptureClock,
+            _events: mpsc::Sender<evertranscript_core::audio::CaptureEvent>,
+        ) -> anyhow::Result<()> {
+            anyhow::bail!("no audio hardware here")
+        }
         fn stop(&mut self) {}
         fn describe(&self) -> String {
             "broken".to_string()

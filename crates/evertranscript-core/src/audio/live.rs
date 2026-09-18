@@ -246,7 +246,7 @@ impl LiveSource {
     }
 }
 
-impl LiveSource {
+impl AudioSource for LiveSource {
     /// Starts the microphone and **only** the microphone.
     ///
     /// For capture that is about the Operator's own voice and nothing else —
@@ -259,7 +259,7 @@ impl LiveSource {
     ///
     /// Unlike [`AudioSource::start`], a missing microphone is fatal: there is
     /// no second leg to degrade to.
-    pub fn start_microphone_only(
+    fn start_microphone_only(
         &mut self,
         clock: CaptureClock,
         events: mpsc::Sender<CaptureEvent>,
@@ -268,9 +268,7 @@ impl LiveSource {
         self.description = format!("live ({name}, microphone only)");
         Ok(())
     }
-}
 
-impl AudioSource for LiveSource {
     fn start(&mut self, clock: CaptureClock, events: mpsc::Sender<CaptureEvent>) -> Result<()> {
         // Both legs are attempted, and neither can veto the other: a failure
         // below records that leg as unavailable and keeps going.

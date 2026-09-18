@@ -11,7 +11,9 @@
 //!
 //! **The microphone and nothing else.** This is the one capture in the
 //! product with no far end to record, so it opens no system-audio tap —
-//! see [`super::live::LiveSource::start_microphone_only`].
+//! see [`super::AudioSource::start_microphone_only`]. Non-mic frames are
+//! dropped here as well, which is belt and braces on the live path and the
+//! whole assertion on a fixture one.
 //!
 //! What this module does *not* do is decide whether the recording is any
 //! good. Silence it can see; one voice or two is a question for the
@@ -25,7 +27,6 @@ use evertranscript_protocol::AudioChannel;
 use super::AudioSource;
 use super::CaptureClock;
 use super::CaptureEvent;
-use super::live::LiveSource;
 
 /// How long to listen when the caller does not say.
 ///
@@ -64,15 +65,19 @@ impl Recorded {
     }
 }
 
-/// Records `seconds` of the microphone.
+/// Records `seconds` of the microphone from `source`.
+///
+/// The source is passed in rather than built here, which is what makes this
+/// function reachable from a test at all: `Core` hands over the same
+/// `source_factory` a Meeting is started through, so a fixture reaches the
+/// enrolment exactly as it reaches every other capture in the product.
 ///
 /// Drains as it goes rather than reading the channel out afterwards: a
 /// half-minute of frames is close enough to the channel's capacity that
 /// "the buffer was big enough" would be a thing that quietly stopped being
 /// true the day the frame size changed.
-pub async fn record(seconds: u64) -> anyhow::Result<Recorded> {
+pub async fn record(mut source: Box<dyn AudioSource>, seconds: u64) -> anyhow::Result<Recorded> {
     let (events_tx, mut events_rx) = tokio::sync::mpsc::channel(4096);
-    let mut source = LiveSource::new();
     source.start_microphone_only(CaptureClock::start(), events_tx)?;
 
     let mut samples: Vec<f32> = Vec::new();
@@ -115,4 +120,64 @@ pub async fn record(seconds: u64) -> anyhow::Result<Recorded> {
         sample_rate: super::SAMPLE_RATE,
         peak,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio::fixture::FixtureSource;
+    use crate::audio::fixture::Step;
+
+    /// How many samples `ms` of scripted audio is worth.
+    fn samples_in(ms: u64) -> usize {
+        (super::super::SAMPLE_RATE as u64 * ms / 1000) as usize
+    }
+
+    #[tokio::test]
+    async fn the_recording_is_the_microphone_and_only_the_microphone() {
+        // The far end is louder than the near one on purpose. If a system
+        // frame ever reached the buffer the peak would be 0.9 and the
+        // sample count would be wrong — which is the failure this whole
+        // module's "microphone and nothing else" claim would take, and it
+        // would take it silently.
+        let source = FixtureSource::new(vec![
+            Step::audio(AudioChannel::Mic, 300, 0.5),
+            Step::audio(AudioChannel::System, 300, -0.9),
+            Step::audio(AudioChannel::Mic, 200, -0.25),
+        ]);
+
+        let recorded = record(Box::new(source), 1).await.expect("record");
+
+        assert_eq!(recorded.samples.len(), samples_in(500));
+        assert_eq!(recorded.sample_rate, super::super::SAMPLE_RATE);
+        assert_eq!(recorded.duration_ms(), 500);
+        assert_eq!(recorded.peak, 0.5, "the far end never reached the buffer");
+    }
+
+    #[tokio::test]
+    async fn a_microphone_that_dies_mid_recording_is_an_error_and_not_a_short_clip() {
+        // Half a recording is the dangerous outcome: it is long enough to
+        // look like an enrolment and short enough to be a worse one than
+        // the Operator agreed to. `diarize::enrol` would judge it on its
+        // merits and might well accept it, so the refusal has to happen
+        // here, where the reason is still known.
+        let source = FixtureSource::new(vec![
+            Step::audio(AudioChannel::Mic, 300, 0.5),
+            Step::fail(AudioChannel::Mic, "the device went away"),
+        ]);
+
+        // Matched rather than `expect_err`, which would want `Recorded:
+        // Debug` and so a derive that prints half a minute of samples.
+        let error = match record(Box::new(source), 1).await {
+            Ok(recorded) => panic!(
+                "a dead microphone is not a recording: {} samples",
+                recorded.samples.len()
+            ),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("the device went away"),
+            "the reason survives to the Operator: {error}"
+        );
+    }
 }

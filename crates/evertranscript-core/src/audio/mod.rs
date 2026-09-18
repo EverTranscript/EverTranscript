@@ -175,6 +175,20 @@ pub trait AudioSource: Send {
         events: tokio::sync::mpsc::Sender<CaptureEvent>,
     ) -> anyhow::Result<()>;
 
+    /// Begins producing, from the microphone and nothing else.
+    ///
+    /// Deliberately not a defaulted method. A default delegating to
+    /// [`start`](Self::start) would make every future source open a
+    /// system-audio tap during the one capture in this product that exists
+    /// to record a person alone — silently, by inheriting a convenience.
+    /// The two implementors answer it differently on purpose and a third
+    /// should have to say which it means.
+    fn start_microphone_only(
+        &mut self,
+        clock: CaptureClock,
+        events: tokio::sync::mpsc::Sender<CaptureEvent>,
+    ) -> anyhow::Result<()>;
+
     /// Stops producing. Must be safe to call more than once.
     fn stop(&mut self);
 

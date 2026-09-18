@@ -199,6 +199,18 @@ impl AudioSource for FixtureSource {
         Ok(())
     }
 
+    /// The same script, because a fixture's legs are whatever the script
+    /// says they are. A test that wants to prove the enrolment ignores the
+    /// far end puts a `System` step in the script and asserts it was not
+    /// recorded — which it could not do if this filtered the steps here.
+    fn start_microphone_only(
+        &mut self,
+        clock: CaptureClock,
+        events: mpsc::Sender<CaptureEvent>,
+    ) -> Result<()> {
+        self.start(clock, events)
+    }
+
     fn stop(&mut self) {
         if let Some(handle) = self.handle.take() {
             handle.abort();
