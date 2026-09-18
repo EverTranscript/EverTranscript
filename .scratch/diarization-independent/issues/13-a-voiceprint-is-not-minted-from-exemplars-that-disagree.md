@@ -96,7 +96,61 @@ Nothing here is a default an agent should pick.
    incoherence plainer and keeps the wider band — at the cost of refusing a
    Speaker over rows the mint would never have used.
 
-## The AMI gate refused the specified measure — Q255, 2026-09-17
+## Third measure: the two-way partition test — Q256, 2026-09-17
+
+Specified in full by the user, both numbers predeclared, built, and **not
+shipped**: it clears five of the six validation criteria and fails the sixth.
+`split` / `Split::is_two_voices` / `AGREEMENT_FLOOR` / `MINORITY_SHARE` are on
+`main` as measurement surface; `refresh_voiceprint` is unchanged.
+
+Refuse when the two group centroids of the best two-way partition score under
+**0.50** *and* the minority holds at least **a quarter** of the exemplars and
+at least 2. Two-means, seeded from the least-similar pair, assigned to the
+nearer group centroid, iterated to a fixed point. Refuse, never subset — on
+the Operator's record the majority group *is* the contaminant.
+
+| criterion | result | |
+|---|---|---|
+| Operator's real 9 refused | centroids **−0.0923**, minority 4/9 | PASS |
+| six named controls mint | 0 refused | PASS |
+| synthetic 4:5 and 3:6 refused | centroids 0.0000, minorities 4 and 3 | PASS |
+| 2:7 passes by design | minority under a quarter | PASS |
+| AMI 16, strict attribution | 0 refused, both exemplar shapes | PASS |
+| AMI 16, permissive attribution | **10 refused** (reseed shape) | **FAIL** |
+
+The refused ten: FIO084 0.0422 (13/32), FEO072 0.0706 (11), MEE014 0.1136 (16),
+MEO015 0.1512 (10), MEE073 0.1636 (15), FIO087 0.1801 (12), MTD011UID 0.2352
+(15), FEO070 0.2531 (9), MEE071 0.2562 (10), FIO089 0.2888 (15).
+
+**The measure is not what failed — what it was fed is the argument.** Under
+permissive attribution the pool genuinely holds two voices: the minority groups
+have mean purity 0.629 against the reference, and 113 of their 126 exemplars
+are windows where the filed speaker held under 90% of the audio. But that does
+**not** excuse the failure, for two reasons. Both halves are impure — majority
+groups run 0.525–0.777, no cleaner — so the partition is cutting a uniformly
+mixed pool, not isolating a contaminant. And **permissive is the closer model
+of production**: `reseed::plan` cuts each range as one whole transcript segment
+(`reseed.rs:189`), no clean-runs filter, no overlap exclusion — and the reseed
+path is what every over-cap Speaker on the real History is made of. Strict
+attribution is the optimistic reading.
+
+**What the real History licenses.** All six controls mint, but three are held
+by only one of the two conditions: Jack Ahn 0.5229 (0.023 above the floor,
+saved by a minority of 2/32); `Ming Chen` 79 with a minority of 13/32 over the
+quarter (saved by centroids at 0.9650); `Ming Chen` 230 with centroids at
+**0.2865** under the floor (saved by a minority of 1/32). The conjunction is
+load-bearing, which is the design working — and also means this History
+already holds named Speakers that either condition alone would refuse.
+
+**The open question is a judgement about users, not about code:** whether
+AMI's far-field overlap rate or this History's channel-separated calls is the
+better guide to what people will record. The quarter is the accepted blind
+spot as asked — a record dominated three to one mints its dominant voice, and
+whether that voice is the *named* person is attribution's problem. On this
+History it is not theoretical: it is the only thing keeping the 230-exemplar
+`Ming Chen`'s Voiceprint.
+
+## The AMI gate refused the first measure — Q255, 2026-09-17
 
 The guard was built as specified and then **withdrawn before shipping**,
 because AMI refused it. `agreement` and `AGREEMENT_FLOOR` are on `main` as a

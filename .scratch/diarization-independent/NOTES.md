@@ -530,7 +530,19 @@ different decisions — so it cannot be merged, only read.
 
 ### The Voiceprint mint has no agreement check — ticket 13, held for user
 
-**Q255, 2026-09-17: the guard was built, failed its AMI gate, and was
+**Q256, 2026-09-17: a third measure, built and not shipped.** The user's
+two-way partition test — refuse when the best two-way split's group centroids
+score under 0.50 *and* the minority holds a quarter of the exemplars — clears
+**five of six** predeclared criteria: the Operator's 9 refused at −0.0923, all
+six named controls minting, 4:5 and 3:6 refused, 2:7 passing by design, AMI 16
+refusing 0 under strict attribution. It fails the sixth: under permissive
+attribution — which `reseed.rs` matches, since it cuts one whole transcript
+segment per exemplar — **10 of AMI's 16 real people are refused**. The open
+question is which corpus's overlap rate represents the product's users, which
+is a judgement about users rather than code. `split` is on `main` as
+measurement surface; the mint is unchanged. Distribution in the ticket file.
+
+**Q255, 2026-09-17: the first measure was built, failed its AMI gate, and was
 withdrawn before shipping.** `agreement` (mean pairwise cosine over the
 post-14 selected exemplars) and `AGREEMENT_FLOOR = 0.50` are on `main`;
 `refresh_voiceprint` does not read them and mints exactly as before. AMI's

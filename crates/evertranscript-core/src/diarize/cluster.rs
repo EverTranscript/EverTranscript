@@ -86,39 +86,53 @@ pub const MIN_SPEAKER_MS: u64 = 10_000;
 /// lets one Meeting decide a Speaker's identity alone (ticket 14, Q254).
 pub const MAX_EXEMPLARS: usize = 32;
 
-/// **Candidate, not adopted.** The threshold ticket 13's guard was to use,
-/// as mean pairwise cosine over the exemplars a Voiceprint would be minted
-/// from — predeclared by the user, and kept here with the evidence because
-/// it is still the right threshold for one of the three aggregations
-/// measured, just not the one it was specified against (Q255).
+/// How much the two halves of a Speaker's record must agree before one
+/// Voiceprint is minted from all of it, as cosine between the two group
+/// centroids of its best two-way partition.
 ///
-/// Nothing reads it. [`refresh_voiceprint`] mints regardless of agreement.
+/// A centroid of two voices is a vector that is neither, and it is not vague
+/// about it: on the real History the Operator's exemplars held their own
+/// voice and a colleague's leaking in from the far end, and the mint stamped
+/// the blend — which then matched that colleague. A wrong Voiceprint is worse
+/// than none, because none merely fails to recognize while a wrong one
+/// confidently recognizes somebody else.
 ///
-/// A centroid of two voices is a vector that is neither. It is not vague
-/// about it either: on the real History the Operator's exemplars held their
-/// own voice and a colleague's leaking in from the far end, and the mint
-/// stamped the blend — which then matched that colleague, not the Operator.
-/// A wrong Voiceprint is worse than none, because none merely fails to
-/// recognize while a wrong one confidently recognizes somebody else, so
-/// evidence that disagrees with itself mints nothing at all.
+/// **Compared between centroids, not between exemplars.** Two earlier
+/// measures were built and both failed, for the same reason: mean pairwise
+/// and minimum pairwise over raw exemplars score how hard the *audio* is at
+/// least as much as whether the evidence is one voice. AMI's sixteen
+/// reference speakers are sixteen real people, and mean pairwise put seven of
+/// them under this same 0.50 — down to 0.2081, below the contaminated
+/// Operator's 0.3190, so no threshold separated at all (Q255). Averaging each
+/// group first is what removes that term: recording noise cancels, and what
+/// is left is whether the two halves are the same person.
 ///
-/// On the real History alone the band looked clean: the contaminated
-/// Operator scored 0.3190 and the weakest legitimate named control 0.5867,
-/// putting 0.50 comfortably between them (Q254). **AMI refused that
-/// reading.** Its sixteen reference speakers are sixteen real people, and
-/// scored the same way, seven of them fall under 0.50 — down to 0.3759, or
-/// 0.2081 if windows are attributed without requiring them to be
-/// single-voice. That is *below* the contaminated case, so no threshold
-/// separates: mean pairwise over raw exemplars measures how hard the audio
-/// is at least as much as whether the evidence is one voice.
+/// **Predeclared with [`MINORITY_SHARE`] and then not adopted.** It passes
+/// on the real History — the Operator's contaminated 9 are refused at
+/// −0.0923 and all six named controls mint — and on three of four AMI
+/// combinations. It fails the fourth: with exemplars cut from whole
+/// transcript segments, as [`super::reseed`] cuts them, and windows
+/// attributed to whoever dominates them, 10 of AMI's 16 real people are
+/// refused (Q256). The far side of the band is where different people
+/// actually sit — Q245 measured at most 0.39 between two people's prints on
+/// the real History.
 ///
-/// Averaging each Meeting's exemplars before comparing them does separate,
-/// on both corpora, at this same 0.50 — AMI's weakest real person scores
-/// 0.6813 and the Operator 0.3597. Adopting that is a change of measure
-/// rather than of threshold, so it is the user's (Q255).
-///
-/// Fewer than two usable exemplars cannot disagree, and are not held to it.
+/// Nothing reads this. [`refresh_voiceprint`] mints regardless.
 pub const AGREEMENT_FLOOR: f32 = 0.50;
+
+/// The least share of a Speaker's exemplars the smaller voice must hold
+/// before a split counts as two voices rather than as noise: one quarter,
+/// and never fewer than two exemplars.
+///
+/// **This is an accepted blind spot, not an oversight.** A record dominated
+/// three to one by a single voice mints that voice, whatever the minority is.
+/// Whether the voice it mints is the *named* person is attribution's problem,
+/// not agreement's: agreement can only report that the record holds one
+/// voice, and it does. So an 8:1 or 7:2 contamination passes here by design,
+/// and the case it protects is the ordinary one — a handful of stray windows
+/// in an otherwise clean record, which must not cost a real person their
+/// Voiceprint.
+pub const MINORITY_SHARE: f32 = 0.25;
 
 /// A voice the system already knows, offered to the clusterer as a seed.
 #[derive(Debug, Clone, PartialEq)]
@@ -658,31 +672,109 @@ pub(super) fn spread_across_meetings(meetings: &[Option<&str>]) -> Vec<usize> {
     chosen
 }
 
-/// How much a Speaker's exemplars agree with one another, as mean pairwise
-/// cosine over exactly the vectors a Voiceprint would be minted from.
+/// The best two-way partition of a Speaker's exemplars, and how far apart
+/// the two halves are.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Split {
+    /// Cosine between the two group centroids: how much the halves agree.
+    pub agreement: f32,
+    /// How many exemplars the smaller group holds.
+    pub minority: usize,
+    /// How many were partitioned.
+    pub total: usize,
+}
+
+impl Split {
+    /// Whether this record holds two voices rather than one voice recorded
+    /// in two rooms.
+    ///
+    /// Both conditions, because either alone refuses real people: a pair of
+    /// far-apart centroids is what two voices look like, and a minority large
+    /// enough to be a voice rather than a few stray windows is what
+    /// distinguishes them from noise. See [`MINORITY_SHARE`] for what this
+    /// deliberately does not catch.
+    pub fn is_two_voices(&self) -> bool {
+        self.agreement < AGREEMENT_FLOOR
+            && self.minority >= 2
+            && self.minority as f32 >= self.total as f32 * MINORITY_SHARE
+    }
+}
+
+/// Partitions a Speaker's exemplars in two and reports the result, or `None`
+/// when they cannot be split — fewer than two, or every one of them nearer
+/// the same centre, which is one voice.
 ///
-/// `None` when there are fewer than two: one vector agrees with itself
-/// trivially, and a Speaker heard once has not yet said anything a guard
-/// could contradict.
+/// Two-means, seeded from the least-similar pair: if there are two voices
+/// here, the furthest-apart exemplars are the likeliest to be one from each.
+/// Each exemplar then goes to whichever group centroid it is nearer, the
+/// centroids are recomputed, and that repeats to a fixed point.
 ///
-/// Pairwise rather than to-the-centroid on purpose. Distance to the centroid
-/// is measured against a point the disagreement itself moved, so two voices
-/// in equal measure both sit a comfortable 0.7 from the blend between them
-/// and the blend looks coherent. Mean pairwise asks the exemplars about each
-/// other and has no such blind spot.
-pub fn agreement(history: &[(Vec<f32>, i64, bool)]) -> Option<f32> {
+/// The comparison at the end is between the two *centroids*, which is the
+/// whole point of partitioning first. A single exemplar is one ten-second
+/// window and carries the room with it; a centroid of a dozen averages the
+/// room out. Two halves of one voice agree once averaged even on AMI's
+/// far-field recordings, where the raw exemplars did not.
+pub fn split(history: &[(Vec<f32>, i64, bool)]) -> Option<Split> {
+    // Two-means on at most `MAX_EXEMPLARS` points settles in a handful of
+    // passes; the bound is only so that a tie cannot cycle for ever.
+    const PASSES: usize = 16;
+
     if history.len() < 2 {
         return None;
     }
-    let mut total = 0.0_f32;
-    let mut pairs = 0_u32;
+
+    let mut seed = None;
+    let mut furthest = f32::INFINITY;
     for (index, (left, _, _)) in history.iter().enumerate() {
-        for (right, _, _) in &history[index + 1..] {
-            total += cosine(left, right);
-            pairs += 1;
+        for (offset, (right, _, _)) in history[index + 1..].iter().enumerate() {
+            let apart = cosine(left, right);
+            if apart < furthest {
+                furthest = apart;
+                seed = Some((index, index + 1 + offset));
+            }
         }
     }
-    (pairs > 0).then(|| total / pairs as f32)
+    let (first, second) = seed?;
+
+    // `true` is the second group throughout.
+    let assign = |a: &[f32], b: &[f32]| -> Vec<bool> {
+        history
+            .iter()
+            .map(|(vector, _, _)| cosine(vector, b) > cosine(vector, a))
+            .collect()
+    };
+    let group = |assignment: &[bool], want: bool| -> Vec<(Vec<f32>, i64, bool)> {
+        history
+            .iter()
+            .zip(assignment)
+            .filter(|(_, side)| **side == want)
+            .map(|(exemplar, _)| exemplar.clone())
+            .collect()
+    };
+
+    let mut assignment = assign(&history[first].0, &history[second].0);
+    // Kept together, so the centroids reported and the groups counted are
+    // always the same partition even if the loop runs out before settling.
+    let mut settled = None;
+    for _ in 0..PASSES {
+        // An empty group means nothing was nearer that centre: one voice.
+        let a = centroid(&group(&assignment, false))?;
+        let b = centroid(&group(&assignment, true))?;
+        let next = assign(&a, &b);
+        let stable = next == assignment;
+        settled = Some((a, b, std::mem::replace(&mut assignment, next)));
+        if stable {
+            break;
+        }
+    }
+    let (a, b, partition) = settled?;
+
+    let second_group = partition.iter().filter(|side| **side).count();
+    Some(Split {
+        agreement: cosine(&a, &b),
+        minority: second_group.min(partition.len() - second_group),
+        total: history.len(),
+    })
 }
 
 /// The average of a Speaker's exemplars, weighted by how much voiced audio
@@ -750,12 +842,12 @@ pub fn seeds(
 /// Recomputes a Speaker's Voiceprint from the evidence it still holds, or
 /// clears it when the evidence cannot produce one.
 ///
-/// It does **not** yet ask whether that evidence agrees with itself, which
-/// is ticket 13's open defect: a centroid of two voices is a vector that is
-/// neither, and it matches whichever of them outnumbered the other.
-/// [`agreement`] is the measure for it and [`AGREEMENT_FLOOR`] the candidate
-/// threshold; neither is read here, because the measure did not survive its
-/// AMI validation and which measure ships is the user's call (Q255).
+/// It does **not** yet ask whether that evidence is one voice, which is
+/// ticket 13's open defect: a centroid of two voices is a vector that is
+/// neither. [`split`] is the measure for it — the third built for this, and
+/// the first to separate on the real History — but it did not clear its AMI
+/// gate on the exemplar shape the reseed path actually writes, so it is not
+/// read here and whether to adopt it is the user's call (Q256).
 ///
 /// The clearing is what makes a withdrawn exemplar actually withdrawn:
 /// [`seeds`] reads the column, not the rows, and a Speaker whose every
@@ -1591,131 +1683,145 @@ mod tests {
         assert_eq!(MAX_EXEMPLARS, 32);
     }
 
-    /// [`agreement`] reads the disagreement ticket 13 is about — and
-    /// `centroid` mints anyway, because the guard is not adopted (Q255).
+    /// Ticket 13's measure sees the two voices the mint still ignores.
     ///
-    /// How bad the un-guarded result is depends on the split: orthogonal
-    /// groups of size `m` and `n` leave the smaller at `m / sqrt(m² + n²)`
-    /// against the vector filed under their name. On the real History a 4/5
-    /// split left the Operator's own exemplars at min 0.5142 and the blend
-    /// matched a different participant at 0.6761 (Q247, Q248).
+    /// The refusal is not wired in: `split` reads the disagreement and
+    /// nothing acts on it, because the measure did not clear its AMI gate
+    /// (Q256).
+    ///
+    /// The two splits predeclared as refusals, 4:5 and 3:6. How bad the
+    /// un-guarded result was depended on the split: orthogonal groups of size
+    /// `m` and `n` leave the smaller at `m / sqrt(m² + n²)` against the vector
+    /// filed under their name. On the real History a 4/5 split left the
+    /// Operator's own exemplars at min 0.5142 and the blend matched a
+    /// different participant at 0.6761 (Q247, Q248).
     #[test]
-    fn the_measure_reads_disagreement_that_the_mint_still_ignores() {
-        let minority = vec![1.0_f32, 0.0, 0.0];
-        let majority = vec![0.0_f32, 1.0, 0.0];
+    fn a_record_holding_two_voices_is_seen_as_two_voices() {
+        let mine = vec![1.0_f32, 0.0, 0.0];
+        let theirs = vec![0.0_f32, 1.0, 0.0];
         assert_eq!(
-            cosine(&minority, &majority),
+            cosine(&mine, &theirs),
             0.0,
             "the premise: these are not the same voice"
         );
 
-        // The real History's split, 4/5.
-        let mixed: Vec<(Vec<f32>, i64, bool)> =
-            std::iter::repeat_n((minority.clone(), 1_000, false), 4)
-                .chain(std::iter::repeat_n((majority.clone(), 1_000, false), 5))
-                .collect();
-
-        let score = agreement(&mixed).expect("nine exemplars have pairs");
-        assert!(
-            score < AGREEMENT_FLOOR,
-            "the measure sees it: {score} is not under {AGREEMENT_FLOOR}"
-        );
-        // And the mint does not: this is the defect, still open.
-        assert!(
-            centroid(&mixed).is_some(),
-            "today a Voiceprint is minted from it regardless"
-        );
+        for (m, n) in [(4, 5), (3, 6)] {
+            let mixed: Vec<(Vec<f32>, i64, bool)> =
+                std::iter::repeat_n((mine.clone(), 1_000, false), m)
+                    .chain(std::iter::repeat_n((theirs.clone(), 1_000, false), n))
+                    .collect();
+            let found = split(&mixed).expect("nine exemplars partition");
+            assert_eq!(found.minority, m, "{m}:{n} found the smaller group");
+            assert!(
+                found.agreement < AGREEMENT_FLOOR,
+                "{m}:{n} centroids are two people apart: {}",
+                found.agreement
+            );
+            assert!(found.is_two_voices(), "{m}:{n} would be refused");
+            // `centroid` still hands back a vector — the refusal is the
+            // mint's, not the primitive's.
+            assert!(centroid(&mixed).is_some(), "the averaging is unchanged");
+        }
     }
 
     /// One voice in many rooms still mints, which is the other half of the
     /// guard being useful rather than merely safe.
+    ///
+    /// This is the case both earlier measures failed. Raw exemplars of one
+    /// person recorded in different rooms disagree with *each other* — on
+    /// AMI, down to 0.2081 mean pairwise and −0.23 at worst pair — so any
+    /// threshold over raw exemplars refuses real people. Partition first and
+    /// the two halves' centroids agree, because the room averages out.
     #[test]
-    fn one_voice_recorded_imperfectly_still_agrees_with_itself() {
-        // Deliberately sloppy: a drifting second component, so no two
-        // exemplars are identical.
-        let wobbly: Vec<(Vec<f32>, i64, bool)> = (0..9)
-            .map(|index| {
-                let drift = index as f32 / 12.0;
-                let norm = (1.0 + drift * drift).sqrt();
-                (vec![1.0 / norm, drift / norm, 0.0], 1_000, false)
-            })
-            .collect();
+    fn one_voice_recorded_in_two_rooms_is_not_two_voices() {
+        // Two clusters of one voice, each with its own room colouring, far
+        // enough apart that the partition will find them.
+        let room = |tint: f32| {
+            let norm = (1.0 + tint * tint).sqrt();
+            vec![1.0 / norm, tint / norm, 0.0]
+        };
+        let mut history: Vec<(Vec<f32>, i64, bool)> = Vec::new();
+        for index in 0..6 {
+            history.push((room(0.55 + index as f32 / 100.0), 1_000, false));
+        }
+        for index in 0..6 {
+            history.push((room(-0.55 - index as f32 / 100.0), 1_000, false));
+        }
 
-        let score = agreement(&wobbly).expect("nine exemplars have pairs");
+        // The premise: individually these do disagree — the pair a raw
+        // measure would have judged them on is well under the floor.
+        let worst = (0..history.len())
+            .flat_map(|i| (i + 1..history.len()).map(move |j| (i, j)))
+            .map(|(i, j)| cosine(&history[i].0, &history[j].0))
+            .fold(f32::INFINITY, f32::min);
         assert!(
-            score > AGREEMENT_FLOOR,
-            "one voice is not refused for being recorded twice: {score}"
+            worst < AGREEMENT_FLOOR,
+            "the premise: raw exemplars of this voice disagree, at {worst}"
         );
-        assert!(centroid(&wobbly).is_some());
+
+        let found = split(&history).expect("twelve exemplars partition");
+        assert!(
+            found.agreement > AGREEMENT_FLOOR,
+            "but the two halves' centroids agree: {}",
+            found.agreement
+        );
+        assert!(!found.is_two_voices(), "so it reads as one voice");
     }
 
-    /// A Speaker heard once is not held to the floor: one vector agrees with
-    /// itself trivially, and there is nothing for a guard to contradict.
-    #[test]
-    fn too_little_evidence_to_disagree_is_not_a_refusal() {
-        let lone = vec![(vec![1.0_f32, 0.0, 0.0], 1_000, false)];
-        assert_eq!(agreement(&lone), None, "one exemplar has no pairs");
-        assert_eq!(agreement(&[]), None, "and nothing has none either");
-    }
-
-    /// **A known limit of the chosen measure, pinned so it cannot be
-    /// forgotten** (Q255). Mean pairwise cosine catches *balanced*
-    /// contamination and misses *dominant* contamination — and the harm runs
-    /// the other way.
+    /// **The accepted blind spot, predeclared** (Q256): a record dominated
+    /// three to one counts as its dominant voice alone.
     ///
-    /// Two orthogonal voices in an `m:n` split score
-    /// `[C(m,2) + C(n,2)] / C(m+n,2)` mean pairwise, which *rises* as the
-    /// split gets more lopsided, while the minority's cosine to the blend
-    /// falls. So the guard refuses 4:5, where the minority would have kept
-    /// its name at 0.6247, and passes 1:8, where the Voiceprint filed under
-    /// the Speaker's name is essentially somebody else's voice.
-    ///
-    /// **This cannot be fixed by moving the threshold.** A 2:7 split scores
-    /// 0.6111, which is above the 0.5867 that the weakest legitimate named
-    /// Speaker on the real History scores (Q254), so any threshold high
-    /// enough to catch it refuses a real person. Closing it needs a
-    /// different measure — minimum pairwise, or a two-way split test — which
-    /// is the "keep the coherent subset" option ticket 13 holds for the user
-    /// rather than something to pick here.
+    /// 2:7 and 1:8 pass *by design*. The two centroids are as far apart as in
+    /// the refused splits — this is not a failure to see them — but a
+    /// minority under [`MINORITY_SHARE`] is treated as stray windows rather
+    /// than as a voice, because on an otherwise clean record that is what it
+    /// usually is, and refusing it would cost a real person their Voiceprint.
+    /// Whether the voice that gets minted is the *named* person is
+    /// attribution's problem, not agreement's.
     #[test]
-    fn a_dominant_contaminating_voice_slips_past_mean_pairwise() {
+    fn a_record_dominated_three_to_one_is_not_read_as_two_voices() {
         let minority = vec![1.0_f32, 0.0, 0.0];
         let majority = vec![0.0_f32, 1.0, 0.0];
-        let split = |m: usize, n: usize| -> Vec<(Vec<f32>, i64, bool)> {
-            std::iter::repeat_n((minority.clone(), 1_000, false), m)
-                .chain(std::iter::repeat_n((majority.clone(), 1_000, false), n))
-                .collect()
-        };
+        for (m, n) in [(2, 7), (1, 8)] {
+            let mixed: Vec<(Vec<f32>, i64, bool)> =
+                std::iter::repeat_n((minority.clone(), 1_000, false), m)
+                    .chain(std::iter::repeat_n((majority.clone(), 1_000, false), n))
+                    .collect();
+            let found = split(&mixed).expect("nine exemplars partition");
+            assert!(
+                found.agreement < AGREEMENT_FLOOR,
+                "{m}:{n} — the second voice is seen: {}",
+                found.agreement
+            );
+            assert!(
+                !found.is_two_voices(),
+                "{m}:{n} is not two voices anyway: {} of {} is under a quarter",
+                found.minority,
+                found.total
+            );
+        }
+    }
 
-        // The more lopsided the contamination, the higher the score.
-        let scores: Vec<f32> = [(4, 5), (3, 6), (2, 7), (1, 8)]
-            .iter()
-            .map(|(m, n)| agreement(&split(*m, *n)).expect("pairs"))
-            .collect();
-        assert!(
-            scores.windows(2).all(|pair| pair[0] < pair[1]),
-            "agreement rises as contamination becomes more dominant: {scores:?}"
+    /// A Speaker heard once cannot be split, and one voice in one room has no
+    /// second group to find.
+    #[test]
+    fn too_little_evidence_to_split_finds_no_second_voice() {
+        assert_eq!(split(&[]), None, "nothing does not partition");
+        assert_eq!(
+            split(&[(vec![1.0_f32, 0.0, 0.0], 1_000, false)]),
+            None,
+            "and one exemplar has no pair to seed from"
         );
 
-        // Only the balanced split is refused.
-        assert!(scores[0] < AGREEMENT_FLOOR, "4:5 refused: {}", scores[0]);
-        assert!(
-            scores[1..].iter().all(|score| *score >= AGREEMENT_FLOOR),
-            "and the rest are not: {scores:?}"
-        );
-
-        // Yet those are the splits where the minority loses its own name.
-        let centre = centroid(&split(1, 8)).expect("a centroid");
-        assert!(
-            cosine(&centre, &minority) < MATCH_FLOOR,
-            "1:8 leaves the minority at {} against their own Voiceprint",
-            cosine(&centre, &minority)
-        );
-        assert!(
-            cosine(&centre, &majority) > MATCH_FLOOR,
-            "which is the contaminating voice's, at {}",
-            cosine(&centre, &majority)
-        );
+        let identical: Vec<(Vec<f32>, i64, bool)> =
+            std::iter::repeat_n((vec![1.0_f32, 0.0, 0.0], 1_000, false), 9).collect();
+        match split(&identical) {
+            None => {}
+            Some(found) => assert!(
+                !found.is_two_voices(),
+                "one voice nine times over is not two voices: {found:?}"
+            ),
+        }
     }
 
     /// Ticket 14, and the assertion the characterization test was written to
@@ -3072,8 +3178,8 @@ mod tests {
     /// pinning that a contaminated Speaker **still** gets a Voiceprint.
     ///
     /// **When the guard is adopted this test fails, and that is the signal.**
-    /// Replace the body's final assertion with the coherent Speaker being the
-    /// only seed offered.
+    /// Replace the final assertion with the coherent Speaker being the only
+    /// seed offered.
     #[test]
     fn today_a_contaminated_speaker_is_still_given_a_voiceprint() {
         // Two voices in near-equal measure under one Speaker's name, which is
@@ -3129,17 +3235,16 @@ mod tests {
         assert_eq!(
             offered.len(),
             2,
-            "today both are offered — including the one whose evidence is two \
+            "today both are offered — including the one whose record is two \
              voices, which is the defect"
         );
-        // The measure can already tell them apart; only the mint cannot.
-        let contaminated_score = agreement(
-            &std::iter::repeat_n((mine.to_vec(), 12_000_i64, false), 4)
+
+        // The measure already tells them apart; only the mint does not act.
+        let contaminated: Vec<(Vec<f32>, i64, bool)> =
+            std::iter::repeat_n((mine.to_vec(), 12_000_i64, false), 4)
                 .chain(std::iter::repeat_n((theirs.to_vec(), 12_000, false), 5))
-                .collect::<Vec<_>>(),
-        )
-        .expect("pairs");
-        assert!(contaminated_score < AGREEMENT_FLOOR);
+                .collect();
+        assert!(split(&contaminated).expect("partitions").is_two_voices());
     }
 
     #[test]
