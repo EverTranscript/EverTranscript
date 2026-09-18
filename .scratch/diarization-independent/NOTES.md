@@ -611,13 +611,36 @@ exists, not a measurement of where it generalises.
 
 Ticket **14** below is the companion defect and moves this band: see there.
 
-### An exemplar is cut from a window the other channel was talking over — ticket 15, **specified and measured, not built (Q257)**
+### An exemplar is cut from a window the other channel was talking over — ticket 15, **built mic-only and measured on a rebuild (Q261)**
 
 Ticket file:
-`issues/15-an-exemplar-is-cut-from-a-window-the-other-channel-was-talking-over.md`.
-Measured read-only on the real History *before* anything was built, as
-instructed. The rule: drop an exemplar window when the other channel carries
-voiced speech intersecting it, any intersection, no threshold.
+`issues/15-an-exemplar-is-cut-from-a-window-the-other-channel-was-talking-over.md`,
+all six acceptance criteria met. Measured read-only on the real History
+*before* anything was built, as instructed; then built **mic-only** on the
+user's ruling (`ea13e2b`) and measured again on a rebuilt copy (Q261). The
+rule: drop a **mic** exemplar window when the **system** channel carries voiced
+speech intersecting it, any intersection, no threshold. Not adopted for the
+real History.
+
+**What the rebuild showed (Q261).** The rule is exact on the path that ships
+it: reseed-shaped mic rows overlapping the far end go **27 of 27 → 0 of 133**,
+and the exemplar corpus *grows*, 1472 → 1776. The Operator ends with **139**
+exemplars and a Voiceprint at **0.9960** against their own clean voice where
+they had **none at all**, attributed in all 12 Meetings instead of 6. Five
+named controls keep their identity (0.9536–1.0000); `Menggang Xu` is stranded
+with `forgotten = 0`, so named-with-a-vector stays 6 and the membership trades
+their recognition for the Operator's. The cost is pseudonym recognition: 373
+segments leave pseudonyms, 264 becoming unattributed (6.4% of all segments),
+and pseudonyms holding a vector fall 20 → 11. A bulk re-run re-derives
+attribution, so 264 is an upper bound on the filter's share.
+
+**Two corrections the rebuild forced (Q260).** `named` is not a synonym for
+`reseed-shaped`: 64 of the 1472 rows are machine-written, including **all nine
+of the Operator's**, so the pre-build numbers below measured a coarse
+per-Meeting proxy for the Operator rather than the per-window rule. Tell the
+writers apart by `voiced_ms == sample_end_ms - sample_start_ms` — true only of
+a reseed row, whose vector *is* its window. The pre-build figures that follow
+are kept as written, with that caveat.
 
 **It repairs the Operator's record rather than refusing it** — which is what
 neither of ticket 13's measures could do. All nine of the Operator's usable
@@ -725,9 +748,21 @@ no WeSpeaker rows and no mixed space; and the unified log shows no fetch.
 **The version string was never the identifier, which is the flaw in the old
 warning.** `Cargo.toml:16` puts `main` at `1.1.1` too, so "v1.1.1" named both
 the dangerous bundle and its replacement. What distinguishes them is the
-binary: `Contents/Resources/evertranscript`, mtime 15:37:07, yields
-`redimnet2-b3` 19 times against `wespeaker-voxceleb-resnet34-LM` once. Identify
-a build by what it links, not by what it calls itself.
+binary. `Contents/Resources/evertranscript`, mtime 15:37:07, embeds its own
+model registry, and the decisive string is the **expected hash**:
+
+```
+strings -a /Applications/EverTranscript.app/Contents/Resources/evertranscript \
+  | grep -c dcecdce7d52bbd4739b24d0874359ec564d43f4b3a392f0104f505593b566d41
+```
+
+Non-zero means the installed build expects exactly the ReDimNet2 bytes that are
+on disk, so it cannot read them as `Corrupted`. In the same string table that
+hash sits beside `diarize-embedding.onnx` and
+`soulmachine/evertranscript-redimnet2-b3-vox2-lm`. A `grep -c redimnet2-b3`
+returns 9 here, but that counts *lines* and this binary's string table is a
+handful of very long ones, so it is a weak signal — use the hash. Identify a
+build by the model it expects, not by what it calls itself.
 
 **Its login item is disabled, 2026-09-17 (Q241).**
 `~/Library/LaunchAgents/com.evertranscript.core.plist` carried `RunAtLoad` true

@@ -12,8 +12,12 @@ ADR-0037.
 categorical — any overlap drops the window — and the evidence it needs is
 already in the record, because the product transcribes both channels.
 
-**Status:** **specified and measured, not built** (Q257, 2026-09-17). The
-read-only measurement below ran first, on the real History, as instructed.
+**Status:** **built, mic-only, and measured on a rebuilt copy of the real
+History** — Q257 specified it, Q258 escalated the direction and the user ruled
+mic-only, `ea13e2b` built it, Q260 corrected a premise, Q261 measured the
+rebuild. All six acceptance criteria are met. **Not adopted for the real
+History:** the rebuild ran on an isolated copy, and whether the cost below is
+affordable is the open exchange-rate question.
 
 ## Why this is the ticket, and why it comes from 13's failure
 
@@ -195,27 +199,51 @@ the user's call in the same way `MATCH_FLOOR` is. Q258 carries it.
 
 ## Acceptance criteria
 
-- [ ] An exemplar window that intersects opposite-channel voiced speech is not
+- [x] An exemplar window that intersects opposite-channel voiced speech is not
       enrolled, on the reseed path, with no threshold — asserted through the
-      write path rather than on the query
-- [ ] The machine path's observations are filtered before the cluster centroid
+      write path rather than on the query.
+      `a_mic_range_the_far_end_talked_over_is_not_enrolled`, plus the rebuild:
+      reseed-shaped mic rows overlapping the far end go **27 of 27 → 0 of 133**
+- [x] The machine path's observations are filtered before the cluster centroid
       consumes them, not its exemplar afterwards — and the distinction is
       pinned by a test, so a later reader does not "simplify" it into an
-      exemplar-level check
-- [ ] A Speaker left with no usable exemplar falls through to
-      `clear_voiceprint` and keeps its name and its unforgotten mark
-- [ ] The Operator's real record mints a Voiceprint agreeing with their own
+      exemplar-level check.
+      `a_mic_observation_the_far_end_talked_over_does_not_reach_the_centroid`
+      asserts the surviving vector, and Q260 is why the distinction matters
+- [x] A Speaker left with no usable exemplar falls through to
+      `clear_voiceprint` and keeps its name and its unforgotten mark.
+      `a_speaker_talked_over_throughout_loses_the_vector_but_not_her_name`, and
+      on the rebuild `Menggang Xu` ends with no vector and `forgotten = 0`
+- [x] The Operator's real record mints a Voiceprint agreeing with their own
       clean voice rather than a blend — the 0.9811 above, re-measured after the
-      build
-- [ ] The six named controls still mint, and the one that cannot
-      (`Menggang Xu`) is recorded as expected rather than worked around
-- [ ] Whether the rule is symmetric or mic-only is settled (Q258) before the
-      drop rate is treated as acceptable
+      build. The rebuild reaches **0.9960** against `d859b1` from **139**
+      exemplars where there was **no Voiceprint at all** before, with the
+      far-end `Ming Chen` rows at 0.3365 and 0.3110, and attribution rising
+      from 483 segments over 6 Meetings to 591 over all 12 (Q261)
+- [x] The six named controls still mint, and the one that cannot
+      (`Menggang Xu`) is recorded as expected rather than worked around.
+      Precisely: **five of the six** mint and keep their identity — Hong Li
+      0.9536, Jack Ahn 0.9673, Marc Ammann 0.9953, `Ming Chen` 1.0000,
+      `Ming Chen` 0.9740 — and the sixth is `Menggang Xu`, stranded. Named
+      Speakers holding a vector is 6 before and 6 after; the membership trades
+      `Menggang Xu`'s recognition for the Operator's
+- [x] Whether the rule is symmetric or mic-only is settled (Q258) before the
+      drop rate is treated as acceptable. The user ruled **mic-only**
 
 ## What this does not claim
 
 It does not replace ticket 13. A record can hold two voices without either
 window overlapping the other channel — two people on the same far-end call,
-recorded on one system channel, is the case the drop rule cannot see. It also
-does not claim the drop rate is affordable: 76% under the symmetric rule is
-measured, not endorsed, and Q258 is what decides it.
+recorded on one system channel, is the case the drop rule cannot see.
+
+It does not claim the cost is affordable. The 76% above was the **symmetric**
+rule's projection and is superseded by the mic-only ruling; measured on the
+rebuild, mic-only does not shrink the corpus at all — exemplars go 1472 →
+**1776** — because the reseed path enrols filtered windows for Speakers that
+previously had cluster centroids or nothing. What it costs instead is
+**pseudonym recognition**: 373 segments leave pseudonyms, 108 to the Operator
+and **264 to unattributed** (6.4% of all segments), and pseudonyms holding a
+vector fall 20 → 11. Those turns keep their text and lose a numbered label, not
+a name. A bulk re-run also re-derives attribution, so 264 is an upper bound on
+the filter's share — the comparison cannot separate the two. Whether that buys
+the Operator's Voiceprint is the exchange rate, and it is open on purpose.
