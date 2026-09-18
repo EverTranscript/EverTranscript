@@ -562,6 +562,65 @@ fn best_partner(row: usize, count: usize, score: &[f32], alive: &[bool]) -> (usi
     best
 }
 
+/// Which of a Speaker's exemplars a Voiceprint is built from, given each
+/// one's Meeting in the order the store returns them — oldest first.
+///
+/// Round-robin across the Meetings that contributed, newest Meeting first and
+/// newest-first within each, until [`MAX_EXEMPLARS`]. Returns indices into
+/// the slice it was handed.
+///
+/// The cap exists to bound cost — a Speaker seen in two hundred Meetings must
+/// not carry two hundred vectors into every later clustering run — and taking
+/// the newest 32 was one way to spend it, not a considered one. Because
+/// exemplar ids are UUIDv7 minted at insert, "newest" was a *contiguous tail*:
+/// the end of the last Meeting that contributed any. On a real History that
+/// gave Speakers heard in seven Meetings an identity decided by one of them,
+/// and gave one whose last Meeting ran under another voice an identity that
+/// matched the wrong person outright.
+///
+/// Any 32 cost the same downstream, so this spends the budget across the
+/// Meetings instead. Recency survives as the ordering rather than the rule:
+/// the newest Meeting is served first and the newest exemplar within each
+/// Meeting is taken first, so a voice that has changed is still represented
+/// by how it sounds now — it just no longer crowds out every other occasion
+/// the Speaker was heard.
+///
+/// Exemplars with no Meeting share one bucket: there is nothing to spread
+/// them across.
+pub(super) fn spread_across_meetings(meetings: &[Option<&str>]) -> Vec<usize> {
+    // First appearance walking backwards orders the buckets newest-Meeting
+    // first, and fills each one newest-first, which is the whole of how
+    // recency survives here.
+    let mut buckets: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
+    for (index, meeting) in meetings.iter().enumerate().rev() {
+        match buckets.iter_mut().find(|(key, _)| key == meeting) {
+            Some((_, rows)) => rows.push(index),
+            None => buckets.push((*meeting, vec![index])),
+        }
+    }
+
+    let mut chosen = Vec::with_capacity(MAX_EXEMPLARS.min(meetings.len()));
+    let mut depth = 0;
+    while chosen.len() < MAX_EXEMPLARS {
+        let before = chosen.len();
+        for (_, rows) in &buckets {
+            let Some(&index) = rows.get(depth) else {
+                continue;
+            };
+            chosen.push(index);
+            if chosen.len() == MAX_EXEMPLARS {
+                break;
+            }
+        }
+        // Every bucket is shorter than `depth`: there is nothing left to take.
+        if chosen.len() == before {
+            break;
+        }
+        depth += 1;
+    }
+    chosen
+}
+
 /// The average of a Speaker's exemplars, weighted by how much voiced audio
 /// each came from, L2-normalized.
 ///
@@ -669,14 +728,28 @@ pub(super) fn refresh_voiceprint(
     let space = evidence
         .last()
         .map(|latest| (latest.model.clone(), latest.model_version.clone()));
-    let history: Vec<(Vec<f32>, i64, bool)> = evidence
+    // Only what could contribute: the newest model space, positives, and a
+    // vector that is actually there. The selection spends the cap, so it has
+    // to see what the cap will be spent on — an exemplar `centroid` would
+    // drop anyway must not consume one of the slots first.
+    let usable: Vec<&speakers::Exemplar> = evidence
         .iter()
         .filter(|exemplar| {
-            space.as_ref().is_some_and(|(model, version)| {
-                exemplar.model == *model && exemplar.model_version == *version
-            })
+            !exemplar.is_negative
+                && !exemplar.vector.is_empty()
+                && space.as_ref().is_some_and(|(model, version)| {
+                    exemplar.model == *model && exemplar.model_version == *version
+                })
         })
-        .map(|exemplar| {
+        .collect();
+    let meetings: Vec<Option<&str>> = usable
+        .iter()
+        .map(|exemplar| exemplar.meeting_id.as_deref())
+        .collect();
+    let history: Vec<(Vec<f32>, i64, bool)> = spread_across_meetings(&meetings)
+        .into_iter()
+        .map(|index| {
+            let exemplar = usable[index];
             (
                 exemplar.vector.clone(),
                 exemplar.voiced_ms,
@@ -1491,39 +1564,75 @@ mod tests {
         );
     }
 
-    /// Characterization, not approval: the companion defect, ticket 14.
+    /// Ticket 14, and the assertion the characterization test was written to
+    /// become: the cap is *spread* across the Meetings that contributed, not
+    /// spent on a contiguous tail.
     ///
-    /// `.rev().take(MAX_EXEMPLARS)` is a *tail*, not a sample. Exemplars are
-    /// read `ORDER BY id` over UUIDv7 ids minted at insert, so the newest 32
-    /// are the last rows written — the end of the last Meeting that
-    /// contributed any. A Speaker heard in seven Meetings can have an
-    /// identity decided by one of them, which is measured on the real
-    /// History: Jack Ahn's 888 exemplars span 7 Meetings and his tail 32 span
-    /// 1 (Q251).
-    ///
-    /// **When ticket 14's spread lands, this test fails, and that is the
-    /// signal.** The later voice should then no longer own the centroid
-    /// alone.
+    /// The defect it replaces: exemplars are read `ORDER BY id` over UUIDv7
+    /// ids minted at insert, so `.rev().take(MAX_EXEMPLARS)` took the last
+    /// rows written — the end of the last Meeting that contributed any. On
+    /// the real History, Jack Ahn's 888 exemplars span 7 Meetings and his
+    /// tail 32 spanned 1 (Q251).
     #[test]
-    fn today_the_cap_takes_a_contiguous_tail_rather_than_a_sample() {
-        let early = vec![1.0_f32, 0.0, 0.0];
-        let late = vec![0.0_f32, 1.0, 0.0];
-        let mut history: Vec<(Vec<f32>, i64, bool)> = (0..MAX_EXEMPLARS * 4)
-            .map(|_| (early.clone(), 1_000, false))
+    fn the_cap_is_spread_across_meetings_rather_than_spent_on_a_tail() {
+        let meetings: Vec<Option<&str>> = ["a", "b", "c", "d", "e"]
+            .iter()
+            .flat_map(|id| std::iter::repeat_n(Some(*id), 40))
             .collect();
-        history.extend((0..MAX_EXEMPLARS).map(|_| (late.clone(), 1_000, false)));
 
-        let centre = centroid(&history).expect("a centroid");
+        let chosen = spread_across_meetings(&meetings);
+        assert_eq!(chosen.len(), MAX_EXEMPLARS, "the cap still binds");
+
+        let mut share: BTreeMap<Option<&str>, usize> = BTreeMap::new();
+        for index in &chosen {
+            *share.entry(meetings[*index]).or_default() += 1;
+        }
+        assert_eq!(share.len(), 5, "every Meeting is represented: {share:?}");
+        // 32 across 5 buckets: two get 7, three get 6 — never 32 and four 0s.
         assert!(
-            cosine(&centre, &late) > 0.999,
-            "the tail owns it outright: {}",
-            cosine(&centre, &late)
+            share.values().all(|taken| (6..=7).contains(taken)),
+            "and the shares are even: {share:?}"
         );
+
+        // Recency survives as the ordering. Within a Meeting the newest rows
+        // go first, so the last of Meeting a's 40 is taken and the first is
+        // not — and the newest Meeting is served first of all.
+        assert!(chosen.contains(&39), "the newest of Meeting a");
+        assert!(!chosen.contains(&0), "not the oldest of Meeting a");
+        assert_eq!(meetings[chosen[0]], Some("e"), "newest Meeting leads");
+    }
+
+    /// One Meeting, or none named at all: the selection still hands back
+    /// exactly what the cap allows, newest first. The spread must not cost a
+    /// Speaker heard once the identity the tail would have given them.
+    #[test]
+    fn a_speaker_heard_once_still_fills_the_cap_newest_first() {
+        let single: Vec<Option<&str>> = std::iter::repeat_n(Some("a"), 100).collect();
+        let chosen = spread_across_meetings(&single);
+        assert_eq!(chosen.len(), MAX_EXEMPLARS);
+        assert_eq!(chosen[0], 99, "newest first");
+        assert_eq!(chosen[MAX_EXEMPLARS - 1], 100 - MAX_EXEMPLARS);
+
+        let unattributed: Vec<Option<&str>> = std::iter::repeat_n(None, 40).collect();
+        assert_eq!(
+            spread_across_meetings(&unattributed).len(),
+            MAX_EXEMPLARS,
+            "no Meeting to spread across is not a reason to mint less"
+        );
+
         assert!(
-            cosine(&centre, &early) < 1e-3,
-            "and four times as much earlier evidence contributes nothing: {}",
-            cosine(&centre, &early)
+            spread_across_meetings(&[]).is_empty(),
+            "and nothing selects nothing"
         );
+    }
+
+    /// Under the cap nothing is dropped, whatever the mix of Meetings.
+    #[test]
+    fn under_the_cap_every_exemplar_survives_the_selection() {
+        let meetings = [Some("a"), Some("b"), None, Some("a"), Some("c")];
+        let mut chosen = spread_across_meetings(&meetings);
+        chosen.sort_unstable();
+        assert_eq!(chosen, vec![0, 1, 2, 3, 4]);
     }
 
     #[test]
@@ -2802,6 +2911,56 @@ mod tests {
             offered[0].vector,
             vec![0.0, 1.0, 0.0],
             "the old vector did not pull it"
+        );
+    }
+
+    #[test]
+    fn a_voiceprint_draws_on_every_meeting_the_speaker_was_heard_in() {
+        // Ticket 14, through the mint path rather than the selection alone.
+        // Two Meetings, forty exemplars each, and a voice that reads
+        // differently in the second. Under the old tail the later Meeting
+        // filled all 32 slots and owned the identity outright; the spread
+        // gives each Meeting half, so the Voiceprint sits between them.
+        use crate::store::meetings;
+        use crate::store::speakers;
+        let connection = db();
+        let speaker = speakers::create(&connection, false).expect("speaker");
+        let earlier = [1.0_f32, 0.0, 0.0];
+        let later = [0.0_f32, 1.0, 0.0];
+        for vector in [earlier, later] {
+            let meeting = meetings::start(&connection, None, None).expect("m");
+            for _ in 0..40 {
+                speakers::add_exemplar(
+                    &connection,
+                    speakers::NewExemplar {
+                        speaker_id: &speaker.id,
+                        meeting_id: Some(&meeting.id),
+                        vector: &vector,
+                        model: "test",
+                        model_version: "1",
+                        voiced_ms: 12_000,
+                        from_operator: false,
+                        is_negative: false,
+                        sample: None,
+                    },
+                )
+                .expect("exemplar");
+            }
+        }
+
+        refresh_voiceprint(&connection, &speaker.id).expect("refresh");
+        let offered = seeds(&connection, "test", "1").expect("seeds");
+        assert_eq!(offered.len(), 1);
+        let minted = &offered[0].vector;
+        assert!(
+            cosine(minted, &earlier) > 0.6,
+            "the earlier Meeting is still in it: {}",
+            cosine(minted, &earlier)
+        );
+        assert!(
+            cosine(minted, &later) > 0.6,
+            "and so is the later one: {}",
+            cosine(minted, &later)
         );
     }
 

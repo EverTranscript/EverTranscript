@@ -96,6 +96,40 @@ Nothing here is a default an agent should pick.
    incoherence plainer and keeps the wider band — at the cost of refusing a
    Speaker over rows the mint would never have used.
 
+## The band after ticket 14 landed
+
+**Q254, 2026-09-17.** Ticket 14 shipped first, so the band below was
+re-measured over the exemplars the mint now actually selects — read-only,
+`mode=ro`, real History:
+
+| | pre-14 | post-14 |
+|---|---|---|
+| Operator (must be refused) | 0.3190 | **0.3190** |
+| weakest named control (must not be) | 0.6105 | **0.5867** |
+| admissible band | (0.3190, 0.6105) | **(0.3190, 0.5867)** |
+
+The lower bound did not move: the Operator has 9 usable exemplars over 6
+Meetings, under the cap, so the spread is a no-op for them. The upper bound
+fell, because the weakest control — the 230-exemplar `Ming Chen` — now draws on
+5 Meetings instead of 3, and breadth costs coherence. **The predeclared 0.50
+remains inside the band**, with 0.181 above the Operator and 0.0867 below that
+control; the headroom above the control was 0.1105 before.
+
+Two facts about the current History that bear on choices 1 and 3 above:
+
+- **Choice 3 is moot for the Operator on this History, and the user has
+  already settled it.** The Operator's record was reduced to 9 rows by the
+  Q236 relearn, so "the capped 32" and "the whole record" are now the same
+  set and both score 0.3190 — the 0.4426 / 0.3674 split was measured on the
+  pre-relearn 483 rows. The user's decision is the post-14 selection: one
+  read, one path, no separate whole-record score.
+- **The Operator currently has no Voiceprint at all.** The relearn left nine
+  exemplars and no stamped vector, so the wrong Voiceprint Q246–Q249
+  diagnosed is not in the database today. That is not the guard working — the
+  guard does not exist yet — and it means the walk in decision (3) is
+  confirming that a *re*-mint is refused, not that an existing wrong one was
+  removed.
+
 ## Interaction with ticket 14
 
 Ticket 14 changes *which* 32 exemplars the mint sees, so it moves the band

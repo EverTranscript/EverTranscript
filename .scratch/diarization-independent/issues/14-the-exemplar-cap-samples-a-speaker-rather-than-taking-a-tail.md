@@ -12,8 +12,21 @@ ADR-0037.
 change of selection rule, not of policy — so it is buildable as soon as the
 selection rule is chosen.
 
-**Status:** specified, measured, **not built.** The measurement below is
-read-only on the real History; no build was made and no behaviour changed.
+**Status:** **built and measured** (Q254, 2026-09-17). The selection rule was
+chosen by the user: round-robin across contributing Meetings, newest Meeting
+first, newest-first within each, until `MAX_EXEMPLARS`. No new constants; the
+cap stays 32. Shipped as `cluster::spread_across_meetings`, called from
+`refresh_voiceprint` only — `centroid`'s signature is unchanged, because its
+other production caller (`live.rs`) averages one run's observations and a
+Meeting round-robin would be meaningless there.
+
+**What the spread changed on the real History** (read-only, `mode=ro`): three
+of 27 Speakers draw on more Meetings than the tail gave them — Jack Ahn 3 → 9,
+Hong Li 2 → 5, Ming Chen 3 → 5. The other 24 are under the cap and untouched.
+Coherence fell where breadth rose, as predicted: Jack Ahn 0.7136 → 0.6316,
+Ming Chen 0.6105 → 0.5867, and Hong Li rose slightly (0.6515 → 0.6545). The
+measurement below is the pre-build reading and its absolute counts are now
+stale — the History has since grown to 12 Meetings.
 
 ## What to build
 
@@ -109,17 +122,26 @@ recency is currently absolute.
 
 ## Acceptance criteria
 
-- [ ] A selection rule is chosen
-- [ ] A Speaker heard in several Meetings has a Voiceprint drawn from more than
-      one of them — asserted on a fixture, and re-measured on the real History
-      against the table above
-- [ ] The downstream cost is unchanged: still at most `MAX_EXEMPLARS` vectors
-      per Speaker into clustering
-- [ ] `today_the_cap_takes_a_contiguous_tail_rather_than_a_sample` in
-      `diarize::cluster::tests` is updated rather than deleted — it exists to
-      fail when this lands
-- [ ] Ticket 13's band is re-measured if that guard is already in place, or the
-      measurement is redone against the new selection if it is not
+- [x] A selection rule is chosen — the user's, Q254
+- [x] A Speaker heard in several Meetings has a Voiceprint drawn from more than
+      one of them — asserted on a fixture through the whole mint path
+      (`a_voiceprint_draws_on_every_meeting_the_speaker_was_heard_in`: two
+      Meetings, forty exemplars each, the stored Voiceprint above 0.6 to both
+      where the tail gave exactly 0.0 to the earlier one), and re-measured on
+      the real History
+- [x] The downstream cost is unchanged: still at most `MAX_EXEMPLARS` vectors
+      per Speaker into clustering — asserted directly
+      (`the_cap_is_spread_across_meetings_rather_than_spent_on_a_tail`)
+- [x] `today_the_cap_takes_a_contiguous_tail_rather_than_a_sample` in
+      `diarize::cluster::tests` is updated rather than deleted — **retargeted**
+      to `the_cap_is_spread_across_meetings_rather_than_spent_on_a_tail`. It
+      pinned `centroid`, whose tail-take is deliberately unchanged, so it now
+      asserts the selection's share instead: the test that pinned the defect
+      pins the fix (Q254)
+- [x] Ticket 13's band is re-measured against the new selection: **(0.3190,
+      0.5867)**, narrowed from (0.3190, 0.6105) because the weakest control
+      spread. The predeclared 0.50 is still inside it, with 0.0867 of headroom
+      above that control
 
 ## What this does not claim
 

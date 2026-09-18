@@ -560,9 +560,9 @@ Three choices are the user's, and the first gates the rest:
 
 | # | Choice | What the measurement says |
 |---|---|---|
-| 1 | **The threshold** | On mean pairwise cosine, band **(0.4426, 0.6143)** if the guard reads the capped 32, or **(0.3674, 0.6143)** if it reads the whole record. Upper bound is the weakest named control either way |
+| 1 | **The threshold** | On mean pairwise cosine. **Re-measured post-14 (Q254): (0.3190, 0.5867)**, and the user's predeclared 0.50 is inside it. The earlier readings — (0.4426, 0.6143) capped-32 and (0.3674, 0.6143) whole-record — were taken on the Operator's pre-relearn 483 rows; they now hold 9, so both readings coincide at 0.3190. Upper bound is the weakest named control throughout |
 | 2 | **Refuse, or keep the coherent subset** | Refuse is minimal and loses recognition; subset loses less and is no longer one line. Q248 argues a blended Voiceprint is confidently wrong rather than vague — a reason to fail closed, not a decision to |
-| 3 | **Capped 32, or the whole record** | The capped slice is what the mint consumes; the whole record is what the evidence looks like, scores 0.3674, and keeps the wider band |
+| 3 | **Capped 32, or the whole record** | **Settled by the user: the post-14 selection** — one read, one path, no separate whole-record score. Moot for the Operator on today's History anyway, whose 9 rows are under the cap |
 
 `min` exemplar-vs-centroid — the measure the guard as first named would most
 naturally use — **inverts** and must not be used: the Operator scores 0.5142
@@ -573,7 +573,17 @@ exists, not a measurement of where it generalises.
 
 Ticket **14** below is the companion defect and moves this band: see there.
 
-### The exemplar cap takes a tail, not a sample — ticket 14, buildable
+### The exemplar cap took a tail, not a sample — ticket 14, **built (Q254)**
+
+**Shipped 2026-09-17**, `cluster::spread_across_meetings` called from
+`refresh_voiceprint`: round-robin across contributing Meetings, newest Meeting
+first, newest-first within each, until `MAX_EXEMPLARS`. The user chose the
+rule; no new constants, the cap stays 32. On the real History three Speakers
+now draw on more Meetings than the tail gave them (Jack Ahn 3 → 9, Hong Li
+2 → 5, Ming Chen 3 → 5) and the other 24 are under the cap and untouched. It
+**narrowed ticket 13's band to (0.3190, 0.5867)** — see that subsection. What
+follows is the diagnosis as written before the fix; its absolute counts predate
+two Meetings recorded 2026-09-17 17:32.
 
 **Q251, 2026-09-17.** The companion defect to 13, in the same mint and
 independent of it. `centroid` takes `.rev().take(32)` over ids that are UUIDv7
