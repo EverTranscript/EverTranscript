@@ -160,7 +160,19 @@ for no swap. Two exact dependencies:
    Q183), so neither is an open experiment. What is still the user's is the
    adoption — which model and configuration to run, and which recognition
    outcome to prioritise — together with the ≥ 2.0-point DER bar, which they
-   asked for and deliberately left undecided.
+   asked for and deliberately left undecided.> **Dated note, 2026-09-18 — both fields are closed; the passage above is
+   > left as written.** Q232 closed the ≥ 2.0-point DER bar: *not adopted as a
+   > number, and the field is closed rather than filled*, replaced by a standing
+   > reporting requirement — DER **and** all four recognition quantities, at
+   > points predeclared before any held-out number is read, in the arm that
+   > ships. Q231 assumed the rate of exchange explicitly, **4 seconds of correct
+   > returning per 1 second of wrong**, stated as a number so it can be overruled
+   > as one; the break-even is 8.06, so the shipped point 0.62/0.08 wins for any
+   > rate below that. Both came under the *do 1,2,3* delegation. What stays open
+   > is narrower than this passage reads: only whether 4:1 generalises past that
+   > one selection — Q232 says it does not, so a future trade names its own rate.
+   > Re-attributed by Q287.
+
 2. Ticket 12 exists, because a wipe with no re-run is a History nobody is
    recognized in, which ADR-0037's *Considered options* already rejected.
 

@@ -415,6 +415,20 @@ collapsed to one ranking. Nothing here assigns any of these. Q152's rule holds t
 and utility judgements stay separately labelled, and a sentence that ranks two
 outcomes is a utility judgement however it is phrased.
 
+> **Dated note, 2026-09-18 — both fields are closed; the passage above is
+> left as written.** Q232 closed the ≥ 2.0-point DER bar: *not adopted as a
+> number, and the field is closed rather than filled*, replaced by a standing
+> reporting requirement — DER **and** all four recognition quantities, at
+> points predeclared before any held-out number is read, in the arm that
+> ships. Q231 assumed the rate of exchange explicitly, **4 seconds of correct
+> returning per 1 second of wrong**, stated as a number so it can be overruled
+> as one; the break-even is 8.06, so the shipped point 0.62/0.08 wins for any
+> rate below that. Both came under the *do 1,2,3* delegation. What stays open
+> is narrower than this passage reads: only whether 4:1 generalises past that
+> one selection — Q232 says it does not, so a future trade names its own rate.
+> Re-attributed by Q287.
+
+
 ### The rig
 
 `Embedder` now carries a `Frontend` (Q130):
