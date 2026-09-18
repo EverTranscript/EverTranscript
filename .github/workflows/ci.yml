@@ -95,17 +95,25 @@ jobs:
             ${{ runner.temp }}/diarize-models
             ${{ runner.temp }}/summary-model
             ${{ runner.temp }}/whisper-model
-          key: models-f6e3fb6c-057ee564-3955447b-3055274469
+          key: models-f6e3fb6c-057ee564-dcecdce7-3055274469
 
       - name: Fetch the inference models
         if: steps.inference-models.outputs.cache-hit != 'true'
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/diarize-models"
+          # The embedding is ReDimNet2-B3, not WeSpeaker: `DIARIZE_EMBEDDING`
+          # in `models/registry.rs` switched on 2026-09-17 and the graph takes
+          # raw waveform where WeSpeaker took Kaldi fbank. Fetching the old one
+          # here does not fail the checksum -- it fails `live`'s model tests
+          # with `Invalid input name: waveform`, which is what CI did until the
+          # cache key above was bumped past it. That key carries each
+          # artifact's hash prefix so a model swap can never be served a cache
+          # holding the model it replaced.
           curl -sL --retry 3 --max-time 300 -o "$RUNNER_TEMP/diarize-models/segmentation.onnx" \
             "https://huggingface.co/onnx-community/pyannote-segmentation-3.0/resolve/main/onnx/model.onnx"
           curl -sL --retry 3 --max-time 300 -o "$RUNNER_TEMP/diarize-models/embedding.onnx" \
-            "https://huggingface.co/onnx-community/wespeaker-voxceleb-resnet34-LM/resolve/main/onnx/model.onnx"
+            "https://huggingface.co/soulmachine/evertranscript-redimnet2-b3-vox2-lm/resolve/main/redimnet2-b3-vox2-lm.onnx"
           # `shasum` is macOS; Git Bash on the Windows runner has
           # `sha256sum` and not the other way round. Found by this job
           # failing on its first run, which is the job doing its job.
@@ -132,7 +140,7 @@ jobs:
           verify "$RUNNER_TEMP/diarize-models/segmentation.onnx" \
             057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25
           verify "$RUNNER_TEMP/diarize-models/embedding.onnx" \
-            3955447b0499dc9e0a4541a895df08b03c69098eba4e56c02b5603e9f7f4fcbb
+            dcecdce7d52bbd4739b24d0874359ec564d43f4b3a392f0104f505593b566d41
 
           # The Summary model, in the same step so it shares the two
           # hard-won lines above rather than growing a second copy of them.
