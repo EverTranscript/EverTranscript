@@ -275,6 +275,7 @@ pub struct LiveDiarizer {
     segmentation: Session,
     embedder: Embedder,
     step: usize,
+    phase: usize,
 }
 
 /// One local speaker of one chunk: what it said, where, and how it sounds.
@@ -379,6 +380,18 @@ impl LiveDiarizer {
         self
     }
 
+    /// Where the first window starts, in milliseconds.
+    ///
+    /// For the harness, so that the grid's *alignment* can be varied with its
+    /// density held fixed: ten runs at the production step, offset by a tenth
+    /// of a window each, see the same number of windows in ten different
+    /// places. Without it a step change moves both at once and the two cannot
+    /// be told apart. Production keeps 0.
+    pub fn with_phase(mut self, phase_ms: u64) -> Self {
+        self.phase = (phase_ms * SAMPLE_RATE as u64 / 1000) as usize;
+        self
+    }
+
     /// As [`load`](Self::load), choosing which model the embedding is —
     /// what its vectors are labelled with and, with that, which front end
     /// it wants. The measurement harness is the caller; production takes
@@ -390,6 +403,7 @@ impl LiveDiarizer {
     ) -> Result<Self, DiarizeError> {
         Ok(Self {
             step: SEGMENT_STEP,
+            phase: 0,
             segmentation: open(segmentation)?,
             embedder: Embedder::load_with(embedding, identity)?,
         })
@@ -455,7 +469,7 @@ impl LiveDiarizer {
             (AudioChannel::Mic, audio.mic),
             (AudioChannel::System, audio.system),
         ] {
-            for start in (0..samples.len()).step_by(self.step) {
+            for start in (self.phase..samples.len()).step_by(self.step) {
                 if cancel.is_cancelled() {
                     return Err(DiarizeError::Cancelled);
                 }

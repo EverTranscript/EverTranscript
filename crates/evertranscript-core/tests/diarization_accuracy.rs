@@ -184,6 +184,22 @@ fn step_under_test() -> u64 {
     }
 }
 
+/// Where the first segmentation window starts, from
+/// `EVERTRANSCRIPT_SEGMENT_PHASE_MS`. Unset is 0, which is production.
+///
+/// Varies the grid's alignment with its density held fixed, which a step
+/// change cannot do: shrinking the step multiplies the windows *and* moves
+/// them. Sweeping the phase at one step separates the two.
+fn phase_under_test() -> u64 {
+    match std::env::var("EVERTRANSCRIPT_SEGMENT_PHASE_MS") {
+        Err(_) => 0,
+        Ok(value) if value.is_empty() => 0,
+        Ok(value) => value
+            .parse()
+            .unwrap_or_else(|_| panic!("EVERTRANSCRIPT_SEGMENT_PHASE_MS={value}: expected ms")),
+    }
+}
+
 /// The merge thresholds to score, from `EVERTRANSCRIPT_MERGE_SWEEP` as a
 /// comma-separated list.
 ///
@@ -517,7 +533,7 @@ struct Snapshot {
 fn provenance(meeting: &Meeting, segmentation: &Path, embedding: &Which) -> String {
     format!(
         "evertranscript-observations 2\tcorpus={}\tmeeting={}\taudio={}\tsegmentation={}\t\
-         model={}\tversion={}\tembedding={}\tfrontend={:?}\tstep_ms={}",
+         model={}\tversion={}\tembedding={}\tfrontend={:?}\tstep_ms={}\tphase_ms={}",
         meeting.audio.parent().unwrap_or(Path::new("")).display(),
         meeting.name,
         digest(&meeting.audio),
@@ -527,6 +543,7 @@ fn provenance(meeting: &Meeting, segmentation: &Path, embedding: &Which) -> Stri
         digest(&embedding.path),
         embedding.id.frontend,
         step_under_test(),
+        phase_under_test(),
     )
 }
 
@@ -660,7 +677,8 @@ fn observe_once(meeting: &Meeting, segmentation: &Path, embedding: &Which) -> In
     let mut diarizer =
         diarize::live::LiveDiarizer::load_with(segmentation, &embedding.path, embedding.id)
             .expect("load models")
-            .with_step(step_under_test());
+            .with_step(step_under_test())
+            .with_phase(phase_under_test());
 
     // Wall clock per meeting, because a ceiling is one of the things being
     // fixed: clustering was cubic, and 70 s at 1,259 windows projected to a
