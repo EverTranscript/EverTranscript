@@ -3161,7 +3161,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user ratified it unchanged. The symmetry is the argument: the trigger needs Watchlist membership *and* a hot microphone in the same app, so a removal and a release are the same event seen from two sides, and giving them different tails would be an asymmetry nobody asked for. Nothing in the code changes; this entry exists because Q105 was an agent's assumption and is now a person's decision.
 **Outcome:** applied
 **Supersedes:** Q105 — same question, same answer, decided by a human rather than assumed
-**Ref:** (pending)
+**Ref:** 04d3b55
 
 ## Q277 — issues/07 — gate-resolution
 
@@ -3172,7 +3172,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user ratified it unchanged, including the deliberate omission. The 45 s is the 15 s window plus the 30 s anarlog's "Did your meeting end?" prompt waits before stopping, so the longer window is borrowed from a competitor's measured behaviour rather than picked; the conjunction is what keeps it from widening the window for a quiet that has nothing to do with a scheduled meeting. Declining the 10-minute grace stays declined: it would hold a recording open long after the room emptied, which is the cost the short window exists to avoid.
 **Outcome:** applied
 **Supersedes:** Q106 — same question, same answer, decided by a human rather than assumed
-**Ref:** (pending)
+**Ref:** 04d3b55
 
 ## Q278 — issues/08 — gate-resolution
 
@@ -3183,7 +3183,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user ratified it unchanged and named the reason in their own words — a record never comes from two models under one label. That is the whole argument: moving the remaining chunks would produce a Summary whose provenance line is a lie, and blocking the switch would make a settings control hang on work the Operator cannot see. Keeping the Backends for the life of a run is the only option where the label stays true.
 **Outcome:** applied
 **Supersedes:** Q109 — same question, same answer, decided by a human rather than assumed
-**Ref:** (pending)
+**Ref:** 04d3b55
 
 ## Q279 — issues/07 — gate-resolution
 
@@ -3194,7 +3194,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user ratified it unchanged: the four off the loop, everything else in order. Widening the original fix from one request to four was the right generalisation — the same defect sat under all four and fixing only the named one leaves three live — and stopping at four is what keeps ordering guarantees for every short request, which is a property the protocol relies on. The Core lock is what keeps concurrency off the loop from becoming concurrency in the work.
 **Outcome:** applied
 **Supersedes:** Q114 — same question, same answer, decided by a human rather than assumed
-**Ref:** (pending)
+**Ref:** 04d3b55
 
 ## Q280 — issues/11 — gate-resolution
 
@@ -3205,7 +3205,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user ratified it unchanged. The mapping is a bet on the common case, and it is the safe direction of bet only because of what consumes it: `Some(true)` is one of two conditions rule 1 needs, and as of Q281 rule 1 no longer enrols a room on that fact alone. A Bluetooth speaker wrongly read as headphones now costs a refused rule rather than a colleague named "You", which is what makes the guess affordable.
 **Outcome:** applied
 **Supersedes:** Q127 — same question, same answer, decided by a human rather than assumed
-**Ref:** (pending)
+**Ref:** 04d3b55
 
 ## Q281 — issues/11 — deviation
 
@@ -3216,7 +3216,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user flipped it, and the reason is the whole of 2026-09-17: a second voice folded into the Operator's identity is being confidently wrong about another person (Q248), and the in-room second voice is precisely the residue no window filter reaches (Q266) — so the one rule that would enrol a room with no act at all must not be the rule that does it. This is a deviation from ticket 11's own words ("makes every mic-channel cluster of that Meeting the Operator"), taken deliberately and by the person whose spec it is. **What changed:** one condition in `operator::identify` (`clusters.len() == 1` in place of `!clusters.is_empty()`), the doc comments that asserted the old behaviour, and the test — `an_isolated_microphone_identifies_the_operator_with_no_act` keeps the single-voice case and the two-voice half moves to `a_second_voice_on_an_isolated_microphone_refuses_rule_one`, which asserts `Nobody` for the shared-room fixture and `Dominant` for two voices where one clears the floor, so the narrowing is shown to withhold the no-act enrolment without withholding the Operator. Reverting the condition makes it fail `left: IsolatedMic([Cluster(0), Cluster(1)])` against `right: Nobody`. **What did not change:** the payload stays a `Vec<Cluster>`, because `attach_operator`'s fold is the guard against the two-"You" defect its own comment records and deleting a Speaker-merging path to tidy a type would be the wrong trade; it is now defensive rather than reachable from rule 1, and the unit test that exercises it constructs the variant directly. **It cannot touch the nickel re-run:** `mic_isolated` was NULL or 0 on every real Meeting (Q246), so rule 1 never fired there and nothing already recorded is re-decided by this.
 **Outcome:** applied
 **Supersedes:** Q126 — its own question offered this narrowing as the alternative, and the flagged confirmation has come back the other way
-**Ref:** (pending)
+**Ref:** 04d3b55
 
 ## Q282 — diarization/06 — gate-resolution
 
@@ -3227,4 +3227,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user decided it. The test is whether the Operator could act differently on the two, and they could not: both are relearnable, both keep their name, neither was chosen. A fourth sentence would draw a distinction with nothing behind it. **Nothing shipped needed changing.** `clear_voiceprint` already leaves the name, `is_operator` and `forgotten` untouched and nulls only the vector, both stamp columns and `confirmed`, which is the behaviour this ratifies; `registry.voiceprint.none` already reads "No Voiceprint" / "无声纹" in both locales, so the wording condition was already met and no string moved. What was wrong was the record of intent: `App.tsx`'s comment called the third state "a voice never enrolled", which is now a state the decision says does not exist on its own, and `clear_voiceprint` carried no note that nulling the stamp was deliberate. Both comments now say so, and name the contrast — the model-change wipe in `store::schema` *does* keep its stamp, because a model change is something that happened **to** the Speaker and the Registry owes an explanation for it. Q267's dependence on `forgotten = 0` as an expected re-run result is unaffected and now has a decision under it rather than an assumption.
 **Outcome:** applied
 **Supersedes:** Q186 — it reported the behaviour and deferred the Registry question; the question is now answered and the behaviour ratified rather than fixed
-**Ref:** (pending)
+**Ref:** 04d3b55
