@@ -160,7 +160,9 @@ for no swap. Two exact dependencies:
    Q183), so neither is an open experiment. What is still the user's is the
    adoption — which model and configuration to run, and which recognition
    outcome to prioritise — together with the ≥ 2.0-point DER bar, which they
-   asked for and deliberately left undecided.> **Dated note, 2026-09-18 — both fields are closed; the passage above is
+   asked for and deliberately left undecided.
+
+   > **Dated note, 2026-09-18 — both fields are closed; the passage above is
    > left as written.** Q232 closed the ≥ 2.0-point DER bar: *not adopted as a
    > number, and the field is closed rather than filled*, replaced by a standing
    > reporting requirement — DER **and** all four recognition quantities, at
