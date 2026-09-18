@@ -565,8 +565,9 @@ to 0.2081 if windows are attributed without requiring them to be
 single-voice, which is *below* the contaminated Operator's 0.3190. No
 threshold move rescues it. Averaging each Meeting's exemplars first does
 separate on both corpora at that same 0.50, joint window (0.3597, 0.6767) —
-but that is a change of measure, so **the choice list is four items now, not
-three**. Full distribution and the two blind spots in the ticket file.
+but that is a change of measure, so **the choice list is four items, not
+three** — all four closed or unadopted (Q272), see the table below. Full
+distribution and the two blind spots in the ticket file.
 
 **Q246–Q249, 2026-09-17.** Found while verifying ticket 12, not by that
 ticket's own criteria, which is why 12 reads as met above and this is separate.
@@ -594,13 +595,26 @@ overlap system-channel speech (Q249). One Meeting's ending decided an identity.
 
 **The guard is named and deliberately not built** (Q246): one check at the mint
 site, falling through to the `clear_voiceprint` branch that already exists.
-Three choices are the user's, and the first gates the rest:
+**No choice on this list is open any more** (Q272): the user ruled AMI's
+overlap rate representative, so the guard ships nothing and neither number
+moves. The list is kept because it records what was measured and why each
+option died, not because anything is waiting on an answer:
 
-| # | Choice | What the measurement says |
-|---|---|---|
-| 1 | **The threshold** | On mean pairwise cosine. **Re-measured post-14 (Q254): (0.3190, 0.5867)**, and the user's predeclared 0.50 is inside it. The earlier readings — (0.4426, 0.6143) capped-32 and (0.3674, 0.6143) whole-record — were taken on the Operator's pre-relearn 483 rows; they now hold 9, so both readings coincide at 0.3190. Upper bound is the weakest named control throughout |
-| 2 | **Refuse, or keep the coherent subset** | Refuse is minimal and loses recognition; subset loses less and is no longer one line. Q248 argues a blended Voiceprint is confidently wrong rather than vague — a reason to fail closed, not a decision to |
-| 3 | **Capped 32, or the whole record** | **Settled by the user: the post-14 selection** — one read, one path, no separate whole-record score. Moot for the Operator on today's History anyway, whose 9 rows are under the cap |
+| # | Choice | What the measurement says | State |
+|---|---|---|---|
+| 1 | **The threshold** | On mean pairwise cosine. **Re-measured post-14 (Q254): (0.3190, 0.5867)**, and the user's predeclared 0.50 is inside it. The earlier readings — (0.4426, 0.6143) capped-32 and (0.3674, 0.6143) whole-record — were taken on the Operator's pre-relearn 483 rows; they now hold 9, so both readings coincide at 0.3190. Upper bound is the weakest named control throughout | **Closed by Q272** — no guard ships, so there is no threshold to set. The window is recorded for whoever revisits this |
+| 2 | **Refuse, or keep the coherent subset** | Refuse is minimal and loses recognition; subset loses less and is no longer one line. Q248 argues a blended Voiceprint is confidently wrong rather than vague — a reason to fail closed, not a decision to | **Closed by Q272**, same reason. Had it shipped it would have refused; it does not ship |
+| 3 | **Capped 32, or the whole record** | Moot for the Operator on today's History anyway, whose 9 rows are under the cap | **Settled post-14 by the user: the post-14 selection** — one read, one path, no separate whole-record score |
+| 4 | **Per-Meeting averaging first** | Separates on both corpora at the same 0.50, joint window (0.3597, 0.6767) — but it is a change of measure, not of threshold | **Never adopted.** Its own blind spot: contamination uniform across Meetings blends every centroid alike and passes — arguably the likelier real case, one colleague leaking into every call |
+
+**What is actually still open on ticket 13 is not on that list.** It is the
+**residue ticket 15 cannot reach** — an in-room second voice speaks in the far
+end's silences, so no overlap filter marks it and it lands inside the named
+Speaker's own identity (the mirror of Q266's caveat) — together with the two
+blind spots recorded in the ticket file: the quarter, where a record dominated
+three to one mints its dominant voice whatever the minority is, and the
+impurity finding, where both halves of a refused pool are mixed so **a refusal
+is never evidence that a second person is present**.
 
 `min` exemplar-vs-centroid — the measure the guard as first named would most
 naturally use — **inverts** and must not be used: the Operator scores 0.5142
