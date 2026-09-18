@@ -13,7 +13,8 @@ change of selection rule, not of policy — so it is buildable as soon as the
 selection rule is chosen.
 
 **Status:** **built and measured** (Q254, 2026-09-17). The selection rule was
-chosen by the user: round-robin across contributing Meetings, newest Meeting
+chosen by the advisor, for the user: round-robin across contributing Meetings,
+newest Meeting
 first, newest-first within each, until `MAX_EXEMPLARS`. No new constants; the
 cap stays 32. Shipped as `cluster::spread_across_meetings`, called from
 `refresh_voiceprint` only — `centroid`'s signature is unchanged, because its
@@ -122,7 +123,7 @@ recency is currently absolute.
 
 ## Acceptance criteria
 
-- [x] A selection rule is chosen — the user's, Q254
+- [x] A selection rule is chosen — the advisor's, for the user (Q254, re-attributed by Q285)
 - [x] A Speaker heard in several Meetings has a Voiceprint drawn from more than
       one of them — asserted on a fixture through the whole mint path
       (`a_voiceprint_draws_on_every_meeting_the_speaker_was_heard_in`: two
