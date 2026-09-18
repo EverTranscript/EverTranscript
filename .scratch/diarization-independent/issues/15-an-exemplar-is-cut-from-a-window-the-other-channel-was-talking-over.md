@@ -13,8 +13,8 @@ categorical — any overlap drops the window — and the evidence it needs is
 already in the record, because the product transcribes both channels.
 
 **Status:** **built, mic-only, and measured on a rebuilt copy of the real
-History** — Q257 specified it, Q258 escalated the direction and the user ruled
-mic-only, `ea13e2b` built it, Q260 corrected a premise, Q261 measured the
+History** — Q257 specified it, Q258 escalated the direction and the advisor,
+for the user, ruled mic-only, `ea13e2b` built it, Q260 corrected a premise, Q261 measured the
 rebuild. All six acceptance criteria are met. **Not adopted for the real
 History:** the rebuild ran on an isolated copy, and whether the cost below is
 affordable is the open exchange-rate question.
@@ -228,7 +228,7 @@ the user's call in the same way `MATCH_FLOOR` is. Q258 carries it.
       Speakers holding a vector is 6 before and 6 after; the membership trades
       `Menggang Xu`'s recognition for the Operator's
 - [x] Whether the rule is symmetric or mic-only is settled before the drop rate
-      is treated as acceptable. Q258 escalated it; the user ruled **mic-only**,
+      is treated as acceptable. Q258 escalated it; the advisor, for the user, ruled **mic-only**,
       carried by **Q265**, which supersedes Q258 so the choice is recorded in
       one place rather than read as two answers
 

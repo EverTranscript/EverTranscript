@@ -531,7 +531,8 @@ different decisions — so it cannot be merged, only read.
 ### The Voiceprint mint has no agreement check — ticket 13, **not shipping**
 
 **Q257/Q258, 2026-09-17: the defect is upstream, and ticket 15 is where it
-goes.** The user ruled AMI's overlap rate representative and deferred the
+goes.** The advisor, for the user, ruled AMI's overlap rate representative
+and deferred the
 guard, so nothing from ticket 13 ships; `split`, `Split::is_two_voices`,
 `AGREEMENT_FLOOR` and `MINORITY_SHARE` stay on `main` as measurement surface,
 read by nothing. The tell all three measures kept producing: **strict
@@ -595,8 +596,8 @@ overlap system-channel speech (Q249). One Meeting's ending decided an identity.
 
 **The guard is named and deliberately not built** (Q246): one check at the mint
 site, falling through to the `clear_voiceprint` branch that already exists.
-**No choice on this list is open any more** (Q272): the user ruled AMI's
-overlap rate representative, so the guard ships nothing and neither number
+**No choice on this list is open any more** (Q272): the advisor, for the
+user, ruled AMI's overlap rate representative, so the guard ships nothing and neither number
 moves. The list is kept because it records what was measured and why each
 option died, not because anything is waiting on an answer:
 
@@ -704,8 +705,8 @@ call about which capture paths can carry contamination, and it is the user's.
 
 **Shipped 2026-09-17**, `cluster::spread_across_meetings` called from
 `refresh_voiceprint`: round-robin across contributing Meetings, newest Meeting
-first, newest-first within each, until `MAX_EXEMPLARS`. The user chose the
-rule; no new constants, the cap stays 32. On the real History three Speakers
+first, newest-first within each, until `MAX_EXEMPLARS`. The advisor, for the
+user, chose the rule; no new constants, the cap stays 32. On the real History three Speakers
 now draw on more Meetings than the tail gave them (Jack Ahn 3 → 9, Hong Li
 2 → 5, Ming Chen 3 → 5) and the other 24 are under the cap and untouched. It
 **narrowed ticket 13's band to (0.3190, 0.5867)** — see that subsection. What
@@ -786,7 +787,7 @@ handful of very long ones, so it is a weak signal — use the hash. Identify a
 build by the model it expects, not by what it calls itself.
 
 **Runbook: the real re-run, after the attended sign-and-swap (Q267).** The
-user decided this happens. The install is theirs — `bash
+advisor decided this happens, for the user. The install is still theirs — `bash
 ~/EverTranscript-backups/et-sign.sh` (expect `SIGN_OK`; it cannot be done over
 ssh, see `local-macos-install-recipe.md`) then `bash
 ~/EverTranscript-backups/et-swap.sh`. Everything below is the next session's,
