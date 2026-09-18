@@ -3298,7 +3298,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** human
 **Justification:** The user chose this shape over "enrolment first, then fall through" when both were put to them. What the fall-through would cost is specific: rules 1 and 2 are the inference an enrolment was recorded to replace, so a Meeting the enrolment misses would be answered by exactly the guess the Operator paid thirty seconds to stop making — and a miss is not rare, it is what a Meeting the Operator did not speak in looks like. `Nobody` is the truthful answer there. The distinct `Identified` variant follows the file's own stated reason for having three: the rule is part of the answer "because the three differ in how much they are trusted downstream", and an enrolled match is the most trusted thing in the system. Amended into ADR-0029 with the same reasoning, dated.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4bedef7
 
 ## Q290 — diarization/enrolment — deviation
 
@@ -3308,7 +3308,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The gate's own stated reason is about inference, not about evidence in general: "one voice and thirty seconds is a monologue, where a match says nothing the dominance rule does not already say better". Under rule 0 the dominance rule does not run, so there is nothing better to defer to, and gating would make a short solo Meeting return `Nobody` for an Operator who has told the product who they are. This is a deviation from the gate's scope as written, which is why it is here. Contained rather than scattered: `OperatorEvidence::print(gate)` and `::withheld(gate)` are the only two places the gate is consulted, so the gate and the withholding cannot come to disagree at a call site. Guarded against the one case where "an enrolment exists" is not the same as "an enrolment decides": `speakers::is_enrolled` requires exemplars **in the current model space**, so in the window after `MODEL_CHANGE_WIPE` — row present, vectors gone — rule 0 does not fire with nothing to decide from. Tested as `an_enrolment_is_not_the_identity_until_it_is_in_this_models_space`.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4bedef7
 
 ## Q291 — diarization/enrolment — tradeoff
 
@@ -3318,7 +3318,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The user chose "replace: the enrolment is the identity" over joining, and the reason joining loses is that an inference the enrolment was taken to correct would stay inside the identity, weighted, invisibly. The plan's wording for that was blunter than the record can afford. A negative exemplar is not a learned inference: it is the Operator having said "that voice was not me", which is an act of exactly the kind this feature exists to privilege, which ADR-0009 protects, and which `centroid` already excludes from the Voiceprint — so keeping it costs the new identity nothing and deleting it would discard an Operator correction on the way to honouring an Operator statement. **What replacing costs, named:** on `macbook-pro-nickel`, the fleet's only populated History, the Operator currently holds **139** exemplars earned back by Q288's 17-minute re-run. Enrolling there deletes all of them. That is why this change ships with no enrolment run against the real History: it is the user's call, not a test step. **Never `delete_voiceprint`**, which sets `forgotten = 1` and would make `relearnable` exclude the Operator from every future re-run; `refresh_voiceprint` rebuilds from what is left and calls `clear_voiceprint` when nothing is.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4bedef7
 
 ## Q292 — diarization/enrolment — tradeoff
 
@@ -3328,7 +3328,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** human
 **Justification:** The user chose to keep it, and what it buys is the structural answer to Q236. `MODEL_CHANGE_WIPE` takes every vector and every exemplar because old and new cannot be compared; a recording is not a vector, so it survives, and `Core::remint_the_enrolment` re-analyses it on the next start — seconds of work — before the backlog is enqueued. The Operator is recognized again before the first Meeting is walked, where Q236's escalation had them unnamed across four Meetings for the length of a 17-minute re-run. Re-analysed rather than re-embedded: the spans lived on the exemplars the wipe deleted, and the new model's own segmentation is what every other voice is about to be cut by. **What it costs is a disclosure, and it is a real one.** ADR-0011 folds voice-profiling disclosure into the Briefing, and that copy describes a mathematical fingerprint; agreeing to a fingerprint is not agreeing to a recording of yourself kept indefinitely. Both Briefings now carry a paragraph saying the clip is kept, what it is for, that the step is optional, and that deleting the Voiceprint removes it — asserted by `both_briefings_disclose_the_kept_enrolment_recording`, so the disclosure cannot be dropped silently. ADR-0011 amended, dated.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4bedef7
 
 ## Q293 — diarization/enrolment — gate-resolution
 
@@ -3338,7 +3338,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** A third `source` value means rebuilding a `STRICT` table with a `CHECK`, on every History in the field, to record something two existing columns already say unambiguously: `from_operator` is set by corrections and by this, and corrections always carry a Meeting, so `meeting_id IS NULL` separates them with no new state. Three existing behaviours then hold by construction rather than by a case added to each: `spread_across_meetings` already gives NULL-Meeting exemplars their own bucket, `delete_machine_exemplars` only touches `source = 'machine'` so a bulk re-run cannot take an enrolment, and `stale_exemplars` cannot rebuild one from a Meeting that does not exist. The side table exists because the clip's path has nowhere else to live — `speaker_exemplars.sample_*` are offsets into a Meeting's audio, and a Meeting is what this has none of. **One behaviour did have to be taught the case:** `speaker/sample` and `has_sample` both resolved through `sample_source`, which requires a `meeting_id`, so the one row in the Registry holding a biometric the Operator deliberately gave was the one row that could not be played back. Both now ask the enrolment first.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4bedef7
 
 ## Q294 — diarization/enrolment — deviation
 
@@ -3348,4 +3348,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Editing somebody's assertion needs the reason it was written, and the doc gives it: "a wipe registered without its re-run directly behind it leaves a History nobody is recognized in". That is adjacency and order. The danger is a migration landing *between* them; one landing *after* is what appending a migration is. "Last" was true when written and was never the invariant. Inserting `THE_ENROLMENT` before the pair was rejected outright — migrations are applied by position, and renumbering one that has already run on `macbook-pro-nickel` would be the genuinely unsafe option.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 4bedef7
