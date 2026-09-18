@@ -12,7 +12,7 @@ vector filed under a confirmed name wins the ties it should lose.
 **Blocked by:** nothing technically. It is blocked on the user: three choices
 below have to be made before there is anything to build.
 
-**Status:** **held for user.** Named in Q246, measured in Q247, sharpened by
+**Status:** **held for user — and the choice list grew to four.** The measure itself is now open: the one specified was built, failed its AMI gate and was withdrawn before shipping (Q255). Named in Q246, measured in Q247, sharpened by
 Q248 and Q249. Deliberately not built — every remaining question is a
 judgement about what a Speaker silently loses, which is the same kind of call
 as `MATCH_FLOOR` and is not the agent's to take.
@@ -95,6 +95,69 @@ Nothing here is a default an agent should pick.
    pairwise against the capped slice's 0.4426, so the whole record makes the
    incoherence plainer and keeps the wider band — at the cost of refusing a
    Speaker over rows the mint would never have used.
+
+## The AMI gate refused the specified measure — Q255, 2026-09-17
+
+The guard was built as specified and then **withdrawn before shipping**,
+because AMI refused it. `agreement` and `AGREEMENT_FLOOR` are on `main` as a
+measurement primitive and a documented candidate; `refresh_voiceprint` does
+not read them, and mints exactly as it did before.
+
+**What AMI says.** Sixteen global reference speakers, each one real person
+heard in four of the sixteen meetings. One pass at production settings, 5644
+observations, each attributed to the reference speaker whose speech it covers.
+Scored in the shape the guard binds on — one exemplar per attributed range,
+which is what `reseed.rs` writes and what every over-cap Speaker on the real
+History is made of — **seven of sixteen fall under 0.50**:
+
+| speaker | mean pairwise | | speaker | mean pairwise |
+|---|---|---|---|---|
+| FEO070 | 0.3759 | | MEE073 | 0.4644 |
+| MTD0010ID | 0.4153 | | FIO089 | 0.4731 |
+| FIO084 | 0.4192 | | MTD012ME | 0.4938 |
+| MEE071 | 0.4458 | | | |
+
+Attribute windows without requiring them to be single-voice and **all sixteen**
+fall, down to 0.2081 — below the contaminated Operator's 0.3190.
+
+**No threshold move rescues it.** A threshold must sit above 0.3190 and below
+the weakest legitimate speaker. Strict attribution leaves a window 0.057 wide;
+permissive leaves none. Mean pairwise over raw exemplars measures how hard the
+audio is at least as much as whether the evidence is one voice, and AMI's
+far-field meeting rooms are harder than the calls this product records. The six
+clean-channel controls on the real History could not show that, which is what
+the AMI gate was for.
+
+**Three aggregations, both corpora.** Only the middle one separates:
+
+| aggregation | Operator | weakest real control | AMI floor (strict / permissive) | joint window |
+|---|---|---|---|---|
+| raw mean pairwise *(specified)* | 0.3190 | 0.5867 | 0.3759 / 0.2081 | 0.057 wide / **empty** |
+| **per-Meeting average** | 0.3597 | 0.7474 | 0.6813 / 0.6767 | **(0.3597, 0.6767)**, 0.317 wide |
+| minimum pairwise | −0.1216 | 0.1318 | −0.1740 / −0.2294 | **empty** |
+
+The user's predeclared 0.50 sits inside the per-Meeting window by 0.140 and
+0.177. **Adopting it is a change of measure, not of threshold, so it is a
+fourth choice for the user** — and it carries its own blind spot:
+contamination that is uniform across Meetings blends every Meeting's centroid
+the same way, so the centroids agree and it passes. That is arguably the
+likelier real case, one colleague leaking into every call.
+
+**A blind spot in the specified measure too**, pinned as
+`a_dominant_contaminating_voice_slips_past_mean_pairwise`. Two orthogonal
+voices in an `m:n` split score `[C(m,2)+C(n,2)]/C(m+n,2)`, which *rises* as the
+split gets more lopsided while the minority's cosine to the blend falls:
+
+| split | mean pairwise | guard at 0.50 | minority vs the blend | keeps own name? |
+|---|---|---|---|---|
+| 4:5 | 0.4444 | refuse | 0.6247 | yes |
+| 3:6 | 0.5000 | pass (exactly on it) | 0.4472 | no |
+| 2:7 | 0.6111 | pass | 0.2747 | no |
+| 1:8 | 0.7778 | pass | 0.1240 | no |
+
+It refuses the split where the minority keeps its name and passes every split
+where they lose it, and 2:7's 0.6111 is above the 0.5867 the weakest real
+control scores — so this cannot be tuned out either.
 
 ## The band after ticket 14 landed
 

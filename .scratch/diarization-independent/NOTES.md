@@ -530,6 +530,19 @@ different decisions — so it cannot be merged, only read.
 
 ### The Voiceprint mint has no agreement check — ticket 13, held for user
 
+**Q255, 2026-09-17: the guard was built, failed its AMI gate, and was
+withdrawn before shipping.** `agreement` (mean pairwise cosine over the
+post-14 selected exemplars) and `AGREEMENT_FLOOR = 0.50` are on `main`;
+`refresh_voiceprint` does not read them and mints exactly as before. AMI's
+sixteen reference speakers are sixteen real people and **seven score under
+0.50** in the shape the guard binds on, down to 0.3759 — or all sixteen down
+to 0.2081 if windows are attributed without requiring them to be
+single-voice, which is *below* the contaminated Operator's 0.3190. No
+threshold move rescues it. Averaging each Meeting's exemplars first does
+separate on both corpora at that same 0.50, joint window (0.3597, 0.6767) —
+but that is a change of measure, so **the choice list is four items now, not
+three**. Full distribution and the two blind spots in the ticket file.
+
 **Q246–Q249, 2026-09-17.** Found while verifying ticket 12, not by that
 ticket's own criteria, which is why 12 reads as met above and this is separate.
 Ticket file: `issues/13-a-voiceprint-is-not-minted-from-exemplars-that-disagree.md`.
