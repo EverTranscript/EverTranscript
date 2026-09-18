@@ -27,31 +27,66 @@ use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
 use evertranscript_protocol::AudioChannel;
 
-/// A directory holding the pair under the names `Core` looks for.
+/// The segmentation and embedding models, wherever this machine keeps them.
 ///
-/// `EVERTRANSCRIPT_DIARIZE_MODELS` first, so a machine that keeps them
-/// elsewhere can say so; then the real install, which is where they are on a
-/// developer's Mac. Note the filenames differ from the ones
-/// `diarize::live`'s own gate wants — that gate loads `LiveDiarizer`
-/// directly, this one goes through `Core`, which names them `diarize-*`.
-fn models_dir() -> Option<std::path::PathBuf> {
-    let candidates = [
+/// Two namings, because two callers want different ones and both are right.
+/// `EVERTRANSCRIPT_DIARIZE_MODELS` is CI's, and CI fills it with
+/// `segmentation.onnx` and `embedding.onnx` — the names `diarize::live`'s own
+/// model tests look for, which load `LiveDiarizer` directly. `Core` names
+/// them `diarize-segmentation.onnx` and `diarize-embedding.onnx`, because
+/// that is what the model registry downloads into a real install.
+///
+/// Accepting only the second would make this test skip on CI, which is the
+/// one machine that fetches the pair on every run — and a test that always
+/// skips is a test that exists and does not run.
+fn find_models() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    let dirs = [
         std::env::var_os("EVERTRANSCRIPT_DIARIZE_MODELS").map(std::path::PathBuf::from),
         Some(evertranscript_core::paths::models_dir()),
     ];
-    candidates.into_iter().flatten().find(|dir| {
-        dir.join("diarize-segmentation.onnx").exists()
-            && dir.join("diarize-embedding.onnx").exists()
-    })
+    for dir in dirs.into_iter().flatten() {
+        for (segmentation, embedding) in [
+            ("diarize-segmentation.onnx", "diarize-embedding.onnx"),
+            ("segmentation.onnx", "embedding.onnx"),
+        ] {
+            let pair = (dir.join(segmentation), dir.join(embedding));
+            if pair.0.exists() && pair.1.exists() {
+                return Some(pair);
+            }
+        }
+    }
+    None
+}
+
+/// A directory holding the pair under the names `Core` looks for.
+///
+/// Linked rather than copied where the filesystem allows it: the pair is
+/// 24 MB and this runs on every CI job. A hard link fails across
+/// filesystems — `RUNNER_TEMP` and the test's own temporary directory need
+/// not share one — so a copy is the fallback rather than the default.
+fn models_dir_for_core(under: &std::path::Path) -> Option<std::path::PathBuf> {
+    let (segmentation, embedding) = find_models()?;
+    let dir = under.join("models");
+    std::fs::create_dir_all(&dir).expect("models dir");
+    for (from, name) in [
+        (segmentation, "diarize-segmentation.onnx"),
+        (embedding, "diarize-embedding.onnx"),
+    ] {
+        let to = dir.join(name);
+        if std::fs::hard_link(&from, &to).is_err() {
+            std::fs::copy(&from, &to).expect("place the model where Core looks for it");
+        }
+    }
+    Some(dir)
 }
 
 macro_rules! models_or_skip {
-    () => {
-        match models_dir() {
+    ($found:expr) => {
+        match $found {
             Some(dir) => dir,
             None => {
                 eprintln!(
-                    "SKIPPED: no diarize-segmentation.onnx / diarize-embedding.onnx in \
+                    "SKIPPED: no segmentation/embedding ONNX pair in \
                      EVERTRANSCRIPT_DIARIZE_MODELS or {}",
                     evertranscript_core::paths::models_dir().display()
                 );
@@ -87,8 +122,8 @@ fn store(history_dir: &std::path::Path) -> rusqlite::Connection {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn an_enrolment_survives_the_model_change_that_takes_every_vector() {
-    let models = models_or_skip!();
     let dir = tempfile::tempdir().expect("tempdir");
+    let models = models_or_skip!(models_dir_for_core(dir.path()));
     let history_dir = dir.path().join("History");
     let core = core_with_models(history_dir.clone(), models);
 
