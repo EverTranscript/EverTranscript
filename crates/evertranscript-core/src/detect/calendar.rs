@@ -17,6 +17,14 @@
 //! An event title is content, and this is the one place the product reads
 //! any — under a grant the Operator may decline, which ADR-0036 made the
 //! honest wording of Nothing Ambient.
+//!
+//! Two rules here are ADAPTED from `fastrepl/anarlog`, Copyright (c)
+//! 2023-present Fastrepl, Inc., licensed MIT: skipping an event the
+//! Operator declined (`crates/calendar/src/convert.rs`,
+//! `apple_self_attendance_status`, rev `b7586718d5`) and reading an
+//! EventKit title as nullable (`crates/apple-calendar/src/apple/transforms/
+//! utils.rs`, `objc_title`, rev `d5fa9979b8`). The Windows half of the
+//! first is ours: anarlog has no Windows calendar. See `PORTS.md`.
 
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
@@ -56,6 +64,9 @@ struct Reading {
     starts_in: f64,
     ends_in: f64,
     all_day: bool,
+    /// The Operator answered the invitation with a no. An event they
+    /// organize, or one with no reply from them at all, is not declined.
+    declined: bool,
 }
 
 /// What changed since the last reading: a meeting in progress is announced
@@ -78,6 +89,14 @@ fn changes(
         // otherwise arm at midnight and name whatever is recorded that day.
         // anarlog skips them on every path that acts on an event.
         if reading.all_day || reading.starts_in > 0.0 || reading.ends_in <= 0.0 {
+            continue;
+        }
+        // The Operator said they would not attend. Armed, it would announce a
+        // recording for a meeting they skipped, nag when none started, and
+        // could name the call they did join after it. anarlog refuses to act
+        // on a declined event for the same reason. A meeting declined after it
+        // armed drops out of `live` here, so it ends.
+        if reading.declined {
             continue;
         }
         live.insert(reading.id.clone());
@@ -165,11 +184,15 @@ mod eventkit {
     use std::panic::AssertUnwindSafe;
 
     use super::*;
+    use objc2::msg_send;
     use objc2::rc::Retained;
     use objc2_event_kit::EKAuthorizationStatus;
     use objc2_event_kit::EKEntityType;
+    use objc2_event_kit::EKEvent;
     use objc2_event_kit::EKEventStore;
+    use objc2_event_kit::EKParticipantStatus;
     use objc2_foundation::NSDate;
+    use objc2_foundation::NSString;
     use tracing::warn;
 
     thread_local! {
@@ -248,6 +271,36 @@ mod eventkit {
         }
     }
 
+    /// An event's title, nil read as empty. The binding types `title` as
+    /// never nil, the header leaves it `null_unspecified`, and a nil there
+    /// would panic inside the poll. anarlog's crash ANARLOG-1T52 was this on
+    /// a calendar source's title; its fix reads every EventKit title this
+    /// way, events included. Empty falls through to "Untitled event".
+    fn title_of(event: &EKEvent) -> String {
+        let title: Option<Retained<NSString>> = unsafe { msg_send![event, title] };
+        title.map(|title| title.to_string()).unwrap_or_default()
+    }
+
+    /// Whether the Operator declined, as anarlog's
+    /// `apple_self_attendance_status` reads it: an event they organize is
+    /// never declined, otherwise it is their own attendee entry's answer.
+    fn declined(event: &EKEvent) -> bool {
+        unsafe {
+            if event
+                .organizer()
+                .is_some_and(|organizer| organizer.isCurrentUser())
+            {
+                return false;
+            }
+            event.attendees().is_some_and(|list| {
+                list.iter().any(|attendee| {
+                    attendee.isCurrentUser()
+                        && attendee.participantStatus() == EKParticipantStatus::Declined
+                })
+            })
+        }
+    }
+
     /// Events that began within the lookback, or `None` when the store
     /// could not be read this time.
     pub fn read() -> Option<Vec<Reading>> {
@@ -281,7 +334,7 @@ mod eventkit {
                 .filter_map(|event| {
                     Some(Reading {
                         id: event.eventIdentifier()?.to_string(),
-                        title: event.title().to_string(),
+                        title: title_of(&event),
                         attendees: event
                             .attendees()
                             .map(|list| {
@@ -295,6 +348,7 @@ mod eventkit {
                         starts_in: event.startDate().timeIntervalSinceNow(),
                         ends_in: event.endDate().timeIntervalSinceNow(),
                         all_day: event.isAllDay(),
+                        declined: declined(&event),
                     })
                 })
                 .collect();
@@ -329,6 +383,7 @@ mod eventkit {
 mod eventkit {
     use super::*;
     use windows::ApplicationModel::Appointments::AppointmentManager;
+    use windows::ApplicationModel::Appointments::AppointmentParticipantResponse;
     use windows::ApplicationModel::Appointments::AppointmentProperties;
     use windows::ApplicationModel::Appointments::AppointmentStore;
     use windows::ApplicationModel::Appointments::AppointmentStoreAccessType;
@@ -434,6 +489,7 @@ mod eventkit {
                 AppointmentProperties::Duration(),
                 AppointmentProperties::AllDay(),
                 AppointmentProperties::Invitees(),
+                AppointmentProperties::UserResponse(),
             ]
             .into_iter()
             .flatten()
@@ -481,6 +537,11 @@ mod eventkit {
                     starts_in: seconds(start - now),
                     ends_in: seconds(end - now),
                     all_day: appointment.AllDay().unwrap_or(false),
+                    // The Operator's own answer to the invitation; an
+                    // appointment they organize answers `None`.
+                    declined: appointment
+                        .UserResponse()
+                        .is_ok_and(|response| response == AppointmentParticipantResponse::Declined),
                 })
             })
             .collect();
@@ -631,6 +692,7 @@ mod tests {
             starts_in,
             ends_in,
             all_day: false,
+            declined: false,
         }
     }
 
@@ -685,6 +747,46 @@ mod tests {
             ..reading("holiday", -3600.0, 72_000.0)
         };
         assert!(changes(&mut BTreeMap::new(), vec![holiday], DetectionInstant(0)).is_empty());
+    }
+
+    #[test]
+    fn a_declined_meeting_never_arms() {
+        let mut announced = BTreeMap::new();
+        let at = DetectionInstant;
+        // Sorts first, so armed it would name the Meeting the Operator
+        // joined: the policy claims the first armed event by id.
+        let declined = Reading {
+            declined: true,
+            ..reading("declined", -10.0, 1790.0)
+        };
+        let started = changes(
+            &mut announced,
+            vec![declined, reading("joined", -10.0, 1790.0)],
+            at(0),
+        );
+        assert!(
+            matches!(
+                &started[..],
+                [DetectionEvent::CalendarEventStarted { event, .. }] if event.id == "joined"
+            ),
+            "{started:?}"
+        );
+    }
+
+    #[test]
+    fn declining_an_armed_meeting_ends_it() {
+        let mut announced = BTreeMap::new();
+        let at = DetectionInstant;
+        changes(&mut announced, vec![reading("e", -10.0, 1790.0)], at(0));
+        let now_declined = Reading {
+            declined: true,
+            ..reading("e", -40.0, 1760.0)
+        };
+        let ended = changes(&mut announced, vec![now_declined], at(30_000));
+        assert!(
+            matches!(&ended[..], [DetectionEvent::CalendarEventEnded { id, .. }] if id == "e"),
+            "{ended:?}"
+        );
     }
 
     #[test]
