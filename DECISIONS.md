@@ -3408,7 +3408,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** Frank (approved `UH-2026-10-02`, "both items"); agent (the narrowing and the shape)
 **Justification:** anarlog's gate is strict because its calendar starts recordings. Ours only arms and names (ADR-0036), so pending or unknown is not a reason to refuse: blocking them would stop naming every internal invite nobody answers and every personal event with no attendees. Declined is the one answer that says the Operator will not be there, and arming on it cost three things — the heads-up announcing a recording for a meeting they skipped, the "nothing is recording" follow-up two minutes later, and, when it overlapped the call they did join, the wrong name on that Meeting, because `claim_armed_event` takes the first armed event by id. `a_declined_meeting_never_arms` gives the declined event the lower id so it is exactly that case; `declining_an_armed_meeting_ends_it` covers a reply sent mid-meeting, which drops the event from `live` so `CalendarEventEnded` follows. Both were run with the skip removed and both failed. The nil title is not hypothetical: objc2-event-kit 0.3.2 types `title` as non-null and `EKCalendarItem.h` marks it `null_unspecified`, so a nil there panicked inside the poll. The strict gate is recorded under `PORTS.md`'s "Not ported, deliberately".
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** bf405bf
 
 ## Q301 — upstream-harvest/01-declined-meetings-and-nil-titles — escalation
 
@@ -3418,4 +3418,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The unit tests cover `changes`, the rule, and nothing below it. No CI host has a calendar store, and no API mints a nil-title `EKEvent`, so the reads are untested by anything automatic; a seam over the store would move the boundary without producing a declined event. The Windows half was type-checked on its own instead — a scratch crate on `windows = "=0.62.2"` with the workspace's features passes `cargo clippy --target x86_64-pc-windows-msvc -- -D warnings` — because the workspace cannot cross-compile (`scripts/check.sh`: `mp3lame-sys`), and CI runs on `main` and pull requests only, which this topic branch is neither. What closes it: one declined event on this Mac confirmed not to arm, and the branch's first native Windows build.
 **Outcome:** escalated
-**Ref:** (pending)
+**Ref:** bf405bf
