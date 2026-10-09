@@ -58,8 +58,25 @@ jobs:
       # Core is the process that records and runs at login without a window,
       # so an installer carrying only the Client would install a UI for a
       # product that is not there.
+      #
+      # On Windows, whisper.cpp is built for a CPU baseline rather than for
+      # this runner: left native, it compiles in whatever this runner has,
+      # AVX-512 included, and an Operator's machine without it crashes the
+      # first time it transcribes (DECISIONS Q310). `GGML_NATIVE=OFF` leaves
+      # ggml's defaults, the AVX2 set. The sidecar's llama.cpp already builds
+      # this way. macos-14 is an M1, the oldest Apple Silicon there is.
       - name: Build the Core and the sidecar
-        run: cargo build --release -p evertranscript -p evertranscript-summarizer
+        shell: bash
+        run: |
+          [[ "${{ runner.os }}" == "Windows" ]] && export GGML_NATIVE=OFF
+          cargo build --release -p evertranscript -p evertranscript-summarizer
+
+      - name: whisper.cpp was built for the baseline
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          caches=$(ls target/*/build/whisper-rs-sys-*/out/build/CMakeCache.txt)
+          ! grep -H 'GGML_NATIVE:BOOL=ON\|GGML_AVX512:BOOL=ON' $caches
 
       - name: Stage the binaries
         shell: bash

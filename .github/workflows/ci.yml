@@ -40,7 +40,24 @@ jobs:
           rustup toolchain install --no-self-update
           rustc --version && cargo clippy --version && cargo fmt --version
 
+      # **whisper.cpp builds for the machine that builds it, unless told
+      # otherwise.** whisper-rs-sys leaves ggml's `GGML_NATIVE` on, and on
+      # MSVC that probes this runner for AVX-512 and compiles it in. The Rust
+      # cache then carried that build to a runner without it, and
+      # `transcription_quality` died with STATUS_ILLEGAL_INSTRUCTION on a
+      # commit that changed only Markdown (DECISIONS Q310). Off, ggml's own
+      # defaults are the AVX2 set without AVX-512. Windows only: macos-14 is
+      # an M1, the oldest Apple Silicon there is.
+      - name: Build whisper.cpp for a CPU baseline, not this runner
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "GGML_NATIVE=OFF" >> "$GITHUB_ENV"
+
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Bumped when a build input the cache key cannot see changes.
+          # whisper-rs-sys reads `GGML_*` but never reruns for it (Q310).
+          prefix-key: v1-rust
 
       # **A test-only dependency, and the distinction is the whole point.**
       # ADR-0032 was reversed to take ffmpeg out of the *product* — the Core
@@ -75,6 +92,16 @@ jobs:
 
       - name: Lints
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Clippy has run whisper.cpp's CMake by now. A cache restored from
+      # before Q310, or a whisper-rs-sys that stops forwarding `GGML_*`, would
+      # otherwise go unnoticed until a runner with a different CPU.
+      - name: whisper.cpp was built for the baseline
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          caches=$(ls target/*/build/whisper-rs-sys-*/out/build/CMakeCache.txt)
+          ! grep -H 'GGML_NATIVE:BOOL=ON\|GGML_AVX512:BOOL=ON' $caches
 
       # M2 ended by discovering that Windows detection had never worked at
       # all while every CI run was green, because the code compiled, linked,

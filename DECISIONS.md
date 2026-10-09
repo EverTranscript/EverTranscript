@@ -3500,3 +3500,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Run alone it failed 5 of 5 times, so this is not timing. mac-mini-m6 has no input device (`system_profiler SPAudioDataType` lists only its speakers). `LiveSource::start` returns Ok when either leg starts, and the system-audio tap starts there, so the test's skip never fired and it waited for a microphone hold that could not happen. It passed only when another test in the parallel suite happened to be capturing input. After the change it skips 3 of 3 runs on this Mac, and on a machine with a microphone it checks the same thing as before.
 **Outcome:** applied
 **Ref:** 6799bc8
+
+## Q310 — interactive/windows-sigill — deviation
+
+**Question:** Windows CI on 72e0b28, a commit that changed only Markdown, died in `transcription_quality` with STATUS_ILLEGAL_INSTRUCTION. Retry it, or fix how whisper.cpp is built?
+**Options considered:** re-run the job / turn off `GGML_NATIVE` on Windows with ggml's AVX2 defaults / name each instruction set by hand / build all CPU variants and pick one at run time
+**Chosen:** **`GGML_NATIVE=OFF` on Windows, in CI and in packaging, which leaves ggml's defaults: SSE4.2, AVX, AVX2, BMI2, FMA and F16C, without AVX-512.** CI's Rust cache prefix moves to `v1-rust`, and both workflows check whisper.cpp's CMake cache for `GGML_NATIVE` or `GGML_AVX512` set to ON. macOS stays native.
+**Decided-by:** human
+**Justification:** whisper-rs-sys 0.15.0 never sets `GGML_NATIVE`, so ggml defaults it to ON, and on MSVC that runs `FindSIMD.cmake` against the build machine. The failing job restored a full-match Rust cache and did not recompile whisper.cpp, and the same code had passed one run before. So code built on one runner's CPU ran on another's, which is very likely the cause; the log does not name either CPU. `package.yml` built the shipped Windows binaries the same way, so v1.0.0 and v1.0.1 may carry instructions some Operators' CPUs lack. That is not verified. A re-run could pass on a matching runner and hide all of this. whisper-rs-sys forwards `GGML_*` to CMake but never reruns for it, so the cache key had to move. Checked locally: with `GGML_NATIVE=OFF` the CMake cache reads NATIVE OFF, AVX2 ON and AVX512 OFF, and the guard fails on this Mac's native build and passes on a baseline one. The sidecar's llama-cpp-sys-2 already turns `GGML_NATIVE` off. macos-14 runners are M1, the oldest Apple Silicon there is. The user approved the AVX2 floor, which drops CPUs from before about 2013.
+**Outcome:** applied
+**Ref:** (pending)
