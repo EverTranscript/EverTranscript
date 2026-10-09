@@ -53,8 +53,6 @@
 //! set-but-missing fails, because CI sets it and a silent skip would report
 //! success for work that never happened (DECISIONS Q43).
 
-#![cfg(unix)]
-
 use std::path::Path;
 use std::path::PathBuf;
 

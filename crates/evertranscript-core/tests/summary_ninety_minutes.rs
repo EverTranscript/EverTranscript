@@ -44,8 +44,6 @@
 //! question answered fifty seconds later falls between two chunks that each
 //! see half of it. See DECISIONS Q61.
 
-#![cfg(unix)]
-
 use std::path::Path;
 use std::path::PathBuf;
 

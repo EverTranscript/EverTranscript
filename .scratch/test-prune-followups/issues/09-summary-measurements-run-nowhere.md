@@ -1,6 +1,6 @@
 # 09: The two 4B summary measurements run in no CI job
 
-Status: needs-triage
+Status: done: both ungated (DECISIONS Q312)
 
 Found while doing ticket 07 (DECISIONS Q308).
 
@@ -23,5 +23,16 @@ The gate has no platform reason: `summary_quality.rs` even has a
   turning it on.
 - **Keep them manual:** say so in each file's header, and stop implying CI
   covers them.
+
+## Answer
+
+**Both ungated.** On Windows, `summary_quality` now runs the measurement CI
+already asks for. `summary_ninety_minutes` adds only its two fixture checks
+there, because its generation has its own switch,
+`EVERTRANSCRIPT_MEASURE_NINETY_MINUTES`, that no workflow sets.
+
+Cost: `summary_inference` took 267 s on Windows in run 37984670056, and the
+Tests step took about 23 of its 55 minutes. The quality suite adds one model
+load and five generations, about 10 minutes by estimate.
 
 ## Comments
