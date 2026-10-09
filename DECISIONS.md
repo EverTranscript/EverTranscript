@@ -3529,4 +3529,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Neither file has a platform reason for the gate: no unix API, and `summary_quality` already names the Windows sidecar with `cfg!(windows)`. CI's own configuration says the quality measurement "goes where the model can actually run", and the gate silently undid that on the day it was written (8089425 and 5fe121b, both 2026-09-01). Cost, measured on run 37984670056: `summary_inference` loaded the 4B and generated in 267 s on Windows, and the whole Tests step took about 23 minutes of its 55. The quality suite is one more load and five generations, an estimated 10 minutes. The quality checks are allowed to fail when the model is bad, and they have never run on Windows CPU inference, so this lands through a pull request and reaches `main` only if that run passes.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 52ea41f
