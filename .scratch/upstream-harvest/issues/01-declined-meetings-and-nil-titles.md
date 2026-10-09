@@ -34,12 +34,14 @@ reads every EventKit title as nullable, events included.
   EventKit and WinRT property reads are untested by anything automatic. The
   nil-title path cannot be reached from a test either: no API mints a nil-title
   `EKEvent`
-- [ ] **Windows half not compiled in place.** CI runs on `main` and pull
+- [x] **Windows half compiled in place, 2026-10-09:** CI run 37981072811
+  (d2c172e) built and tested it natively on `windows-latest`, and it passed.
+  Before that: CI runs on `main` and pull
   requests only, and this branch has neither; the workspace cannot
   cross-compile (`scripts/check.sh`: `mp3lame-sys`). The WinRT lines were
   type-checked on their own instead: a scratch crate on `windows = "=0.62.2"`
   with the same features passes `cargo clippy --target x86_64-pc-windows-msvc
-  -- -D warnings`. CI's native Windows build is what closes this.
+  -- -D warnings`.
 
 Gate, 2026-10-06 on mac-mini-m6, as separate steps: `cargo fmt --all
 --check`, `cargo build --workspace --all-targets` and `cargo clippy
