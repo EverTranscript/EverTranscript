@@ -316,10 +316,12 @@ mod tests {
         // fiction inside a parallel suite. An absolute claim is the one that
         // is actually true.
 
+        // Microphone only: `start` succeeds on system audio alone, which on
+        // a Mac with no microphone left nothing for the detector to see.
         let mut source = crate::audio::live::LiveSource::new();
         let (events, _rx) = tokio::sync::mpsc::channel(64);
         if source
-            .start(crate::audio::CaptureClock::start(), events)
+            .start_microphone_only(crate::audio::CaptureClock::start(), events)
             .is_err()
         {
             eprintln!("skipping: this machine cannot open a microphone");

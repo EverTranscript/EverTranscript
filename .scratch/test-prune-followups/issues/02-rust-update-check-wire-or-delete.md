@@ -1,6 +1,6 @@
 # 02: The Rust update check `updates::check`: wire it in or delete it
 
-Status: needs-triage
+Status: done: deleted (DECISIONS Q306)
 
 Found by the test prune of 2026-10-09 (DECISIONS Q302–Q304, commit 0e95de2).
 
@@ -23,5 +23,12 @@ names.
 - **Delete it:** remove `check`, `UpdateStatus` and their tests. Keep
   `UPDATE_FEED_HOST` while the Electron client still contacts that host,
   because `posture.rs` declares it.
+
+## Answer
+
+**Deleted.** `check`, `UpdateStatus`, `UPDATE_FEED_PATH`, `CHECK_TIMEOUT` and
+their three tests are gone, along with the test that called GitHub on every
+run. `UPDATE_FEED_HOST` stays, because the trust surface shows it. Two comments
+in `clients/electron/src/main/` no longer mention a check in the Core.
 
 ## Comments

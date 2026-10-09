@@ -146,6 +146,30 @@ async fn unknown_methods_are_reported_not_fatal() {
 }
 
 #[tokio::test]
+async fn malformed_params_are_reported_not_fatal() {
+    let core = TestCore::start().await;
+    let mut client = core.client().await;
+    client
+        .initialize("test-client", "0.0.0")
+        .await
+        .expect("initialize");
+
+    let error = client
+        .request::<serde_json::Value>("meeting/get", Some(serde_json::json!({ "id": 5 })))
+        .await
+        .expect_err("a number where the id is a string must error");
+    assert!(
+        error
+            .to_string()
+            .contains(&error_codes::INVALID_PARAMS.to_string()),
+        "expected INVALID_PARAMS, got: {error}"
+    );
+
+    let status = client.status().await.expect("status still works");
+    assert_eq!(status.state, CoreState::Idle);
+}
+
+#[tokio::test]
 async fn many_clients_attach_concurrently() {
     let core = TestCore::start().await;
 

@@ -1468,8 +1468,10 @@ mod tests {
     #[test]
     fn a_stranger_becomes_a_new_speaker_rather_than_the_nearest_match() {
         // The failure that costs trust: everyone the system does not know
-        // being confidently labelled as the person it knows best.
-        let this_meeting = clusters(&[(0, &[0.0, 0.0, 1.0])]);
+        // being confidently labelled as the person it knows best. Cosine 0.5
+        // with no runner-up clears the margin and is mutual, so only the
+        // floor can refuse it.
+        let this_meeting = clusters(&[(0, &[0.5, 0.0, 0.866])]);
         let history = vec![seed("alice", &[1.0, 0.0, 0.0], true)];
         assert_eq!(resolve(&this_meeting, &history)[&Cluster(0)], Resolved::New);
     }

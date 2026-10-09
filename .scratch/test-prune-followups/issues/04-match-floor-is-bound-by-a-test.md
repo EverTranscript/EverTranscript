@@ -1,6 +1,6 @@
 # 04: A test fails when `MATCH_FLOOR` stops being applied
 
-Status: ready-for-agent
+Status: done
 
 Found by a preservation review during the test prune of 2026-10-09. This gap
 existed before the prune.
@@ -22,5 +22,11 @@ fails the margin rule first. The floor never decides those cases.
   the floor makes the result `New`.
 - Check it: with `clears_floor` replaced by `true` the test fails, and with the
   code restored it passes.
+
+## Answer
+
+The stranger now sits at cosine 0.5 to its one seed (`[0.5, 0.0, 0.866]`).
+Checked: with `clears_floor` replaced by `true` the test fails, and with the
+code restored it passes.
 
 ## Comments

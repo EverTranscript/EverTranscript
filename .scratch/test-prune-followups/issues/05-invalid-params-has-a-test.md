@@ -1,6 +1,6 @@
 # 05: A request with bad params gets `-32602` and the connection survives
 
-Status: ready-for-agent
+Status: done
 
 Found by a preservation review during the test prune of 2026-10-09. This gap
 existed before the prune.
@@ -16,5 +16,12 @@ params. `tests/protocol_contract.rs:124`
   `meeting/get` with params of the wrong shape (for example `{"id": 5}`).
 - Assert that the error contains `INVALID_PARAMS`, and that `client.status()`
   still answers `Idle` afterwards, as the unknown-method test does.
+
+## Answer
+
+`malformed_params_are_reported_not_fatal` in `tests/protocol_contract.rs`
+sends `meeting/get` with `{"id": 5}` and expects `INVALID_PARAMS`, and then
+expects `status` to still answer `Idle`. Checked: mapping that arm to
+`METHOD_NOT_FOUND` fails it.
 
 ## Comments

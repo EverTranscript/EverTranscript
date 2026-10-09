@@ -1,6 +1,6 @@
 # 07: `tests/summary_chunking.rs` runs on Windows
 
-Status: ready-for-agent
+Status: done: ungated; Windows CI still to confirm (DECISIONS Q308)
 
 Found by a preservation review during the test prune of 2026-10-09.
 
@@ -28,5 +28,16 @@ builds the endpoint as a file path (`dir.path().join("s")`, `:260`), and
 - Check that the Windows CI job runs this file and passes.
 - The same gate is still on `summary_quality.rs` and
   `summary_ninety_minutes.rs`. Check whether either still needs it.
+
+## Answer
+
+`summary_chunking.rs` uses `mod common;` and `common::endpoint(dir.path())`,
+and `#![cfg(unix)]` is gone. Its 13 tests pass on macOS. The first Windows CI
+run on `main` will confirm them there.
+
+`summary_quality.rs` and `summary_ninety_minutes.rs` have no platform reason
+for the gate either. But CI gives the summary model to Windows only (Q59), so
+right now neither file runs in any job. Ungating them is a CI-budget decision,
+filed as ticket 09.
 
 ## Comments

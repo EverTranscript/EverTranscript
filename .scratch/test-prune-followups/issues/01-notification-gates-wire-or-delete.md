@@ -1,6 +1,6 @@
 # 01: Notification `Gates`, its catalog and `do_not_disturb`: wire them in or delete them
 
-Status: needs-triage
+Status: done: kept unwired; `do_not_disturb` has a test (DECISIONS Q305)
 
 Found by the test prune of 2026-10-09 (DECISIONS Q302–Q304, commit 0e95de2).
 
@@ -28,5 +28,19 @@ yet wired keeps its tests). It deleted one assertion-free probe of
   towards notifying", so a missing or unreadable file must give `false`.
 - **Delete it:** remove `Gates`, `catalog`, `do_not_disturb` and their tests,
   and keep `Notifier` and `SilentNotifier`.
+
+## Answer
+
+**Kept, unwired.** `do_not_disturb` now reads its file through
+`focus_is_on(path)`, and `a_focus_check_that_cannot_answer_lets_the_notification_through`
+checks the fail-open rule: a missing file and a file with no assertion record
+both read as Focus off. Breaking the missing-file branch to `true` fails it.
+
+**For whoever builds delivery:** do not wire `Gates` in as it is. Its
+two-minute cooldown runs on the wall clock (`Instant::now()`), and the policy
+sends the "nothing is recording" follow-up about two minutes after the heads-up,
+timed on detection time. Wired as written, the cooldown after the heads-up can
+swallow the follow-up, which is the notification that matters most. Choose
+one clock first.
 
 ## Comments

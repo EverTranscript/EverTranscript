@@ -803,4 +803,22 @@ mod tests {
         );
         assert!(diarize_queue::list(&connection).expect("list").is_empty());
     }
+
+    #[test]
+    fn beginning_again_keeps_a_meeting_somebody_promoted_to_front() {
+        // Its Front row is not one of the backlog's Back rows, so it neither
+        // gets deleted nor joins again; it must still be counted as owned.
+        let connection = db();
+        history(&connection);
+        assert_eq!(begin(&connection, "redimnet2-b3", "1").expect("first"), 3);
+        diarize_queue::enqueue(&connection, "b", diarize_queue::Priority::Front).expect("promote");
+
+        assert_eq!(begin(&connection, "redimnet2-b3", "2").expect("second"), 3);
+        assert_eq!(
+            diarize_queue::peek(&connection).expect("peek"),
+            Some(("b".to_string(), diarize_queue::Priority::Front)),
+            "the promotion stands"
+        );
+        assert_eq!(state(&connection).expect("state").expect("a row").total, 3);
+    }
 }

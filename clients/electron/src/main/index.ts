@@ -473,8 +473,7 @@ function forgetClient(): void {
  * Starts update checks only if the Operator has them on.
  *
  * The setting is read from the Core rather than kept here, because it is
- * the same switch the trust surface shows and the Core's own check reads —
- * two sources for one switch is how a switch ends up meaning different
+ * the same switch the trust surface shows — two sources for one switch is how a switch ends up meaning different
  * things in two places. A Core that is not up yet simply means no check
  * this launch, which is the safe direction: the failure mode of asking
  * later is a missed update, and of assuming yes is traffic the Operator

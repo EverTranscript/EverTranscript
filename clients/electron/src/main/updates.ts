@@ -25,8 +25,8 @@ let started = false;
  * Starts update checks, if the Operator has them on.
  *
  * `enabled` comes from the Core's settings — the same value the trust
- * surface shows and the same one the Core's own check reads — rather than
- * from a preference this process keeps separately. Two sources for one
+ * surface shows — rather than from a preference this process keeps
+ * separately. Two sources for one
  * switch is how a switch ends up meaning different things in two places.
  */
 export function startUpdateChecks(enabled: boolean): void {

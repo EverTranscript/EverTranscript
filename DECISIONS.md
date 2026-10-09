@@ -3450,3 +3450,53 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Outcome:** applied
 **Ref:** 0e95de2
 **Supersedes:** Q303 — the deleted count, 195 to 193
+
+## Q305 — test-prune-followups/01 — tradeoff
+
+**Question:** Ticket 01 asks whether to wire in or delete notify.rs's `Gates`, string catalog and `do_not_disturb`, which no production path calls (`lib.rs` passes `SilentNotifier`).
+**Options considered:** deliver a desktop banner through a new protocol notification / delete the three and amend M2 ticket 06 / put the Gates in front of the silent seam / keep them unwired and test `do_not_disturb`
+**Chosen:** **Keep them unwired, and give `do_not_disturb` a test.** Its file read moved into `focus_is_on(path)`, and `a_focus_check_that_cannot_answer_lets_the_notification_through` pins the fail-open rule: no file, and a file with no assertion record, both read as Focus off.
+**Decided-by:** agent
+**Justification:** Delivery is a new user-visible feature that M2 ticket 06 refused to claim without seeing it on screen, so it is out of scope here. Gating the silent seam was jev's pick (0.77), but wiring it showed a real conflict: `Gates` times its two-minute cooldown on the wall clock (`Instant::now()`), while the policy times the "nothing is recording" follow-up on detection time, also at about two minutes. Wired as written, the cooldown after the heads-up can swallow the follow-up, and in the fixture tests, where detection time runs ahead of the wall clock, it always would. That clock choice belongs to whoever builds delivery and can see the banner. Deleting would throw away M2's tested rules that delivery will need. Keeping costs about 80 unreachable lines.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q306 — test-prune-followups/02 — deviation
+
+**Question:** Ticket 02 asks whether to wire in or delete the Rust `updates::check`, which nothing calls while electron-updater does the real check.
+**Options considered:** have the Core report `UpdateStatus` to Clients / delete `check` and `UpdateStatus`, keep the feed host
+**Chosen:** **Delete `check`, `UpdateStatus`, `UPDATE_FEED_PATH`, `CHECK_TIMEOUT` and their three tests. Keep `UPDATE_FEED_HOST`**, which `posture.rs` shows on the trust surface. Two Electron comments that said the Core's own check reads the switch now say only the trust surface does.
+**Decided-by:** agent
+**Justification:** `clients/electron/src/main/updates.ts` (ADR-0016 as amended by ADR-0025) replaces the whole bundle, Core included, and reads the Operator's switch from the Core's settings. So a second check in the Core would be a second source of the same traffic, which is what ADR-0034 limits. One deleted test made a real HTTPS call to GitHub on every run and accepted either answer.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q307 — test-prune-followups/03 — deviation
+
+**Question:** Ticket 03 asks whether to use or delete `diarize::score::margin_trials`, `Operating` and `curve`.
+**Options considered:** print a margin curve in `tests/diarization_accuracy.rs` / delete them
+**Chosen:** **Delete the three and their four tests.**
+**Decided-by:** agent
+**Justification:** Since they arrived in a83e6fa no code outside their own tests has called them; `git log -G` finds no other use. `MATCH_MARGIN` was chosen as a pair with `MATCH_FLOOR` through the matcher grid, not through this curve, and its doc says the margin is never the binding rule on the measured corpus. Restoring them is one `git revert` if a margin retune ever needs the curve.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q308 — test-prune-followups/07 — gate-resolution
+
+**Question:** Ticket 07 ungates `tests/summary_chunking.rs` for Windows. Its last step asks whether `summary_quality.rs` and `summary_ninety_minutes.rs` still need their `#![cfg(unix)]`.
+**Options considered:** ungate both now / leave both gated and file the finding as a ticket
+**Chosen:** **`summary_chunking.rs` is ungated** (`mod common;` and `common::endpoint`, as Q54 did for its siblings). **The other two stay gated, and the finding is ticket 09.**
+**Decided-by:** agent
+**Justification:** Neither file has a platform reason for the gate, and `summary_quality.rs` even carries a `cfg!(windows)` branch. But CI sets `EVERTRANSCRIPT_SUMMARY_MODEL` and `EVERTRANSCRIPT_MEASURE_SUMMARY_QUALITY` on Windows only (Q59), so neither test has run in any CI job since 2026-09-01. Ungating them puts two 4B measurements, one allowed to fail on model quality, into a Windows job with a 55-minute limit. That is a decision about CI budget and red builds, so it gets its own ticket rather than riding along with this one.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q309 — test-prune-followups/08 — finding
+
+**Question:** Why does `a_real_microphone_hold_is_visible_to_the_detector` fail on mac-mini-m6?
+**Options considered:** timing under the parallel suite / the machine / the test
+**Chosen:** **The test. It now opens the microphone alone (`start_microphone_only`), so a Mac with no microphone skips it.**
+**Decided-by:** agent
+**Justification:** Run alone it failed 5 of 5 times, so this is not timing. mac-mini-m6 has no input device (`system_profiler SPAudioDataType` lists only its speakers). `LiveSource::start` returns Ok when either leg starts, and the system-audio tap starts there, so the test's skip never fired and it waited for a microphone hold that could not happen. It passed only when another test in the parallel suite happened to be capturing input. After the change it skips 3 of 3 runs on this Mac, and on a machine with a microphone it checks the same thing as before.
+**Outcome:** applied
+**Ref:** (pending)

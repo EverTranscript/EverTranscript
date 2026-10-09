@@ -10,7 +10,7 @@
 //! called. They now belong to the summarize path, so they are tested where an
 //! Operator's record can actually feel them.
 
-#![cfg(unix)]
+mod common;
 
 use std::sync::Arc;
 
@@ -257,7 +257,7 @@ async fn a_summary_being_generated_does_not_hold_up_other_clients() {
     }));
     let id = meeting_of(&core, 3).await;
 
-    let socket = dir.path().join("s");
+    let socket = common::endpoint(dir.path());
     let listener = transport::bind(&socket).await.expect("bind");
     let (events_tx, events_rx) = tokio::sync::mpsc::channel(64);
     let shutdown = CancellationToken::new();

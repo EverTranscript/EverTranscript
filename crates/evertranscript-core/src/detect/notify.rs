@@ -153,8 +153,12 @@ pub fn do_not_disturb() -> bool {
     let Some(home) = dirs::home_dir() else {
         return false;
     };
-    let assertions = home.join("Library/DoNotDisturb/DB/Assertions.json");
-    let Ok(contents) = std::fs::read_to_string(&assertions) else {
+    focus_is_on(&home.join("Library/DoNotDisturb/DB/Assertions.json"))
+}
+
+#[cfg(target_os = "macos")]
+fn focus_is_on(assertions: &std::path::Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(assertions) else {
         debug!("no Focus assertions file; treating Focus as off");
         return false;
     };
@@ -230,5 +234,24 @@ mod tests {
         }
         assert!(catalog::EN.never_started_body.contains("{title}"));
         assert!(catalog::ZH_CN.never_started_body.contains("{title}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_focus_check_that_cannot_answer_lets_the_notification_through() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let assertions = dir.path().join("Assertions.json");
+        assert!(!focus_is_on(&assertions), "no file must read as Focus off");
+        std::fs::write(&assertions, r#"{"data":[]}"#).expect("write");
+        assert!(
+            !focus_is_on(&assertions),
+            "no assertion record is Focus off"
+        );
+        std::fs::write(
+            &assertions,
+            r#"{"data":[{"storeAssertionRecords":[{"assertionDetails":{}}]}]}"#,
+        )
+        .expect("write");
+        assert!(focus_is_on(&assertions), "an assertion record is Focus on");
     }
 }

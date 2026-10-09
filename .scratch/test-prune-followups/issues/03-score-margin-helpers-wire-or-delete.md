@@ -1,6 +1,6 @@
 # 03: The score helpers `margin_trials` and `curve`: use them or delete them
 
-Status: needs-triage
+Status: done: deleted (DECISIONS Q307)
 
 Found by the test prune of 2026-10-09 (DECISIONS Q302–Q304, commit 0e95de2).
 
@@ -18,5 +18,11 @@ The prune kept their tests (Q303).
   its labelled voices, so the next retune of `MATCH_MARGIN` has measured
   evidence.
 - **Delete them:** remove the three items and their four tests.
+
+## Answer
+
+**Deleted.** `margin_trials`, `Operating`, `curve` and their four tests are
+gone. Nothing outside those tests had called them since a83e6fa, and
+`MATCH_MARGIN` was chosen through the matcher grid instead.
 
 ## Comments

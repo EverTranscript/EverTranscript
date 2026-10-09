@@ -1,6 +1,6 @@
 # 06: Starting a re-run backlog again keeps a Meeting that was promoted to Front
 
-Status: ready-for-agent
+Status: done
 
 Found by a preservation review during the test prune of 2026-10-09. This gap
 existed before the prune.
@@ -23,5 +23,13 @@ no longer in `diarize_rerun_backlog`.
 - Assert that `begin` returns 2, that the promoted Meeting's queue row is still
   `Front`, and that it is still in `diarize_rerun_backlog`.
 - Check it: the test fails with `|| owned.contains(meeting_id)` removed.
+
+## Answer
+
+`beginning_again_keeps_a_meeting_somebody_promoted_to_front` in `rerun.rs`
+begins a backlog, promotes `b` to `Front`, then begins again. It checks that
+`begin` returns 3, that `peek` still gives `b` at `Front`, and that `total` is 3.
+Checked: it fails with `|| owned.contains(meeting_id)` removed. A test of what
+cancel does with that Meeting was left out on purpose.
 
 ## Comments
