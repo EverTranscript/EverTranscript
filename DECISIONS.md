@@ -3428,7 +3428,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Coverage alone keeps change detectors that happen to touch a unique line and deletes a regression test whose lines another test also walks, so it measures the wrong thing; it is the constraint, not the selector. Model-gated suites are the only proof of real-model behaviour (CI comments around `EVERTRANSCRIPT_TEST_MODEL`), so removing them would meet the count by losing the most expensive evidence. The 2-point budget is measured on the local run because it is the only one reproducible here; CI with models will read slightly differently.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 0e95de2
 
 ## Q303 — test-prune/2026-10-09 — tradeoff
 
@@ -3438,7 +3438,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `test-audit` deletes production code whose only callers are tests, but `Gates` (e19e520, "the notifications it will need") and `updates::check` (bd835ec, ADR-0034's sanctioned traffic) are unshipped features, so removing them is a product call rather than a test cleanup. Deleting their tests and leaving the code would only lose coverage. 195 is 20.9% of 932, which leaves room to restore a row that the preservation review finds was a contract's only proof.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 0e95de2
 
 ## Q304 — test-prune/2026-10-09 — gate-resolution
 
@@ -3448,5 +3448,5 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `test-audit`: a candidate whose evidence field is wrong is not ready to delete, and a C row is only safe once the keeper fails on the mutation the deleted test caught. Result at the same machine and environment as the base: Rust line coverage 83.27% to 82.28%, uncovered lines 4515 to 4459. Electron 89.66% to 89.65%. 739 of 932 tests remain.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 0e95de2
 **Supersedes:** Q303 — the deleted count, 195 to 193
