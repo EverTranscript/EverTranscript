@@ -3459,7 +3459,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Delivery is a new user-visible feature that M2 ticket 06 refused to claim without seeing it on screen, so it is out of scope here. Gating the silent seam was jev's pick (0.77), but wiring it showed a real conflict: `Gates` times its two-minute cooldown on the wall clock (`Instant::now()`), while the policy times the "nothing is recording" follow-up on detection time, also at about two minutes. Wired as written, the cooldown after the heads-up can swallow the follow-up, and in the fixture tests, where detection time runs ahead of the wall clock, it always would. That clock choice belongs to whoever builds delivery and can see the banner. Deleting would throw away M2's tested rules that delivery will need. Keeping costs about 80 unreachable lines.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 6799bc8
 
 ## Q306 — test-prune-followups/02 — deviation
 
@@ -3469,7 +3469,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** `clients/electron/src/main/updates.ts` (ADR-0016 as amended by ADR-0025) replaces the whole bundle, Core included, and reads the Operator's switch from the Core's settings. So a second check in the Core would be a second source of the same traffic, which is what ADR-0034 limits. One deleted test made a real HTTPS call to GitHub on every run and accepted either answer.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 6799bc8
 
 ## Q307 — test-prune-followups/03 — deviation
 
@@ -3479,7 +3479,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Since they arrived in a83e6fa no code outside their own tests has called them; `git log -G` finds no other use. `MATCH_MARGIN` was chosen as a pair with `MATCH_FLOOR` through the matcher grid, not through this curve, and its doc says the margin is never the binding rule on the measured corpus. Restoring them is one `git revert` if a margin retune ever needs the curve.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 6799bc8
 
 ## Q308 — test-prune-followups/07 — gate-resolution
 
@@ -3489,7 +3489,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Neither file has a platform reason for the gate, and `summary_quality.rs` even carries a `cfg!(windows)` branch. But CI sets `EVERTRANSCRIPT_SUMMARY_MODEL` and `EVERTRANSCRIPT_MEASURE_SUMMARY_QUALITY` on Windows only (Q59), so neither test has run in any CI job since 2026-09-01. Ungating them puts two 4B measurements, one allowed to fail on model quality, into a Windows job with a 55-minute limit. That is a decision about CI budget and red builds, so it gets its own ticket rather than riding along with this one.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 6799bc8
 
 ## Q309 — test-prune-followups/08 — finding
 
@@ -3499,4 +3499,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Run alone it failed 5 of 5 times, so this is not timing. mac-mini-m6 has no input device (`system_profiler SPAudioDataType` lists only its speakers). `LiveSource::start` returns Ok when either leg starts, and the system-audio tap starts there, so the test's skip never fired and it waited for a microphone hold that could not happen. It passed only when another test in the parallel suite happened to be capturing input. After the change it skips 3 of 3 runs on this Mac, and on a machine with a microphone it checks the same thing as before.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 6799bc8
