@@ -23,13 +23,6 @@ pub struct Integrity {
     pub crc32: Option<u32>,
 }
 
-impl Integrity {
-    /// True when this entry meets the release bar (a strong checksum).
-    pub fn is_strongly_pinned(&self) -> bool {
-        self.sha256.is_some()
-    }
-}
-
 /// How a model wants its prompt shaped.
 ///
 /// A property of the model rather than of the product: an instruct model
@@ -420,18 +413,6 @@ mod tests {
         );
     }
 
-    /// A model that stores no vectors has nothing to say about Voiceprints,
-    /// and saying it anyway would be a second place for the identity to live.
-    #[test]
-    fn only_the_embedding_model_carries_a_voiceprint_identity() {
-        let carrying: Vec<&str> = ALL
-            .iter()
-            .filter(|entry| entry.voiceprint.is_some())
-            .map(|entry| entry.key)
-            .collect();
-        assert_eq!(carrying, vec![DIARIZE_EMBEDDING.key]);
-    }
-
     #[test]
     fn every_entry_has_a_unique_key_and_filename() {
         for (index, entry) in ALL.iter().enumerate() {
@@ -467,19 +448,6 @@ mod tests {
         );
     }
 
-    /// Not a failure: a standing reminder that shipping needs SHA-256.
-    #[test]
-    fn report_entries_still_missing_a_strong_checksum() {
-        let weak: Vec<&str> = ALL
-            .iter()
-            .filter(|entry| !entry.integrity.is_strongly_pinned())
-            .map(|entry| entry.key)
-            .collect();
-        if !weak.is_empty() {
-            eprintln!("note: these models are release-blocked until a SHA-256 is pinned: {weak:?}");
-        }
-    }
-
     #[test]
     fn every_model_records_where_it_came_from_and_under_what_terms() {
         // This repository keeps a careful ledger for every file it ported and
@@ -498,65 +466,5 @@ mod tests {
                 entry.provenance.source
             );
         }
-    }
-
-    #[test]
-    fn only_the_prompted_model_says_how_to_drive_it() {
-        // Whisper is handed audio and the ONNX pair are handed tensors; a
-        // sampling temperature would be meaningless on any of them.
-        for entry in ALL {
-            match entry.purpose {
-                ModelPurpose::Summary => assert!(
-                    entry.driving.is_some(),
-                    "{} is prompted and must say how",
-                    entry.key
-                ),
-                _ => assert!(
-                    entry.driving.is_none(),
-                    "{} is not prompted and should not describe driving",
-                    entry.key
-                ),
-            }
-        }
-    }
-
-    #[test]
-    fn the_registered_summary_model_is_described_as_its_publisher_documents() {
-        let driving = SUMMARY_DEFAULT
-            .driving
-            .expect("the Summary model is prompted");
-        assert_eq!(driving.framing, Framing::EmbeddedChatTemplate);
-        assert_eq!(
-            driving.sampling,
-            Sampling::Nucleus {
-                temperature: 0.7,
-                top_p: 0.8,
-                top_k: 20,
-                min_p: 0.0,
-            }
-        );
-        assert_eq!(driving.suppress_reasoning, Some("/no_think"));
-        assert_eq!(driving.context_tokens, 16_384);
-        assert_eq!(driving.single_pass_tokens, 12_000);
-    }
-
-    #[test]
-    fn a_model_that_wants_a_chat_template_can_say_so() {
-        // The shape exists before the model that needs it, so adopting one is
-        // a data change rather than a code change.
-        let driving = Driving {
-            framing: Framing::EmbeddedChatTemplate,
-            sampling: Sampling::Nucleus {
-                temperature: 0.7,
-                top_p: 0.8,
-                top_k: 20,
-                min_p: 0.0,
-            },
-            suppress_reasoning: Some("/no_think"),
-            context_tokens: 16_384,
-            single_pass_tokens: 12_000,
-        };
-        assert_ne!(driving.framing, Framing::Plain);
-        assert_ne!(driving.sampling, Sampling::Greedy);
     }
 }

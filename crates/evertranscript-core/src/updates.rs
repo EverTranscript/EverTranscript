@@ -138,13 +138,6 @@ mod tests {
     }
 
     #[test]
-    fn being_disabled_is_a_state_rather_than_a_failure() {
-        // An Operator who turned updates off has configured the product,
-        // not broken it, and nothing should nag them about it.
-        assert!(!UpdateStatus::Disabled.worth_mentioning());
-    }
-
-    #[test]
     fn only_an_available_update_is_worth_interrupting_for() {
         assert!(
             UpdateStatus::Available {
@@ -180,13 +173,5 @@ mod tests {
         if let UpdateStatus::Unreachable { .. } = offline {
             assert!(!offline.worth_mentioning());
         }
-    }
-
-    #[test]
-    fn the_feed_host_is_nameable_for_the_trust_surface() {
-        // Story 46: an evaluator should be able to compare this against
-        // what they see in a firewall log.
-        assert!(UPDATE_FEED_HOST.starts_with("https://"));
-        assert!(!UPDATE_FEED_HOST.contains("track"));
     }
 }

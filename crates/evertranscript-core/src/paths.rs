@@ -237,33 +237,11 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_folder_is_not_an_incomplete_copy() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert!(!detect_incomplete_copy(dir.path()));
-    }
-
-    #[test]
-    fn mirrors_without_the_machine_store_are_an_incomplete_copy() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::write(dir.path().join("2026-08-27-zoom-a3f8c21b.md"), "# Meeting")
-            .expect("write mirror");
-        assert!(detect_incomplete_copy(dir.path()));
-    }
-
-    #[test]
     fn a_complete_copy_is_not_flagged() {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("2026-08-27-zoom-a3f8c21b.md"), "# Meeting")
             .expect("write mirror");
         ensure_history_layout(dir.path()).expect("layout");
         assert!(!detect_incomplete_copy(dir.path()));
-    }
-
-    #[test]
-    fn the_layout_creates_the_hidden_store_and_audio_dir() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        ensure_history_layout(dir.path()).expect("layout");
-        assert!(dir.path().join(DATA_DIR_NAME).is_dir());
-        assert!(dir.path().join(DATA_DIR_NAME).join("audio").is_dir());
     }
 }

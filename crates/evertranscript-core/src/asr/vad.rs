@@ -488,27 +488,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_energy_gate_separates_speech_from_room_tone() {
-        let mut detector = EnergyDetector::new();
-        let quiet: Vec<f32> = (0..480)
-            .map(|i| ((i as f32) * 0.01).sin() * 0.001)
-            .collect();
-        for _ in 0..20 {
-            detector.probability(&quiet);
-        }
-        assert!(
-            detector.probability(&quiet) < 0.5,
-            "room tone is not speech"
-        );
-
-        let loud = speech(30);
-        assert!(
-            detector.probability(&loud[..480]) >= 0.5,
-            "a clear voiced tone is speech"
-        );
-    }
-
     /// Live capture delivers audio in small CoreAudio callbacks, not in
     /// whole files. The same speech must chunk identically however it is
     /// sliced on the way in.

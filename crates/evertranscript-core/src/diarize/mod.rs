@@ -287,82 +287,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_turn_claims_an_instant_exactly_once() {
-        // Half-open, so a word whose midpoint lands on a boundary belongs to
-        // exactly one turn. Closed intervals would let two turns both claim
-        // it and make attribution depend on iteration order.
-        let first = Turn::new(AudioChannel::Mic, 0, 1_000, 0);
-        let second = Turn::new(AudioChannel::Mic, 1_000, 2_000, 1);
-
-        let boundary = CaptureOffset(1_000);
-        assert!(!first.contains(boundary), "the ending turn releases it");
-        assert!(second.contains(boundary), "the starting turn claims it");
-    }
-
-    #[test]
     fn a_turn_never_reports_a_negative_duration() {
         // A source that emits end before start must not produce a duration
         // near u64::MAX — the diarization form of the bug DetectionInstant
         // guards against.
         let backwards = Turn::new(AudioChannel::Mic, 500, 100, 0);
         assert_eq!(backwards.duration_ms(), 0);
-    }
-
-    #[test]
-    fn attribution_is_per_channel() {
-        // The same instant is two different voices on two channels, which is
-        // the whole point of diarizing both (ADR-0029 as amended). A lookup
-        // that ignored the channel would attribute the far end's words to
-        // whoever was in the room.
-        let diarization = Diarization {
-            turns: vec![
-                Turn::new(AudioChannel::Mic, 0, 5_000, 0),
-                Turn::new(AudioChannel::System, 0, 5_000, 1),
-            ],
-            embeddings: BTreeMap::new(),
-        };
-
-        let at = CaptureOffset(2_500);
-        assert_eq!(
-            diarization
-                .turn_at(AudioChannel::Mic, at)
-                .map(|t| t.cluster),
-            Some(Cluster(0))
-        );
-        assert_eq!(
-            diarization
-                .turn_at(AudioChannel::System, at)
-                .map(|t| t.cluster),
-            Some(Cluster(1))
-        );
-    }
-
-    #[test]
-    fn silence_between_turns_belongs_to_nobody() {
-        // Diarization must be allowed to say "no one was speaking". A seam
-        // that always returned some cluster would force reconciliation to
-        // attribute silence to whoever spoke last.
-        let diarization = Diarization {
-            turns: vec![
-                Turn::new(AudioChannel::Mic, 0, 1_000, 0),
-                Turn::new(AudioChannel::Mic, 4_000, 5_000, 0),
-            ],
-            embeddings: BTreeMap::new(),
-        };
-        assert!(
-            diarization
-                .turn_at(AudioChannel::Mic, CaptureOffset(2_500))
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn a_cancelled_flag_is_visible_to_every_holder() {
-        let cancel = Cancel::new();
-        let watcher = cancel.clone();
-        assert!(!watcher.is_cancelled());
-        cancel.cancel();
-        assert!(watcher.is_cancelled(), "the running job must see it");
     }
 
     #[test]

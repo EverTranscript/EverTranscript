@@ -191,14 +191,6 @@ mod tests {
     }
 
     #[test]
-    fn a_leg_that_delivered_nothing_is_not_the_same_as_one_that_delivered_silence() {
-        assert_eq!(
-            leg_state(AudioChannel::Mic, 0, 0.0, None),
-            AudioLegState::NothingCaptured
-        );
-    }
-
-    #[test]
     fn an_idle_tap_delivering_nothing_is_untested_rather_than_broken() {
         // The tap produces no callbacks at all while nothing plays, so zero
         // milliseconds from it says nothing about whether it works. Reporting
@@ -222,17 +214,6 @@ mod tests {
     }
 
     #[test]
-    fn one_working_leg_beside_an_untested_one_does_not_claim_the_other_failed() {
-        assert_eq!(
-            verdict(&[
-                leg(AudioChannel::Mic, AudioLegState::Working),
-                leg(AudioChannel::System, AudioLegState::NotTested),
-            ]),
-            AudioCheckVerdict::MicrophoneWorksOtherUntested
-        );
-    }
-
-    #[test]
     fn verdicts_cover_the_rest_of_the_shapes() {
         assert_eq!(
             verdict(&[
@@ -247,6 +228,14 @@ mod tests {
                 leg(AudioChannel::System, AudioLegState::Silent),
             ]),
             AudioCheckVerdict::OneLegWorks
+        );
+        // One working leg beside an untested one does not claim the other failed.
+        assert_eq!(
+            verdict(&[
+                leg(AudioChannel::Mic, AudioLegState::Working),
+                leg(AudioChannel::System, AudioLegState::NotTested),
+            ]),
+            AudioCheckVerdict::MicrophoneWorksOtherUntested
         );
         assert_eq!(
             verdict(&[

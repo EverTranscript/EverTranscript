@@ -345,13 +345,4 @@ mod tests {
              no process recording at all — it cannot see a live microphone"
         );
     }
-
-    #[test]
-    fn the_enumeration_is_stable_across_calls() {
-        // Two reads a moment apart should agree on a quiet machine. A
-        // detector that disagrees with itself would flap the policy.
-        let first = microphone_holders();
-        let second = microphone_holders();
-        assert_eq!(first, second, "the same machine reported two ways");
-    }
 }

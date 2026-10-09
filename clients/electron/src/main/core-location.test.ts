@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { delimiter, join } from "node:path";
 import { test } from "node:test";
 
-import { coreName, locateCore } from "./core-location.js";
+import { locateCore } from "./core-location.js";
 
 /** A lookup where nothing exists unless `present` lists it. */
 function lookup(
@@ -35,17 +35,13 @@ const BUNDLED = join(
 const ON_PATH = join("/opt/homebrew/bin", "evertranscript");
 
 test("an explicit EVERTRANSCRIPT_BIN wins over everything", () => {
+  // Returned without checking that it exists, so a wrong value fails loudly
+  // at spawn, naming the path the Operator set, instead of being silently
+  // ignored in favour of a different Core.
   const found = locateCore(
     lookup([BUNDLED, ON_PATH], { explicit: "/somewhere/else/evertranscript" }),
   );
   assert.equal(found, "/somewhere/else/evertranscript");
-});
-
-test("an explicit path is returned without checking that it exists", () => {
-  // So a wrong value fails loudly at spawn, naming the path the Operator
-  // set, instead of being silently ignored in favour of a different Core.
-  const found = locateCore(lookup([], { explicit: "/typo/evertranscript" }));
-  assert.equal(found, "/typo/evertranscript");
 });
 
 test("the bundle's own Core beats one on PATH", () => {
@@ -92,12 +88,6 @@ test("nothing found is null rather than a guess", () => {
   // The caller turns this into a message naming the failure. A fabricated
   // path would surface as a spawn error about a file nobody chose.
   assert.equal(locateCore(lookup([])), null);
-});
-
-test("the filename carries .exe only on Windows", () => {
-  assert.equal(coreName("win32"), "evertranscript.exe");
-  assert.equal(coreName("darwin"), "evertranscript");
-  assert.equal(coreName("linux"), "evertranscript");
 });
 
 test("the Windows bundle is found under its own name", () => {

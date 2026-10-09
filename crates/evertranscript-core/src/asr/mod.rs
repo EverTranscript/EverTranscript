@@ -57,8 +57,6 @@ pub struct FakeTranscriber {
     /// The language to report per response, so a language switch can be
     /// scripted without a model.
     pub languages: std::collections::VecDeque<Option<String>>,
-    /// Every call's `previous`, so tests can assert rolling context is wired.
-    pub prompts_seen: Vec<Option<String>>,
 }
 
 impl FakeTranscriber {
@@ -66,7 +64,6 @@ impl FakeTranscriber {
         Self {
             responses: responses.into_iter().map(str::to_string).collect(),
             languages: std::collections::VecDeque::new(),
-            prompts_seen: Vec::new(),
         }
     }
 
@@ -79,14 +76,12 @@ impl FakeTranscriber {
         Self {
             responses,
             languages,
-            prompts_seen: Vec::new(),
         }
     }
 }
 
 impl Transcriber for FakeTranscriber {
-    fn transcribe(&mut self, _samples: &[f32], previous: Option<&str>) -> Result<Transcript> {
-        self.prompts_seen.push(previous.map(str::to_string));
+    fn transcribe(&mut self, _samples: &[f32], _previous: Option<&str>) -> Result<Transcript> {
         Ok(Transcript {
             text: self.responses.pop_front().unwrap_or_default(),
             confidence: 0.9,

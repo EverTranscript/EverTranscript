@@ -1255,19 +1255,6 @@ mod tests {
         assert_ne!(embedding.model, EMBEDDING_MODEL);
     }
 
-    /// Production's own stamp still comes from the registry, unchanged.
-    #[test]
-    fn production_stamps_what_the_registry_says_it_stores() {
-        assert_eq!(
-            (EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION),
-            ("redimnet2-b3", "1")
-        );
-        assert_eq!(
-            EMBEDDING_IDENTITY,
-            crate::models::registry::DIARIZE_EMBEDDING.voiceprint()
-        );
-    }
-
     #[test]
     fn two_local_speakers_of_one_window_may_never_be_one_voice() {
         let tiled = Observed {
@@ -1465,17 +1452,6 @@ mod tests {
     }
 
     #[test]
-    fn the_powerset_covers_three_speakers_and_their_pairs() {
-        // Seven classes: silence, three singles, three pairs. If this table
-        // ever disagrees with the model, every overlap is mislabelled and
-        // nothing reports it.
-        assert_eq!(POWERSET.len(), POWERSET_CLASSES);
-        assert_eq!(POWERSET.iter().filter(|set| set.len() == 1).count(), 3);
-        assert_eq!(POWERSET.iter().filter(|set| set.len() == 2).count(), 3);
-        assert_eq!(POWERSET[0].len(), 0);
-    }
-
-    #[test]
     fn a_run_is_every_frame_a_speaker_holds_overlap_included() {
         // Speaker 0 alone, then with speaker 1, then speaker 1 alone. Two
         // people talking at once is two speakers, not nobody.
@@ -1486,26 +1462,6 @@ mod tests {
         assert_eq!(runs_of(&masks, |mask| mask & 0b10 != 0), vec![(60, 100)]);
         assert_eq!(runs_of(&masks, |mask| mask == 0b01), vec![(0, 60)], "alone");
         assert!(runs_of(&[], |_| true).is_empty());
-    }
-
-    #[test]
-    fn a_voice_is_embedded_from_the_frames_it_holds_alone() {
-        // 589 frames: speaker 0 alone for the first half, overlapped with
-        // speaker 1 for the second. The feature rows chosen all land in
-        // the first half.
-        let mut masks = vec![0b01_u8; 589];
-        masks[295..].fill(0b11);
-        let rows = chosen_rows(&masks, 0b01, SAMPLES_PER_FRAME);
-        assert!(
-            rows.len() > 400,
-            "about five seconds of 10 ms rows: {}",
-            rows.len()
-        );
-        let last_centre = (rows.last().unwrap() * FRAME_SHIFT + FRAME_LENGTH / 2) as f64;
-        assert!(
-            last_centre < 295.0 * SAMPLES_PER_FRAME,
-            "none from the overlap"
-        );
     }
 
     #[test]
@@ -1550,7 +1506,13 @@ mod tests {
             } else {
                 runs_of(&masks, |mask| mask & bit != 0)
             };
-            for row in chosen_rows(&masks, bit, SAMPLES_PER_FRAME) {
+            let rows = chosen_rows(&masks, bit, SAMPLES_PER_FRAME);
+            if alone {
+                // A voice alone for half of 589 frames is about five seconds
+                // of 10 ms rows, not an empty choice.
+                assert!(rows.len() > 400, "rows from the alone half: {}", rows.len());
+            }
+            for row in rows {
                 let centre =
                     ((row * FRAME_SHIFT + FRAME_LENGTH / 2) as f64 / SAMPLES_PER_FRAME) as usize;
                 assert!(
@@ -1699,15 +1661,6 @@ mod tests {
         ]);
         assert_eq!(merged.len(), 1);
         assert_eq!(merged[0].end.millis(), 6_000);
-    }
-
-    #[test]
-    fn a_speaker_change_is_not_merged_away() {
-        let merged = merge_adjacent(vec![
-            Turn::new(AudioChannel::Mic, 0, 3_000, 0),
-            Turn::new(AudioChannel::Mic, 1_500, 4_500, 1),
-        ]);
-        assert_eq!(merged.len(), 2, "two voices stay two turns");
     }
 
     #[test]

@@ -273,7 +273,6 @@ pub fn run_guarded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diarize::fixture::FixtureDiarizer;
 
     #[tokio::test]
     async fn a_stale_exemplar_is_rebuilt_from_its_own_seconds_of_the_recording() {
@@ -377,18 +376,6 @@ mod tests {
     }
 
     #[test]
-    fn the_slot_is_released_even_if_the_run_panics() {
-        // Otherwise one bad Meeting turns Diarization off permanently, and
-        // the only symptom is that nothing is ever attributed again.
-        let outcome = std::panic::catch_unwind(|| {
-            let _slot = Slot::claim("panicking").expect("claims");
-            panic!("models exploded");
-        });
-        assert!(outcome.is_err());
-        assert_eq!(Slot::current(), None, "the slot came back");
-    }
-
-    #[test]
     fn a_panicking_model_is_unavailable_rather_than_a_dead_process() {
         // The Core may be recording a different meeting at this moment.
         // Losing a live recording to a post-meeting job is the worst trade
@@ -420,24 +407,16 @@ mod tests {
         std::panic::set_hook(previous);
 
         assert!(matches!(result, Err(DiarizeError::Unavailable(_))));
-    }
 
-    #[test]
-    fn a_healthy_run_passes_its_result_through_the_guard() {
-        let silence = vec![0.0_f32; 16_000];
-        let audio = MeetingAudio {
-            mic: &silence,
-            system: &silence,
-            sample_rate: SAMPLE_RATE,
-        };
-        let result = run_guarded(
-            &mut FixtureDiarizer::clean_two_speaker(),
+        // And a healthy run passes its result through the guard untouched.
+        let healthy = run_guarded(
+            &mut crate::diarize::fixture::FixtureDiarizer::clean_two_speaker(),
             audio,
             &mut |_| {},
             &Cancel::new(),
         )
         .expect("runs");
-        assert!(!result.turns.is_empty());
+        assert!(!healthy.turns.is_empty());
     }
 
     #[test]

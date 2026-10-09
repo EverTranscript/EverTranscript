@@ -135,6 +135,11 @@ async fn a_refused_start_returns_the_menu_to_where_it_was_and_says_why() {
         !controller.view().action_enabled,
         "and the item must not be clickable"
     );
+    let status = controller.view().status;
+    assert!(
+        status.contains("briefing"),
+        "the reason must be the actual gate, got {status:?}"
+    );
 
     // Even so, drive the refused path directly: another Client could
     // acknowledge and un-acknowledge, and the failure has to be survivable

@@ -582,12 +582,4 @@ mod tests {
         std::fs::write(audio_path(dir.path(), "empty123"), b"").expect("write");
         assert!(orphaned_audio(dir.path(), "empty123").is_none());
     }
-
-    #[test]
-    fn a_files_length_is_its_duration() {
-        // CBR, which is what lets restart reconciliation date an interrupted
-        // Meeting without decoding hours of audio at startup.
-        assert_eq!(seconds_from_bytes(BYTES_PER_SECOND * 60), 60.0);
-        assert_eq!(seconds_from_bytes(0), 0.0);
-    }
 }

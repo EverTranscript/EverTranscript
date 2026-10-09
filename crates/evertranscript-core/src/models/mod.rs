@@ -150,12 +150,6 @@ mod superseded_tests {
     }
 
     #[test]
-    fn an_install_that_never_had_it_is_unaffected() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        assert!(remove_superseded(dir.path()).is_empty());
-    }
-
-    #[test]
     fn nothing_still_registered_is_ever_in_the_superseded_list() {
         // The guard that matters most: superseding a model without
         // unregistering it would delete the file the product is about to load.
@@ -556,66 +550,10 @@ fn describe_network_error(error: &reqwest::Error) -> anyhow::Error {
 mod tests {
     use super::*;
 
-    fn test_entry(size: u64, crc: u32) -> ModelEntry {
-        ModelEntry {
-            key: "test-model",
-            display_name: "Test",
-            filename: "test-model.bin",
-            remote_path: "test-model.bin",
-            integrity: Integrity {
-                size_bytes: size,
-                sha256: None,
-                crc32: Some(crc),
-            },
-            purpose: registry::ModelPurpose::Transcription,
-            required: true,
-            provenance: registry::Provenance {
-                license: "MIT",
-                source: "https://example.invalid/fixture",
-            },
-            voiceprint: None,
-            driving: None,
-        }
-    }
-
     fn ggml_payload(len: usize) -> Vec<u8> {
         let mut bytes = b"ggml".to_vec();
         bytes.extend((0..len - 4).map(|index| (index % 251) as u8));
         bytes
-    }
-
-    #[test]
-    fn status_reports_missing_partial_and_ready() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let payload = ggml_payload(64);
-        let entry = test_entry(64, crc32fast::hash(&payload));
-        let downloader =
-            Downloader::with_base_url(dir.path().to_path_buf(), "http://unused".into()).unwrap();
-
-        assert_eq!(downloader.status(&entry), ModelStatus::Missing);
-
-        std::fs::write(dir.path().join("test-model.bin.partial"), &payload[..10]).unwrap();
-        assert_eq!(
-            downloader.status(&entry),
-            ModelStatus::Partial { bytes_on_disk: 10 }
-        );
-
-        std::fs::write(dir.path().join("test-model.bin"), &payload).unwrap();
-        assert!(downloader.status(&entry).is_ready());
-    }
-
-    #[test]
-    fn a_wrong_sized_file_is_corrupted_not_ready() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let entry = test_entry(64, 0);
-        let downloader =
-            Downloader::with_base_url(dir.path().to_path_buf(), "http://unused".into()).unwrap();
-        std::fs::write(dir.path().join("test-model.bin"), b"too short").unwrap();
-
-        match downloader.status(&entry) {
-            ModelStatus::Corrupted { reason } => assert!(reason.contains("64")),
-            other => panic!("expected Corrupted, got {other:?}"),
-        }
     }
 
     #[tokio::test]

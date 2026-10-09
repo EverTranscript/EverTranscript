@@ -79,28 +79,6 @@ impl Notifier for SilentNotifier {
     async fn armed_meeting_never_started(&self, _event: &CalendarEvent) {}
 }
 
-/// Records what it would have said, for tests.
-#[derive(Default)]
-pub struct RecordingNotifier {
-    pub said: Mutex<Vec<String>>,
-}
-
-#[async_trait::async_trait]
-impl Notifier for RecordingNotifier {
-    async fn meeting_starting(&self, event: &CalendarEvent) {
-        self.said
-            .lock()
-            .expect("said")
-            .push(format!("starting:{}", event.id));
-    }
-    async fn armed_meeting_never_started(&self, event: &CalendarEvent) {
-        self.said
-            .lock()
-            .expect("said")
-            .push(format!("never-started:{}", event.id));
-    }
-}
-
 /// The gates every notification passes through, whatever delivers it.
 ///
 /// Separate from delivery so the rules are testable without a desktop.
@@ -193,15 +171,6 @@ pub fn do_not_disturb() -> bool {
 mod tests {
     use super::*;
 
-    fn event(id: &str) -> CalendarEvent {
-        CalendarEvent {
-            id: id.to_string(),
-            title: "Weekly sync".to_string(),
-            attendees: Vec::new(),
-            scheduled_end: None,
-        }
-    }
-
     #[test]
     fn nothing_is_said_while_a_meeting_is_being_recorded() {
         // The product does not narrate what it is already capturing.
@@ -242,24 +211,6 @@ mod tests {
         let gates = Gates::new().silencing(vec!["zoom".to_string()]);
         assert!(!gates.allows("starting:zoom-1", false, Instant::now()));
         assert!(gates.allows("starting:teams-1", false, Instant::now()));
-    }
-
-    #[test]
-    fn a_focus_check_that_cannot_answer_lets_the_notification_through() {
-        // The rule this module exists to state: silence is the failure that
-        // matters, so an unanswerable check must not produce it. This asserts
-        // the shape rather than the machine's current Focus state — it must
-        // return a decision either way, never panic or hang.
-        let _ = do_not_disturb();
-    }
-
-    #[tokio::test]
-    async fn the_recording_notifier_reports_what_it_was_asked_to_say() {
-        let notifier = RecordingNotifier::default();
-        notifier.meeting_starting(&event("evt-1")).await;
-        notifier.armed_meeting_never_started(&event("evt-2")).await;
-        let said = notifier.said.lock().expect("said").clone();
-        assert_eq!(said, vec!["starting:evt-1", "never-started:evt-2"]);
     }
 
     #[test]

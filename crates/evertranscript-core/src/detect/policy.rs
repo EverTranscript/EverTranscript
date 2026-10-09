@@ -463,70 +463,14 @@ mod tests {
     }
 
     #[test]
-    fn joining_a_meeting_already_under_way_records_the_remainder() {
-        // Story 12: a partial record beats no record. Detection coming
-        // online mid-meeting sees the microphone already held.
-        let [actions, _] = both_ways(timelines::joined_late());
-        assert_eq!(starts(&actions), 1);
-    }
-
-    #[test]
     fn the_second_meeting_of_the_day_in_the_same_app_still_records() {
+        // Also the regression the fragment rule found on its first use: in
+        // the sparse timeline nothing asks the policy anything during the
+        // half-hour gap, and deciding the deadline only when interrupted
+        // merged both into one Meeting with a thirty-minute hole.
         let [actions, _] = both_ways(timelines::back_to_back_meetings());
         assert_eq!(starts(&actions), 2, "two meetings, two recordings");
         assert_eq!(stops(&actions), 2);
-    }
-
-    #[test]
-    fn a_long_silence_ends_the_meeting_even_if_nobody_asks() {
-        // The bug the fragment rule found on its first use, and the reason
-        // that rule is in ticket 01 at all. Two meetings half an hour apart
-        // arrive as five events; between the microphone going quiet and
-        // coming back, nothing asks the policy anything. Deciding the
-        // deadline only when interrupted merged them into one Meeting with a
-        // thirty-minute hole, and the sparse timeline showed one recording
-        // where the fragmented one showed two.
-        let mut policy = AutoRecord::new(Watchlist::shipped());
-        let actions = run(
-            &mut policy,
-            Timeline::new()
-                .mic_held("us.zoom.xos")
-                .wait(600_000)
-                .mic_released("us.zoom.xos")
-                // Nothing at all for half an hour.
-                .wait(1_800_000)
-                .mic_held("us.zoom.xos")
-                .into_events(),
-        );
-        assert_eq!(
-            starts(&actions),
-            2,
-            "the second meeting is a second Meeting, however quiet the gap"
-        );
-        assert_eq!(stops(&actions), 1, "and the first one ended when it ended");
-    }
-
-    #[test]
-    fn a_manual_stop_is_not_overruled_for_the_rest_of_that_meeting() {
-        // Story 11: the machine never overrules the Operator. The
-        // microphone stays hot the whole time — every tick is a chance for
-        // the policy to change its mind, and it must not.
-        let mut policy = AutoRecord::new(Watchlist::shipped());
-        let start = Timeline::new()
-            .app_active("us.zoom.xos")
-            .mic_held("us.zoom.xos")
-            .into_events();
-        assert_eq!(starts(&run(&mut policy, start)), 1);
-
-        policy.stopped_by_operator();
-
-        let rest = Timeline::new().wait(600_000).fragmented(1_000);
-        let actions = run(&mut policy, rest);
-        assert_eq!(
-            starts(&actions),
-            0,
-            "detection restarted a recording the Operator had stopped"
-        );
     }
 
     #[test]

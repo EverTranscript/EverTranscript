@@ -164,25 +164,18 @@ mod tests {
         }
     }
 
-    fn every_failure() -> [Failure; 4] {
+    fn every_failure() -> [Failure; 5] {
         // The four shapes ticket 07 names: refused connection, 401, timeout
         // mid-stream, malformed response. A fallback that only handles the
-        // one its author imagined is the one that will not fire.
+        // one its author imagined is the one that will not fire. Plus a
+        // missing model, the one shape that is not the network's fault.
         [
             Failure::Unreachable,
             Failure::Refused,
             Failure::TimedOut,
             Failure::Malformed,
+            Failure::Unavailable,
         ]
-    }
-
-    #[test]
-    fn a_fresh_install_has_not_chosen_and_says_so() {
-        // ADR-0013: no preselection. A `Choice` with a `Default` would be a
-        // choice made by accident.
-        let knob = Knob::default();
-        assert!(!knob.is_configured());
-        assert_eq!(knob.choice, None);
     }
 
     #[test]
@@ -263,6 +256,8 @@ mod tests {
 
             assert_eq!(outcome.text, "# Local summary");
             assert!(!outcome.used.leaves_the_machine());
+            // Story 38: the backend that ran is reported, not the configured one.
+            assert_eq!(outcome.used.label(), "Local (fake)");
             assert_eq!(
                 outcome.fell_back_from.as_deref(),
                 Some("OpenAI (fake)"),
@@ -364,33 +359,5 @@ mod tests {
             ..Knob::default()
         };
         assert!(run(&knob, &mut cloud, None, &request(), &Cancel::new()).is_err());
-    }
-
-    #[test]
-    fn the_active_backend_is_reported_not_the_configured_one() {
-        // Story 38's actual requirement. After a fallback these differ, and
-        // showing the configured one would tell the Operator their data went
-        // somewhere it did not — or, worse, the reverse.
-        let mut cloud = FakeBackend::cloud(
-            "OpenAI",
-            vec![crate::summary::fake::Response::Fails(Failure::TimedOut)],
-        );
-        let mut local = FakeBackend::returning("# Local");
-        let knob = Knob {
-            choice: Some(Choice::Cloud {
-                provider: "OpenAI".into(),
-            }),
-            cloud_warning_accepted: true,
-            ..Knob::default()
-        };
-        let outcome = run(
-            &knob,
-            &mut cloud,
-            Some(&mut local),
-            &request(),
-            &Cancel::new(),
-        )
-        .expect("falls back");
-        assert_eq!(outcome.used.label(), "Local (fake)");
     }
 }

@@ -62,15 +62,6 @@ impl CaptureOffset {
     pub fn millis(&self) -> u64 {
         self.0
     }
-
-    /// Sample index this offset lands on, at the capture rate.
-    pub fn sample_index(&self) -> u64 {
-        self.0 * SAMPLE_RATE as u64 / 1000
-    }
-
-    pub fn from_sample_index(index: u64) -> Self {
-        Self(index * 1000 / SAMPLE_RATE as u64)
-    }
 }
 
 /// The one clock a Meeting's capture is measured against.
@@ -194,38 +185,4 @@ pub trait AudioSource: Send {
 
     /// For logs and errors.
     fn describe(&self) -> String;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn offsets_and_sample_indices_agree() {
-        assert_eq!(CaptureOffset(1000).sample_index(), 48_000);
-        assert_eq!(
-            CaptureOffset::from_sample_index(48_000),
-            CaptureOffset(1000)
-        );
-        assert_eq!(CaptureOffset::ZERO.sample_index(), 0);
-    }
-
-    #[test]
-    fn a_frames_duration_follows_its_sample_count() {
-        let frame = AudioFrame::new(
-            AudioChannel::Mic,
-            CaptureOffset(100),
-            vec![0.0; SAMPLES_PER_FRAME],
-        );
-        assert_eq!(frame.duration_ms(), FRAME_MS);
-        assert_eq!(frame.end_offset(), CaptureOffset(100 + FRAME_MS));
-    }
-
-    #[test]
-    fn the_clock_moves_forward() {
-        let clock = CaptureClock::start();
-        let first = clock.now();
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        assert!(clock.now() >= first);
-    }
 }

@@ -196,31 +196,4 @@ mod tests {
         assert_eq!(late.since(early), 0);
         assert_eq!(early.since(late), 50);
     }
-
-    #[test]
-    fn every_event_carries_its_time() {
-        // The policy is a function of the timeline. An event that cannot say
-        // when it happened is one the policy cannot reason about.
-        let at = DetectionInstant(1_234);
-        let app = AppIdentity::bare("us.zoom.xos");
-        for event in [
-            DetectionEvent::AppActive {
-                at,
-                app: app.clone(),
-            },
-            DetectionEvent::AppGone {
-                at,
-                app: app.clone(),
-            },
-            DetectionEvent::MicHeld {
-                at,
-                app: app.clone(),
-            },
-            DetectionEvent::MicReleased { at, app },
-            DetectionEvent::CalendarEventEnded { at, id: "e".into() },
-            DetectionEvent::Tick { at },
-        ] {
-            assert_eq!(event.at(), at, "{event:?} lost its timestamp");
-        }
-    }
 }

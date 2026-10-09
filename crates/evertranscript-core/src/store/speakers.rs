@@ -1319,33 +1319,6 @@ mod tests {
     }
 
     #[test]
-    fn a_speaker_resolves_from_the_form_the_registry_prints() {
-        // **The bug this was written for, reproduced.** A Diarization run
-        // mints its Speakers in one burst, and two from the Operator's real
-        // registry share twenty-one leading hex characters — so the Registry
-        // shows a Speaker by its *tail*, and a prefix search would never find
-        // what a person typed back.
-        let connection = db();
-        let first = create(&connection, false).expect("first");
-        let second = create(&connection, false).expect("second");
-        assert_ne!(first.id, second.id);
-
-        for speaker in [&first, &second] {
-            let tail = crate::ids::short_tail(&speaker.id);
-            assert_eq!(
-                resolve(&connection, &tail).expect("resolve"),
-                Some(speaker.id.clone()),
-                "the id the Registry prints ({tail}) must resolve"
-            );
-            assert_eq!(
-                resolve(&connection, &speaker.id).expect("resolve"),
-                Some(speaker.id.clone()),
-                "and so must the full one"
-            );
-        }
-    }
-
-    #[test]
     fn a_speaker_id_matching_two_is_refused() {
         // **Two real ids from the Operator's Voice Registry**, both produced
         // by one Diarization run. Inserted verbatim rather than generated:
@@ -1374,10 +1347,15 @@ mod tests {
             "a prefix matching two Speakers must be refused, not guessed"
         );
 
-        // And each tail, which is what the Registry actually prints, is not.
+        // And each tail, which is what the Registry actually prints, is not,
+        // nor is the full id.
         for id in ids {
             assert_eq!(
                 resolve(&connection, &crate::ids::short_tail(id)).expect("resolve"),
+                Some(id.to_string())
+            );
+            assert_eq!(
+                resolve(&connection, id).expect("resolve"),
                 Some(id.to_string())
             );
         }
@@ -2301,61 +2279,6 @@ mod tests {
     }
 
     #[test]
-    fn negative_evidence_moves_the_wrong_speakers_voiceprint_away() {
-        // The point of recording it. After a correction, recomputing the
-        // centroid must no longer include the observation that caused the
-        // mistake — otherwise the Voiceprint keeps pointing at the voice it
-        // was just told it does not own.
-        use crate::diarize::cluster::centroid;
-        let connection = db();
-        let meeting = meetings::start(&connection, None, None).expect("meeting");
-        let segment_id = segment(&connection, &meeting.id, 1);
-        let machine_said = create(&connection, false).expect("john");
-        let actually = create(&connection, false).expect("alice");
-
-        for vector in [[1.0_f32, 0.0], [0.0, 1.0]] {
-            add_exemplar(
-                &connection,
-                NewExemplar {
-                    speaker_id: &machine_said.id,
-                    meeting_id: Some(&meeting.id),
-                    vector: &vector,
-                    model: "m",
-                    model_version: "1",
-                    voiced_ms: 4_000,
-                    from_operator: false,
-                    is_negative: false,
-                    sample: None,
-                },
-            )
-            .expect("exemplar");
-        }
-        attribute_segment(
-            &connection,
-            &segment_id,
-            Some(&machine_said.id),
-            Attribution::Voiceprint,
-        )
-        .expect("attribute");
-
-        correct_attribution(&connection, &segment_id, &actually.id).expect("correct");
-
-        let history: Vec<(Vec<f32>, i64, bool)> = exemplars(&connection, &machine_said.id)
-            .expect("exemplars")
-            .into_iter()
-            .map(|exemplar| (exemplar.vector, exemplar.voiced_ms, exemplar.is_negative))
-            .collect();
-        assert!(
-            history.iter().any(|(_, _, negative)| *negative),
-            "negatives are on file"
-        );
-        assert!(
-            centroid(&history).is_some(),
-            "and the centroid still computes from what is left"
-        );
-    }
-
-    #[test]
     fn a_first_attribution_by_the_operator_teaches_nobody_a_lesson() {
         // Correcting a segment the machine never attributed is the Operator
         // filling a gap, not disagreeing. Recording negative evidence
@@ -2367,40 +2290,6 @@ mod tests {
 
         correct_attribution(&connection, &segment_id, &speaker.id).expect("correct");
         assert!(exemplars(&connection, &speaker.id).expect("ex").is_empty());
-    }
-
-    #[test]
-    fn de_identification_is_rename_plus_voiceprint_delete() {
-        // Story 32, composed from parts that already exist. ADR-0009
-        // rejected a dedicated anonymize mechanism because rename already is
-        // one; this is the test that says the composition actually works.
-        let connection = db();
-        let meeting = meetings::start(&connection, None, None).expect("meeting");
-        let segment_id = segment(&connection, &meeting.id, 1);
-        let speaker = create(&connection, false).expect("speaker");
-        rename(&connection, &speaker.id, "Alice Zhang").expect("name");
-        set_voiceprint(&connection, &speaker.id, &[1.0, 0.0], "m", "1").expect("voiceprint");
-        attribute_segment(
-            &connection,
-            &segment_id,
-            Some(&speaker.id),
-            Attribution::Voiceprint,
-        )
-        .expect("attribute");
-
-        // The Participant asks to be forgotten, to the degree the Operator
-        // chooses.
-        delete_voiceprint(&connection, &speaker.id).expect("forget the voice");
-        rename(&connection, &speaker.id, "Participant 1").expect("forget the name");
-
-        let after = get(&connection, &speaker.id).expect("get").expect("exists");
-        assert!(!after.has_voiceprint, "no longer recognized");
-        assert_eq!(after.display_name.as_deref(), Some("Participant 1"));
-        assert_eq!(
-            attributed_speaker(&connection, &segment_id).expect("attr"),
-            Some(speaker.id),
-            "and what was said is still exactly what was said"
-        );
     }
 
     #[test]

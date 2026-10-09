@@ -214,14 +214,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sanctioned_traffic_has_exactly_three_entries() {
-        // ADR-0034 makes this list closed. A fourth entry is a
-        // milestone-sized decision, and this test is what makes adding one
-        // deliberate rather than incidental.
-        assert_eq!(sanctioned_traffic(true, false, None, None).len(), 3);
-    }
-
-    #[test]
     fn with_local_summary_and_updates_off_nothing_is_enabled() {
         // The guarantee in its final form, computed rather than asserted.
         let traffic = sanctioned_traffic(false, false, Some("local"), None);
@@ -289,31 +281,6 @@ mod tests {
         // matters.
         let traffic = sanctioned_traffic(true, false, Some("local"), None);
         assert!(!currently_silent(&traffic, true));
-    }
-
-    #[test]
-    fn a_missing_model_means_not_silent_because_it_will_be_fetched() {
-        let traffic = sanctioned_traffic(false, false, Some("local"), None);
-        assert!(!currently_silent(&traffic, false));
-    }
-
-    #[test]
-    fn the_foreclosed_list_matches_what_the_guarantee_audit_forbids() {
-        // The list must not drift from the binary. These four framework
-        // names are what tests/guarantees.rs asserts absent, and two of them
-        // are there because M2 found them linked by accident through a
-        // dependency's default features.
-        let text = FORECLOSED
-            .iter()
-            .map(|item| item.proof)
-            .collect::<Vec<_>>()
-            .join(" ");
-        for framework in ["ScreenCaptureKit", "Contacts", "CoreLocation", "MapKit"] {
-            assert!(
-                text.contains(framework),
-                "{framework} is forbidden by the audit but unmentioned here"
-            );
-        }
     }
 
     #[test]

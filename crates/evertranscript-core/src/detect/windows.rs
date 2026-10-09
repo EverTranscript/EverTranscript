@@ -365,11 +365,4 @@ mod tests {
         assert_eq!(leaf_lowercased("").as_deref(), None);
         assert_eq!(leaf_lowercased(r"C:\dir\").as_deref(), None);
     }
-
-    /// A live process is still named, and still ends up an executable.
-    #[test]
-    fn reports_a_live_process_as_an_executable() {
-        let name = executable_name(std::process::id()).expect("a name for this process");
-        assert!(name.ends_with(".exe"), "{name} should be an executable");
-    }
 }

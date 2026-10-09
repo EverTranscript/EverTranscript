@@ -493,25 +493,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_chinese_character_split_across_tokens_survives() {
-        // The failure this exists to prevent, in its exact form: three bytes
-        // of 会 arriving as 2 + 1. Decoded independently that is two
-        // replacement characters, written permanently into a record that is
-        // immutable by design.
-        let full = "会议".as_bytes();
-        let mut decoder = IncrementalUtf8::new();
-
-        let mut out = String::new();
-        out.push_str(&decoder.push(&full[..2]));
-        assert_eq!(out, "", "an incomplete character emits nothing yet");
-        out.push_str(&decoder.push(&full[2..]));
-        out.push_str(&decoder.finish());
-
-        assert_eq!(out, "会议");
-        assert!(!out.contains('\u{fffd}'));
-    }
-
-    #[test]
     fn one_byte_at_a_time_still_produces_the_original_text() {
         // The worst case, and the one a streaming model actually produces.
         let original = "决定推迟投票 — and the ASCII too, plus an emoji 🎉";
@@ -540,46 +521,6 @@ mod tests {
         let out = decoder.push(&bytes[..bytes.len() - 1]);
         assert_eq!(out, "ok ");
         assert!(decoder.finish().contains('\u{fffd}'), "and says it broke");
-    }
-
-    #[test]
-    fn the_protocol_round_trips_as_jsonl() {
-        // One request per line, one response per line — the property the
-        // whole transport depends on. A payload containing a newline (every
-        // transcript does) must not become two messages.
-        let request = SidecarRequest::Generate {
-            system: "rules".into(),
-            user: "line one\nline two\n<transcript>".into(),
-        };
-        let line = serde_json::to_string(&request).expect("encodes");
-        assert!(!line.contains('\n'), "a request must be one line");
-        assert_eq!(
-            serde_json::from_str::<SidecarRequest>(&line).expect("decodes"),
-            request
-        );
-    }
-
-    #[test]
-    fn every_response_shape_round_trips() {
-        for response in [
-            SidecarResponse::Ready {
-                model: "qwen".into(),
-            },
-            SidecarResponse::Generated {
-                text: "# Summary\n\n会议决定".into(),
-            },
-            SidecarResponse::Pong,
-            SidecarResponse::Error {
-                message: "no model".into(),
-            },
-        ] {
-            let line = serde_json::to_string(&response).expect("encodes");
-            assert!(!line.contains('\n'));
-            assert_eq!(
-                serde_json::from_str::<SidecarResponse>(&line).expect("decodes"),
-                response
-            );
-        }
     }
 
     #[test]

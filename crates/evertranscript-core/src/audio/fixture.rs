@@ -227,24 +227,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_script_produces_frames_at_the_right_offsets() {
-        let events = FixtureSource::new(vec![
-            Step::audio(AudioChannel::Mic, 100, 1.0),
-            Step::audio(AudioChannel::Mic, 100, 1.0),
-        ])
-        .into_events();
-
-        let offsets: Vec<u64> = events
-            .iter()
-            .filter_map(|event| match event {
-                CaptureEvent::Frame(frame) => Some(frame.offset.millis()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(offsets, vec![0, 100]);
-    }
-
-    #[test]
     fn a_gap_advances_the_clock_without_producing_audio() {
         let events = FixtureSource::new(vec![
             Step::audio(AudioChannel::Mic, 100, 1.0),

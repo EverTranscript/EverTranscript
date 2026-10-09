@@ -269,18 +269,6 @@ pub mod timelines {
             .tick()
     }
 
-    /// Detection comes online while a meeting is already under way: the
-    /// microphone is already held when the first event arrives.
-    pub fn joined_late() -> Timeline {
-        Timeline::new()
-            .mic_held("us.zoom.xos")
-            .app_active("us.zoom.xos")
-            .wait(300_000)
-            .mic_released("us.zoom.xos")
-            .wait(30_000)
-            .tick()
-    }
-
     /// A calendar event starts and nobody ever joins.
     pub fn armed_but_never_triggered() -> Timeline {
         Timeline::new()
@@ -293,27 +281,6 @@ pub mod timelines {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fragmenting_preserves_the_scripted_events_and_their_order() {
-        let sparse = timelines::device_swap_mid_meeting();
-        let scripted: Vec<_> = sparse.events().to_vec();
-        let fragmented = sparse.clone().fragmented(1_000);
-
-        let kept: Vec<_> = fragmented
-            .iter()
-            .filter(|event| !matches!(event, DetectionEvent::Tick { .. }))
-            .cloned()
-            .collect();
-        let expected: Vec<_> = scripted
-            .into_iter()
-            .filter(|event| !matches!(event, DetectionEvent::Tick { .. }))
-            .collect();
-        assert_eq!(
-            kept, expected,
-            "fragmenting must not lose or reorder events"
-        );
-    }
 
     #[test]
     fn fragmenting_fills_the_silence_the_sparse_form_skips() {

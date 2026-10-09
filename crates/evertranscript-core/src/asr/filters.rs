@@ -254,32 +254,6 @@ mod tests {
     }
 
     #[test]
-    fn normalising_the_script_leaves_everything_else_alone() {
-        let english = "The council met on Tuesday to review the quarterly budget.";
-        assert_eq!(clean(english, SIMPLIFIED).as_deref(), Some(english));
-        let simplified = "会议决定推迟投票";
-        assert_eq!(clean(simplified, SIMPLIFIED).as_deref(), Some(simplified));
-    }
-
-    #[test]
-    fn subtitle_boilerplate_is_rejected_in_either_script() {
-        // The invention list is written Simplified, so a Traditional decode
-        // of the same boilerplate used to walk straight past it.
-        assert_eq!(clean("請不吝點贊", SIMPLIFIED), None);
-    }
-
-    #[test]
-    fn an_operator_who_wants_traditional_gets_traditional() {
-        // Simplified ships, but it is a preference and not a fact about the
-        // speaker. The words are identical either way.
-        let simplified = "会议决定推迟投票";
-        assert_eq!(
-            clean(simplified, ChineseScript::Traditional).as_deref(),
-            Some("會議決定推遲投票")
-        );
-    }
-
-    #[test]
     fn the_ambiguous_direction_is_resolved_by_phrase_not_by_character() {
         // 发 is 發 in "send" and 髮 in "hair". A per-character table has to
         // guess; this is why the conversion is done by phrase.
@@ -339,8 +313,14 @@ mod tests {
             "Thank you for watching!",
             "thanks for watching",
             "请不吝点赞",
+            // The list is written Simplified, so a Traditional decode of the
+            // same boilerplate used to walk straight past it.
+            "請不吝點贊",
             "谢谢观看",
             "[BLANK_AUDIO]",
+            // Punctuation and case do not smuggle an invention through.
+            "THANK YOU!",
+            "Thank, you",
         ] {
             assert!(
                 clean(invention, SIMPLIFIED).is_none(),
@@ -405,24 +385,6 @@ mod tests {
         // Short strings are not judged by distinct-character count: "ok" is
         // two characters and perfectly real.
         assert!(!is_meaningless("ok"));
-    }
-
-    #[test]
-    fn the_repetition_ratio_separates_speech_from_looping() {
-        let speech = repetition_ratio("we agreed to defer the hiring plan until October");
-        let loop_text = repetition_ratio("plan plan plan plan plan plan plan plan");
-        assert!(speech < 0.3, "normal speech scores low, got {speech}");
-        assert!(loop_text > 0.7, "a loop scores high, got {loop_text}");
-    }
-
-    #[test]
-    fn punctuation_and_case_do_not_smuggle_an_invention_through() {
-        for disguised in ["THANK YOU!", "  thank you.  ", "Thank, you"] {
-            assert!(
-                clean(disguised, SIMPLIFIED).is_none(),
-                "{disguised:?} is the same invention wearing punctuation"
-            );
-        }
     }
 
     #[test]

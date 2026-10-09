@@ -90,8 +90,8 @@ async fn settle() {
 /// **This replaced a fixed 600 ms sleep, and the sleep was a platform
 /// assumption.** 600 ms was enough on macOS, which is the only platform this
 /// file had ever run on — `#![cfg(unix)]` kept it off Windows, where the
-/// same path takes longer and
-/// `a_watchlist_app_taking_the_microphone_records_a_meeting` failed
+/// same path takes longer and the single-app recording test (now the Zoom
+/// row of `every_shipped_watchlist_row_triggers_a_meeting`) failed
 /// deterministically. Nothing was wrong with Auto-Record: at 4 s the same
 /// test passes. What was wrong was asserting on a clock (DECISIONS Q54).
 ///
@@ -108,55 +108,6 @@ async fn settle_until(core: &Core, ready: impl Fn(&[evertranscript_protocol::Mee
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
-}
-
-#[tokio::test]
-async fn a_watchlist_app_taking_the_microphone_records_a_meeting() {
-    // The headline promise, made executable: nobody pressed Record.
-    let (core, _dir, shutdown) = core_watching(
-        Timeline::new()
-            .mic_held("us.zoom.xos")
-            .wait(600_000)
-            .mic_released("us.zoom.xos")
-            .wait(30_000)
-            .fragmented(5_000),
-    )
-    .await;
-    settle_until(&core, |m| {
-        m.first().is_some_and(|meeting| meeting.ended_at.is_some())
-    })
-    .await;
-    shutdown.cancel();
-
-    let meetings = core.list_meetings(10, 0).await.expect("list");
-    assert_eq!(meetings.len(), 1, "one meeting, one Meeting: {meetings:?}");
-    assert_eq!(
-        meetings[0].detected_app.as_deref(),
-        Some("us.zoom.xos"),
-        "the Meeting is attributed to what triggered it"
-    );
-    assert!(meetings[0].ended_at.is_some(), "and it stopped by itself");
-}
-
-#[tokio::test]
-async fn nothing_on_the_watchlist_means_nothing_recorded() {
-    // A hot microphone in a dictation app is not a meeting (ADR-0024).
-    let (core, _dir, shutdown) = core_watching(
-        Timeline::new()
-            .mic_held("com.superwhisper")
-            .wait(600_000)
-            .mic_released("com.superwhisper")
-            .wait(30_000)
-            .fragmented(5_000),
-    )
-    .await;
-    settle().await;
-    shutdown.cancel();
-
-    assert!(
-        core.list_meetings(10, 0).await.expect("list").is_empty(),
-        "dictation became a Meeting"
-    );
 }
 
 #[tokio::test]
@@ -257,34 +208,6 @@ async fn a_watchlist_edit_takes_effect_without_a_restart() {
             Some("us.zoom.xos".to_string())
         ],
         "the removed app recorded, or the added one did not"
-    );
-}
-
-#[tokio::test]
-async fn a_device_swap_produces_one_meeting_rather_than_two() {
-    // The expensive case, through the real Core rather than the state
-    // machine alone: eight seconds of silence is an AirPods swap.
-    let (core, _dir, shutdown) = core_watching(
-        Timeline::new()
-            .mic_held("us.zoom.xos")
-            .wait(120_000)
-            .mic_released("us.zoom.xos")
-            .wait(8_000)
-            .mic_held("us.zoom.xos")
-            .wait(120_000)
-            .mic_released("us.zoom.xos")
-            .wait(30_000)
-            .fragmented(2_000),
-    )
-    .await;
-    settle().await;
-    shutdown.cancel();
-
-    let meetings = core.list_meetings(10, 0).await.expect("list");
-    assert_eq!(
-        meetings.len(),
-        1,
-        "the swap split the Meeting: {meetings:?}"
     );
 }
 

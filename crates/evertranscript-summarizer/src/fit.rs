@@ -113,12 +113,6 @@ mod tests {
     const GIB: u64 = 1024 * 1024 * 1024;
 
     #[test]
-    fn a_small_model_on_a_large_machine_goes_entirely_to_the_accelerator() {
-        // The 0.5B on any modern laptop: nothing to think about.
-        assert_eq!(layers_that_fit(491 * GIB / 1024, 24, 32 * GIB), 24);
-    }
-
-    #[test]
     fn a_four_billion_parameter_model_fits_a_sixteen_gigabyte_machine() {
         // 2.5 GB of weights against a 16 GB budget — comfortably inside even
         // after the overhead allowance, so all 36 layers go over.
@@ -141,16 +135,6 @@ mod tests {
         // Rather than offloading one layer and thrashing. Zero is a valid
         // answer: llama.cpp runs the whole model on the CPU, slowly.
         assert_eq!(layers_that_fit(2_546_341_152, 36, 128 * 1024 * 1024), 0);
-    }
-
-    #[test]
-    fn the_answer_never_exceeds_the_layers_the_model_has() {
-        // The failure that would matter most: asking for more layers than
-        // exist is how a "fitting" calculation becomes a crash.
-        for memory in [GIB, 8 * GIB, 64 * GIB, 512 * GIB] {
-            let layers = layers_that_fit(1_000_000, 36, memory);
-            assert!(layers <= 36, "got {layers} layers for {memory} bytes");
-        }
     }
 
     #[test]

@@ -28,12 +28,6 @@ test("a clean immediate exit says nothing", () => {
   assert.equal(verdict.retry, false);
 });
 
-test("a non-zero exit is the Core declining to start", () => {
-  const verdict = classifyCoreExit({ ...base, code: 2 });
-  assert.equal(verdict.key, "core.start.exited");
-  assert.equal(verdict.retry, true);
-});
-
 test("opening the Client twice exits 1, and that is not shown as an error", () => {
   // Measured, after this file first claimed the Core exits 0 here: a second
   // daemon exits **1** with `another EverTranscript Core is already
@@ -43,26 +37,23 @@ test("opening the Client twice exits 1, and that is not shown as an error", () =
   const verdict = classifyCoreExit({ ...base, code: 1 });
   assert.equal(verdict.key, "core.start.exited");
   assert.equal(verdict.retry, true);
+
+  // Any other non-zero exit is the Core declining to start, the same way.
+  const declined = classifyCoreExit({ ...base, code: 2 });
+  assert.equal(declined.key, "core.start.exited");
+  assert.equal(declined.retry, true);
 });
 
 test("an exit long after startup is not a start failure", () => {
   // A Core that ran for an hour and stopped is a different event, but the
-  // way must still be clear for a restart.
-  const verdict = classifyCoreExit({
-    ...base,
-    code: 1,
-    msSinceSpawn: STARTUP_WINDOW_MS + 1,
-  });
-  assert.equal(verdict.key, null);
-  assert.equal(verdict.retry, true);
-});
-
-test("a signal long after startup is also not a start failure", () => {
-  const verdict = classifyCoreExit({
-    ...base,
-    signal: "SIGTERM",
-    msSinceSpawn: STARTUP_WINDOW_MS + 1,
-  });
-  assert.equal(verdict.key, null);
-  assert.equal(verdict.retry, true);
+  // way must still be clear for a restart. The same holds for a signal.
+  for (const ending of [{ code: 1 }, { signal: "SIGTERM" as const }]) {
+    const verdict = classifyCoreExit({
+      ...base,
+      ...ending,
+      msSinceSpawn: STARTUP_WINDOW_MS + 1,
+    });
+    assert.equal(verdict.key, null);
+    assert.equal(verdict.retry, true);
+  }
 });

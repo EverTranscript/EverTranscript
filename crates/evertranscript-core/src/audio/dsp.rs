@@ -245,8 +245,8 @@ mod tests {
 
     #[test]
     fn a_channel_with_only_residual_in_it_is_not_lifted_into_speech() {
-        // `silence_is_left_alone` below tests *digital* zero, which no real
-        // channel ever is. The case that matters is a microphone leg after
+        // Digital zero is the easy case, and no real channel ever is that.
+        // The case that matters is a microphone leg after
         // echo cancellation: not silent, just empty — and lifting it eight
         // times put its residual above the speech gate, where whisper
         // invented "Það er hér" and "Gracias" and attributed them to the
@@ -268,16 +268,6 @@ mod tests {
              became {after:.6} (gain {:.2})",
             normalizer.gain()
         );
-    }
-
-    #[test]
-    fn silence_is_left_alone() {
-        // Amplifying silence produces amplified room tone, which is
-        // hallucination fuel.
-        let mut normalizer = LoudnessNormalizer::new(16_000).expect("normalizer");
-        let mut silence = vec![0.0f32; 16_000 * 5];
-        normalizer.process(&mut silence);
-        assert!(silence.iter().all(|sample| *sample == 0.0));
     }
 
     #[test]

@@ -3419,3 +3419,34 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The unit tests cover `changes`, the rule, and nothing below it. No CI host has a calendar store, and no API mints a nil-title `EKEvent`, so the reads are untested by anything automatic; a seam over the store would move the boundary without producing a declined event. The Windows half was type-checked on its own instead — a scratch crate on `windows = "=0.62.2"` with the workspace's features passes `cargo clippy --target x86_64-pc-windows-msvc -- -D warnings` — because the workspace cannot cross-compile (`scripts/check.sh`: `mp3lame-sys`), and CI runs on `main` and pull requests only, which this topic branch is neither. What closes it: one declined event on this Mac confirmed not to arm, and the branch's first native Windows build.
 **Outcome:** escalated
 **Ref:** bf405bf
+
+## Q302 — test-prune/2026-10-09 — tradeoff
+
+**Question:** The Operator asked for 20% of the least useful tests removed with total coverage held within 2 points. How to choose about 186 of 932 tests without trading away regression guards?
+**Options considered:** delete by coverage alone (tests that add no unique covered lines) / delete by a read-only audit ledger, checked against coverage / delete whole slow or model-gated suites
+**Chosen:** **A ledger, checked against coverage.** Seven read-only lanes split by production ownership mark every declaration retain, consolidate or delete against the `test-audit` bar, with the keeper named for each removal. Deletions are taken from the high-confidence rows first; `cargo llvm-cov` on the whole workspace (models absent, so model-gated tests skip both before and after) measures the base and the result. Model-gated and platform-only tests are not removed for being slow or for skipping locally.
+**Decided-by:** agent
+**Justification:** Coverage alone keeps change detectors that happen to touch a unique line and deletes a regression test whose lines another test also walks, so it measures the wrong thing; it is the constraint, not the selector. Model-gated suites are the only proof of real-model behaviour (CI comments around `EVERTRANSCRIPT_TEST_MODEL`), so removing them would meet the count by losing the most expensive evidence. The 2-point budget is measured on the local run because it is the only one reproducible here; CI with models will read slightly differently.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q303 — test-prune/2026-10-09 — tradeoff
+
+**Question:** The audit marked 242 tests consolidate or delete with high or medium confidence, but some deletions would leave production code with no caller, and some pairs of lanes named each other's test as the keeper. What gets deleted?
+**Options considered:** every marked test / every marked test plus the production code it alone reaches / a narrower set that keeps unwired features and one side of each mutual pair
+**Chosen:** **195 tests, the narrower set.** Of each mutually-cited pair, the side at the public boundary (or the cheaper unit test, where the two are the same contract) stays. Test doubles and helpers whose only caller was a deleted test go with it (`RecordingNotifier`, `FakeTranscriber::prompts_seen`, the fake's `Response::Slow`, the unused `FixtureDiarizer` constructors, `mel_to_hz`, `Integrity::is_strongly_pinned`, `models::Progress::fraction`, `CaptureOffset`'s sample-index pair, `Watchlist::also_blocking`). Unwired *features* keep their tests: notification `Gates` and its catalog, the Rust update check, and the score analysis helpers `margin_trials`/`curve`. Measurement-only model tests (the print-only rows in `transcription_quality.rs` and `summary_ninety_minutes.rs`) stay, since CI runs them with `--nocapture` for the numbers.
+**Decided-by:** agent
+**Justification:** `test-audit` deletes production code whose only callers are tests, but `Gates` (e19e520, "the notifications it will need") and `updates::check` (bd835ec, ADR-0034's sanctioned traffic) are unshipped features, so removing them is a product call rather than a test cleanup. Deleting their tests and leaving the code would only lose coverage. 195 is 20.9% of 932, which leaves room to restore a row that the preservation review finds was a contract's only proof.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q304 — test-prune/2026-10-09 — gate-resolution
+
+**Question:** The preservation review (three read-only reviewers over all 195 deletions) found six contracts with no surviving proof, and one helper Q303 called test-only had a production caller. Restore the tests, or carry their assertions into keepers?
+**Options considered:** restore every flagged test / carry each assertion into the keeper the ledger named / restore only where no keeper reaches the same boundary
+**Chosen:** **Restore where the keeper never reached the boundary, carry otherwise: 193 tests deleted, not 195.** Restored: `an_armed_meeting_alone_records_nothing` (the policy keepers never drive `detect/driver.rs`) and `progress_reports_a_sane_fraction` (`models::Progress::fraction` is called at `server.rs:4015`, so it is not test-only). Carried, each proven by mutating the source until the keeper failed and then restoring it: a catch-up row queued before `rerun::begin` is not counted (`if true || joined …`), NotPermitted's tray reason names the briefing, `enrol::refuse` refuses exactly two voices (`voices > 2`), and an Electron exit code 2 is a start failure (`code === 1`). The production-layout check from `the_history_folder_holds_only_notes_and_a_hidden_store` moved into `a_full_recording_cycle_opens_no_network_connections`, which runs the same real `Core::new` cycle.
+**Decided-by:** agent
+**Justification:** `test-audit`: a candidate whose evidence field is wrong is not ready to delete, and a C row is only safe once the keeper fails on the mutation the deleted test caught. Result at the same machine and environment as the base: Rust line coverage 83.27% to 82.28%, uncovered lines 4515 to 4459. Electron 89.66% to 89.65%. 739 of 932 tests remain.
+**Outcome:** applied
+**Ref:** (pending)
+**Supersedes:** Q303 — the deleted count, 195 to 193

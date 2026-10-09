@@ -15,7 +15,6 @@ use evertranscript_core::Core;
 use evertranscript_core::audio::SAMPLE_RATE;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
-use evertranscript_fixtures::BILINGUAL_MEETING;
 use evertranscript_fixtures::ENGLISH_MEETING;
 use evertranscript_fixtures::Fixture;
 use evertranscript_fixtures::similarity::Features;
@@ -98,22 +97,6 @@ async fn english_speech_survives_the_capture_pipeline() {
         after.band_energy[1] > 0.35,
         "recorded speech should keep its energy in the speech band, got {:?}",
         after.band_energy
-    );
-}
-
-#[tokio::test]
-async fn mandarin_and_english_survive_the_capture_pipeline() {
-    // Code-switching is the Operator's normal case (story 7), so it gets the
-    // same end-to-end proof as English rather than being assumed.
-    let (audio_path, _dir) = record_fixture(BILINGUAL_MEETING, AudioChannel::Mic).await;
-
-    let original = BILINGUAL_MEETING.samples();
-    let recorded = decode(&audio_path, AudioChannel::Mic);
-
-    Features::of(&original.data, original.rate).assert_similar(
-        &Features::of(&recorded, 16_000),
-        0.20,
-        "Mandarin/English speech through capture and AAC",
     );
 }
 

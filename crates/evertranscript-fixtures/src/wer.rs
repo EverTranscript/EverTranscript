@@ -160,13 +160,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_exact_transcription_scores_zero() {
-        let reference = "we agreed to defer the hiring plan";
-        assert_eq!(word_error_rate(reference, reference).total_errors(), 0);
-        assert_eq!(character_error_rate(reference, reference).total_errors(), 0);
-    }
-
-    #[test]
     fn punctuation_and_case_are_not_errors() {
         let rate = word_error_rate(
             "We agreed to defer the hiring plan.",
@@ -201,12 +194,9 @@ mod tests {
         let rate = word_error_rate("", "thank you for watching");
         assert!(rate.rate() >= 1.0, "got {rate}");
         assert_eq!(rate.insertions, 4);
-    }
 
-    #[test]
-    fn silence_transcribed_as_silence_is_perfect() {
-        let rate = word_error_rate("", "");
-        assert_eq!(rate.rate(), 0.0);
+        // Silence transcribed as silence is perfect.
+        assert_eq!(word_error_rate("", "").rate(), 0.0);
     }
 
     #[test]

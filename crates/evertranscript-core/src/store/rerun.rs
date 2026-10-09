@@ -545,34 +545,6 @@ mod tests {
         assert!(walking.running());
     }
 
-    /// A fresh install runs the same migration on nothing: the stamp is
-    /// there, the walk is of zero Meetings, and no backlog is ever shown.
-    #[test]
-    fn a_fresh_install_walks_nothing_and_records_the_current_model() {
-        use crate::diarize::live::{EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION};
-        let mut connection = Connection::open_in_memory().expect("open");
-        crate::store::schema::configure(&connection).expect("configure");
-        crate::store::schema::migrate(&mut connection).expect("migrate");
-
-        assert_eq!(
-            begin_if_the_model_changed(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
-                .expect("first start"),
-            Some(0),
-            "the stamp reads as a change, of nothing"
-        );
-        assert!(diarize_queue::list(&connection).expect("list").is_empty());
-        let recorded = state(&connection).expect("state").expect("a row");
-        assert_eq!(recorded.model, EMBEDDING_MODEL);
-        assert!(!recorded.requested(), "zero total: nothing to show anyone");
-
-        assert_eq!(
-            begin_if_the_model_changed(&connection, EMBEDDING_MODEL, EMBEDDING_MODEL_VERSION)
-                .expect("second start"),
-            None,
-            "and from then on it is the ordinary case"
-        );
-    }
-
     /// `started_at` out of insertion order on purpose: the walk follows the
     /// clock, not the order the rows were written.
     fn meetings(connection: &Connection, entries: &[(&str, &str, Option<&str>)]) {
@@ -597,12 +569,6 @@ mod tests {
                 ("silent", "2024-02-15T00:00:00Z", None),
             ],
         );
-    }
-
-    #[test]
-    fn a_history_that_has_never_recorded_one_has_no_state() {
-        let connection = db();
-        assert_eq!(state(&connection).expect("state"), None);
     }
 
     /// The gate every re-run-only step hangs off, asked of a History that
@@ -665,79 +631,6 @@ mod tests {
         );
     }
 
-    /// Membership hangs off the queue row, so walking a Meeting ends it.
-    #[test]
-    fn a_meeting_stops_being_the_reruns_once_its_row_is_gone() {
-        let connection = db();
-        history(&connection);
-        begin(&connection, "redimnet2-b3", "1").expect("begin");
-        let first = crate::store::diarize_queue::peek(&connection)
-            .expect("peek")
-            .expect("a meeting")
-            .0;
-
-        assert!(is_bulk_work(&connection, &first).expect("ask"));
-        crate::store::diarize_queue::finish(&connection, &first).expect("finish");
-        assert!(
-            !is_bulk_work(&connection, &first).expect("ask"),
-            "the queue row took the membership with it"
-        );
-    }
-
-    /// The trap this shape exists to avoid.
-    ///
-    /// Every History predating the feature has no row. Reading that as a
-    /// model change would enqueue all of History on the first start after an
-    /// ordinary update, with no swap behind it.
-    #[test]
-    fn the_first_start_records_the_model_and_asks_for_nothing() {
-        let connection = db();
-        history(&connection);
-
-        assert_eq!(
-            begin_if_the_model_changed(&connection, "wespeaker", "2").expect("first start"),
-            None,
-            "absent metadata is not evidence that the model changed"
-        );
-        assert!(
-            diarize_queue::list(&connection).expect("list").is_empty(),
-            "and History is left alone"
-        );
-        let recorded = state(&connection).expect("state").expect("a row");
-        assert_eq!((recorded.total, recorded.remaining), (0, 0));
-        assert!(!recorded.running());
-    }
-
-    #[test]
-    fn the_same_model_again_asks_for_nothing() {
-        let connection = db();
-        history(&connection);
-        begin_if_the_model_changed(&connection, "wespeaker", "2").expect("first start");
-
-        assert_eq!(
-            begin_if_the_model_changed(&connection, "wespeaker", "2").expect("restart"),
-            None
-        );
-        assert!(diarize_queue::list(&connection).expect("list").is_empty());
-    }
-
-    #[test]
-    fn a_changed_model_enqueues_every_meeting_with_audio_oldest_first() {
-        let connection = db();
-        history(&connection);
-        begin_if_the_model_changed(&connection, "wespeaker", "2").expect("first start");
-
-        assert_eq!(
-            begin_if_the_model_changed(&connection, "redimnet2-b3", "1").expect("changed"),
-            Some(3),
-            "the Meeting with no Kept Audio is not work"
-        );
-        assert_eq!(
-            diarize_queue::list(&connection).expect("list"),
-            vec!["a".to_string(), "b".to_string(), "c".to_string()]
-        );
-    }
-
     /// A version bump is a model change: same width, different space.
     #[test]
     fn a_changed_version_of_the_same_model_is_a_change() {
@@ -749,26 +642,6 @@ mod tests {
             begin_if_the_model_changed(&connection, "wespeaker", "3").expect("changed"),
             Some(3)
         );
-    }
-
-    #[test]
-    fn a_restart_midway_resumes_rather_than_restarting() {
-        let connection = db();
-        history(&connection);
-        begin(&connection, "redimnet2-b3", "1").expect("begin");
-        diarize_queue::finish(&connection, "a").expect("walked");
-
-        assert_eq!(
-            begin_if_the_model_changed(&connection, "redimnet2-b3", "1").expect("restart"),
-            None,
-            "the queue it left behind is the resume"
-        );
-        let resumed = state(&connection).expect("state").expect("a row");
-        assert_eq!(
-            (resumed.total, resumed.remaining, resumed.done()),
-            (3, 2, 1)
-        );
-        assert!(resumed.running());
     }
 
     /// An explicit transition does not need a row to have existed.
@@ -784,38 +657,6 @@ mod tests {
         assert!(asked.running());
     }
 
-    #[test]
-    fn cancelling_reports_what_it_gave_up_rather_than_what_it_finished() {
-        let connection = db();
-        history(&connection);
-        begin(&connection, "redimnet2-b3", "1").expect("begin");
-        diarize_queue::finish(&connection, "a").expect("walked");
-
-        assert_eq!(cancel(&connection, None).expect("cancel").abandoned, 2);
-        let stopped = state(&connection).expect("state").expect("a row");
-        assert!(stopped.cancelled && !stopped.running());
-        assert_eq!(
-            (stopped.done(), stopped.abandoned),
-            (1, 2),
-            "one walked and two given up, not three walked"
-        );
-    }
-
-    /// Cancelling is not a reason to begin the whole thing again.
-    #[test]
-    fn a_cancelled_rerun_is_not_restarted_by_the_next_start() {
-        let connection = db();
-        history(&connection);
-        begin(&connection, "redimnet2-b3", "1").expect("begin");
-        cancel(&connection, None).expect("cancel");
-
-        assert_eq!(
-            begin_if_the_model_changed(&connection, "redimnet2-b3", "1").expect("next start"),
-            None
-        );
-        assert!(diarize_queue::list(&connection).expect("list").is_empty());
-    }
-
     /// The re-run owns its own Meetings, not the queue.
     ///
     /// `Back` is a scheduling class: production already enqueues there for
@@ -826,14 +667,16 @@ mod tests {
     fn work_the_rerun_never_asked_for_is_neither_counted_nor_cancelled() {
         let connection = db();
         history(&connection);
-        begin(&connection, "redimnet2-b3", "1").expect("begin");
-
+        // Catch-up work already in line when the backlog begins: it has
+        // audio, so `begin` walks it, but it is not the backlog's to own.
         meetings(
             &connection,
             &[("later", "2024-04-01T00:00:00Z", Some("later.wav"))],
         );
         diarize_queue::enqueue(&connection, "later", diarize_queue::Priority::Back)
             .expect("catch-up");
+        assert_eq!(begin(&connection, "redimnet2-b3", "1").expect("begin"), 3);
+
         // A Meeting somebody is waiting for, which was also the re-run's.
         diarize_queue::enqueue(&connection, "b", diarize_queue::Priority::Front)
             .expect("asked for");

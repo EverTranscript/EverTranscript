@@ -32,7 +32,7 @@ export interface Lookup {
 }
 
 /** What the Core is called here. */
-export function coreName(platform: string): string {
+function coreName(platform: string): string {
   return platform === "win32" ? "evertranscript.exe" : "evertranscript";
 }
 

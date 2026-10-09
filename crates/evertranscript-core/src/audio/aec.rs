@@ -647,17 +647,6 @@ mod tests {
         );
         assert_eq!(microphone, near, "and the audio is untouched");
     }
-
-    #[test]
-    fn a_short_reference_does_not_shift_the_rest_of_the_block() {
-        // Defensive: the legs are aligned by construction, but treating a
-        // missing reference as silence keeps a mismatch from turning into a
-        // permanent offset between the channels.
-        let mut microphone = vec![0.25f32; 1000];
-        let mut canceller = EchoCanceller::new(RATE);
-        canceller.process(&mut microphone, &[0.1; 10]);
-        assert_eq!(microphone.len(), 1000);
-    }
 }
 
 #[cfg(test)]

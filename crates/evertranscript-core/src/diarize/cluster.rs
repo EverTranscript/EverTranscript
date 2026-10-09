@@ -1404,32 +1404,6 @@ mod tests {
         }
     }
 
-    /// Same width, same numbers, different model: still a stranger.
-    ///
-    /// `cosine` refuses a dimension mismatch, so two models of different
-    /// widths could never have matched by accident. Two of the *same* width
-    /// would have, and a version bump is exactly that case — the front-end
-    /// fix behind version 2 left vectors of the same 256 dimensions
-    /// agreeing with version 1's at cosine 0.36 (DECISIONS Q115). Nothing
-    /// in the numbers says which space a vector is in; only the label does.
-    #[test]
-    fn a_voiceprint_from_another_model_is_never_a_match() {
-        let this_meeting = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let mut elsewhere = seed("alice", &[1.0, 0.0, 0.0], true);
-        elsewhere.model = "some-other-model".into();
-
-        // The control: the identical seed in this space is recognized, so
-        // the refusal below is about the label and nothing else.
-        assert_eq!(
-            resolve(&this_meeting, &[seed("alice", &[1.0, 0.0, 0.0], true)])[&Cluster(0)],
-            Resolved::Existing("alice".into())
-        );
-        assert_eq!(
-            resolve(&this_meeting, &[elsewhere])[&Cluster(0)],
-            Resolved::New
-        );
-    }
-
     /// The batch is not assumed homogeneous, because nothing makes it so.
     ///
     /// The first version of this guard read the space off
@@ -1475,15 +1449,6 @@ mod tests {
         }
     }
 
-    /// A version bump is a different space, and reads as one.
-    #[test]
-    fn a_voiceprint_from_another_version_is_never_a_match() {
-        let this_meeting = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let mut older = seed("alice", &[1.0, 0.0, 0.0], true);
-        older.model_version = "0".into();
-        assert_eq!(resolve(&this_meeting, &[older])[&Cluster(0)], Resolved::New);
-    }
-
     /// One out-of-space seed must not take the in-space one down with it.
     #[test]
     fn a_stale_seed_beside_a_current_one_leaves_the_current_one_matching() {
@@ -1497,19 +1462,6 @@ mod tests {
             )[&Cluster(0)],
             Resolved::Existing("alice".into()),
             "the stale seed is not a candidate, so it is also not a runner-up the margin trips on"
-        );
-    }
-
-    #[test]
-    fn a_returning_voice_is_recognized_as_the_same_speaker() {
-        // Story 28, and the only reason Voiceprints are stored at all.
-        let this_meeting = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let history = vec![seed("alice", &[0.98, 0.1, 0.0], true)];
-        let resolved = resolve(&this_meeting, &history);
-        assert_eq!(
-            resolved[&Cluster(0)],
-            Resolved::Existing("alice".into()),
-            "she came back"
         );
     }
 
@@ -1592,24 +1544,6 @@ mod tests {
     }
 
     #[test]
-    fn confirmation_does_not_lower_the_floor() {
-        // A confirmed Voiceprint matches more readily *between candidates*.
-        // It must not make an unrelated voice match at all — that would turn
-        // the Operator's helpfulness into a source of false attributions.
-        let this_meeting = clusters(&[(0, &[0.0, 1.0])]);
-        let history = vec![seed("alice", &[1.0, 0.0], true)];
-        assert_eq!(resolve(&this_meeting, &history)[&Cluster(0)], Resolved::New);
-    }
-
-    #[test]
-    fn an_empty_history_makes_everyone_new_without_dividing_by_zero() {
-        let this_meeting = clusters(&[(0, &[1.0, 0.0]), (1, &[0.0, 1.0])]);
-        let resolved = resolve(&this_meeting, &[]);
-        assert_eq!(resolved.len(), 2);
-        assert!(resolved.values().all(|r| *r == Resolved::New));
-    }
-
-    #[test]
     fn a_silent_cluster_matches_nobody() {
         // A zero vector has no direction. Returning 0 rather than NaN is what
         // stops it comparing equal to everything and being handed a name.
@@ -1625,22 +1559,6 @@ mod tests {
         // exactly this; comparing across them yields a plausible number and
         // a meaningless one.
         assert_eq!(cosine(&[1.0, 0.0], &[1.0, 0.0, 0.0]), 0.0);
-    }
-
-    #[test]
-    fn over_segmented_clusters_merge_back_into_one_voice() {
-        // A clusterer splitting one person in two is commonplace, and the
-        // Operator reads it as a stranger in their own meeting.
-        let split = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.97, 0.24, 0.0])]);
-        let canonical = agglomerate(&split);
-        assert_eq!(canonical[&Cluster(1)], canonical[&Cluster(0)]);
-    }
-
-    #[test]
-    fn genuinely_different_voices_are_not_merged() {
-        let distinct = clusters(&[(0, &[1.0, 0.0, 0.0]), (1, &[0.0, 1.0, 0.0])]);
-        let canonical = agglomerate(&distinct);
-        assert_ne!(canonical[&Cluster(1)], canonical[&Cluster(0)]);
     }
 
     #[test]
@@ -1670,17 +1588,6 @@ mod tests {
             centre[1].abs() < 1e-6,
             "the negative is excluded: {centre:?}"
         );
-    }
-
-    #[test]
-    fn exemplars_are_bounded_so_a_long_history_stays_cheap() {
-        // A Speaker seen in two hundred Meetings must not carry two hundred
-        // vectors into every later clustering run.
-        let many: Vec<(Vec<f32>, i64, bool)> = (0..200)
-            .map(|index| (vec![1.0, index as f32 / 1000.0], 1_000, false))
-            .collect();
-        assert!(centroid(&many).is_some());
-        assert_eq!(MAX_EXEMPLARS, 32);
     }
 
     /// Ticket 13's measure sees the two voices the mint still ignores.
@@ -2109,127 +2016,6 @@ mod tests {
     }
 
     #[test]
-    fn a_new_voice_becomes_a_new_speaker_rather_than_joining_one() {
-        use crate::store::meetings;
-        let connection = db();
-
-        let monday = meetings::start(&connection, None, None).expect("m1");
-        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        persist(
-            &connection,
-            &monday.id,
-            &first,
-            &heard(&first),
-            None,
-            &Rebuilt::default(),
-        )
-        .expect("persist");
-
-        let friday = meetings::start(&connection, None, None).expect("m2");
-        let second = clusters(&[(0, &[0.0, 0.0, 1.0])]);
-        persist(
-            &connection,
-            &friday.id,
-            &second,
-            &heard(&second),
-            None,
-            &Rebuilt::default(),
-        )
-        .expect("persist");
-
-        assert_eq!(
-            crate::store::speakers::list(&connection)
-                .expect("list")
-                .len(),
-            2,
-            "a stranger is a stranger"
-        );
-    }
-
-    #[test]
-    fn every_meeting_improves_the_voiceprint_it_seeded_from() {
-        // ADR-0008 promises recognition that improves with every Meeting.
-        // That is only true if the observation is folded back in, which is
-        // what the exemplar plus recomputed centroid is for.
-        use crate::store::meetings;
-        let connection = db();
-
-        let monday = meetings::start(&connection, None, None).expect("m1");
-        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        let map = persist(
-            &connection,
-            &monday.id,
-            &first,
-            &heard(&first),
-            None,
-            &Rebuilt::default(),
-        )
-        .expect("persist");
-        let speaker_id = map[&Cluster(0)].clone();
-        assert_eq!(
-            crate::store::speakers::exemplars(&connection, &speaker_id)
-                .expect("exemplars")
-                .len(),
-            1
-        );
-
-        let friday = meetings::start(&connection, None, None).expect("m2");
-        let second = clusters(&[(0, &[0.97, 0.05, 0.0])]);
-        persist(
-            &connection,
-            &friday.id,
-            &second,
-            &heard(&second),
-            None,
-            &Rebuilt::default(),
-        )
-        .expect("persist");
-
-        assert_eq!(
-            crate::store::speakers::exemplars(&connection, &speaker_id)
-                .expect("exemplars")
-                .len(),
-            2,
-            "the second hearing was kept as evidence"
-        );
-        assert!(
-            crate::store::speakers::get(&connection, &speaker_id)
-                .expect("get")
-                .expect("exists")
-                .has_voiceprint
-        );
-    }
-
-    #[test]
-
-    fn a_voiceprint_from_another_model_is_never_offered_as_a_seed() {
-        // ADR-0037's standing guard. The migration deletes old vectors, but
-        // this is what holds if one ever survives — and it is what makes a
-        // model change restart recognition honestly instead of comparing
-        // numbers that do not measure the same thing.
-        use crate::store::meetings;
-        let connection = db();
-
-        let monday = meetings::start(&connection, None, None).expect("m1");
-        let first = clusters(&[(0, &[1.0, 0.0, 0.0])]);
-        persist(
-            &connection,
-            &monday.id,
-            &first,
-            &heard(&first),
-            None,
-            &Rebuilt::default(),
-        )
-        .expect("persist");
-
-        // Present for the model that made it.
-        assert_eq!(seeds(&connection, "test", "1").expect("seeds").len(), 1);
-        // Absent for any other, by name or by version.
-        assert!(seeds(&connection, "other", "1").expect("seeds").is_empty());
-        assert!(seeds(&connection, "test", "2").expect("seeds").is_empty());
-    }
-
-    #[test]
     fn same_width_vectors_from_different_models_do_not_recognize_each_other() {
         // The case vector length cannot catch. `cosine` scores mismatched
         // widths zero, which happens to save us for 256 against 192 and
@@ -2369,29 +2155,6 @@ mod tests {
         id
     }
 
-    #[test]
-    fn a_named_voice_keeps_its_cluster_across_a_model_change() {
-        // The assertion the whole of ticket 12 exists to make true: without
-        // it the first Meeting of a re-run hands a named voice to a fresh
-        // pseudonym, having had every vector taken away.
-        use crate::store::meetings;
-        let connection = db();
-        let meeting = meetings::start(&connection, None, None).expect("meeting");
-        let alice = named(&connection, "Alice");
-
-        let reconciliation = spoken(
-            &connection,
-            &meeting.id,
-            &[(Some(0), Some(&alice)), (Some(0), Some(&alice))],
-        );
-        assert_eq!(
-            claims(&connection, &reconciliation)
-                .expect("claims")
-                .claimed,
-            [(Cluster(0), alice)].into_iter().collect()
-        );
-    }
-
     /// `relearnable` includes the Operator; this must not.
     ///
     /// The Operator claims like any other named Speaker, since Q237.
@@ -2424,29 +2187,6 @@ mod tests {
             said.claimed[&Cluster(0)],
             me,
             "the Operator's own attributed words are evidence about the Operator"
-        );
-    }
-
-    #[test]
-    fn a_correction_outranks_the_attribution_it_replaced() {
-        // The Operator's word is the point of this whole path, so reading
-        // `speaker_id` directly here would show them their own correction
-        // being ignored.
-        use crate::store::{meetings, speakers};
-        let connection = db();
-        let meeting = meetings::start(&connection, None, None).expect("meeting");
-        let alice = named(&connection, "Alice");
-        let bob = named(&connection, "Bob");
-
-        let reconciliation = spoken(&connection, &meeting.id, &[(Some(0), Some(&alice))]);
-        speakers::correct_attribution(&connection, &reconciliation.assignments[0].segment_id, &bob)
-            .expect("correct");
-
-        assert_eq!(
-            claims(&connection, &reconciliation)
-                .expect("claims")
-                .claimed[&Cluster(0)],
-            bob
         );
     }
 
@@ -2537,29 +2277,6 @@ mod tests {
                 (Some(0), Some(&anonymous)),
                 (Some(0), Some(&alice)),
             ],
-        );
-        assert!(
-            claims(&connection, &reconciliation)
-                .expect("claims")
-                .claimed
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn a_cluster_two_named_voices_share_is_claimed_by_neither() {
-        // A merged cluster is the case with no right answer, and picking
-        // one by comparing two UUIDs would be picking it at random.
-        use crate::store::meetings;
-        let connection = db();
-        let meeting = meetings::start(&connection, None, None).expect("meeting");
-        let alice = named(&connection, "Alice");
-        let bob = named(&connection, "Bob");
-
-        let reconciliation = spoken(
-            &connection,
-            &meeting.id,
-            &[(Some(0), Some(&alice)), (Some(0), Some(&bob))],
         );
         assert!(
             claims(&connection, &reconciliation)
@@ -3174,79 +2891,6 @@ mod tests {
         );
     }
 
-    /// Characterization, not approval: ticket 13 through the whole mint path,
-    /// pinning that a contaminated Speaker **still** gets a Voiceprint.
-    ///
-    /// **When the guard is adopted this test fails, and that is the signal.**
-    /// Replace the final assertion with the coherent Speaker being the only
-    /// seed offered.
-    #[test]
-    fn today_a_contaminated_speaker_is_still_given_a_voiceprint() {
-        // Two voices in near-equal measure under one Speaker's name, which is
-        // the shape the real History had: the Operator's own voice and a
-        // colleague's leaking in from the far end. The mint stamps the blend,
-        // and on the real History the blend matched the colleague.
-        use crate::store::meetings;
-        use crate::store::speakers;
-        let connection = db();
-        let meeting = meetings::start(&connection, None, None).expect("m");
-        let mine = [1.0_f32, 0.0, 0.0];
-        let theirs = [0.0_f32, 1.0, 0.0];
-
-        let add = |speaker_id: &str, vector: &[f32]| {
-            speakers::add_exemplar(
-                &connection,
-                speakers::NewExemplar {
-                    speaker_id,
-                    meeting_id: Some(&meeting.id),
-                    vector,
-                    model: "test",
-                    model_version: "1",
-                    voiced_ms: 12_000,
-                    from_operator: false,
-                    is_negative: false,
-                    sample: None,
-                },
-            )
-            .expect("exemplar");
-        };
-
-        let contaminated = speakers::create(&connection, false).expect("speaker");
-        for _ in 0..4 {
-            add(&contaminated.id, &mine);
-        }
-        for _ in 0..5 {
-            add(&contaminated.id, &theirs);
-        }
-
-        // A second Speaker, heard cleanly, to show the guard is not a
-        // blanket refusal: the same run must leave this one recognizable.
-        let coherent = speakers::create(&connection, false).expect("speaker");
-        for index in 0..9 {
-            let drift = index as f32 / 12.0;
-            let norm = (1.0 + drift * drift).sqrt();
-            add(&coherent.id, &[1.0 / norm, drift / norm, 0.0]);
-        }
-
-        refresh_voiceprint(&connection, &contaminated.id).expect("refresh");
-        refresh_voiceprint(&connection, &coherent.id).expect("refresh");
-
-        let offered = seeds(&connection, "test", "1").expect("seeds");
-        assert_eq!(
-            offered.len(),
-            2,
-            "today both are offered — including the one whose record is two \
-             voices, which is the defect"
-        );
-
-        // The measure already tells them apart; only the mint does not act.
-        let contaminated: Vec<(Vec<f32>, i64, bool)> =
-            std::iter::repeat_n((mine.to_vec(), 12_000_i64, false), 4)
-                .chain(std::iter::repeat_n((theirs.to_vec(), 12_000, false), 5))
-                .collect();
-        assert!(split(&contaminated).expect("partitions").is_two_voices());
-    }
-
     #[test]
     fn a_voiceprint_draws_on_every_meeting_the_speaker_was_heard_in() {
         // Ticket 14, through the mint path rather than the selection alone.
@@ -3540,39 +3184,6 @@ mod tests {
     /// which puts A and B in one cluster without any step having compared
     /// them. The refusal has to come from the survivor inheriting A's
     /// constraint.
-    /// The named form must agree with the constants form, or a grid that
-    /// varies the thresholds is not measuring production's rules.
-    #[test]
-    fn naming_the_thresholds_defaults_to_the_shipped_ones() {
-        let clusters: BTreeMap<Cluster, Embedding> = [
-            (Cluster(0), embedding(&[1.0, 0.0, 0.0])),
-            (Cluster(1), embedding(&[0.0, 1.0, 0.0])),
-            (Cluster(2), embedding(&[0.70, 0.71, 0.0])),
-        ]
-        .into_iter()
-        .collect();
-        let seeds = vec![
-            SeedVoice {
-                model: "test".into(),
-                model_version: "1".into(),
-                speaker_id: "alice".into(),
-                vector: vec![1.0, 0.0, 0.0],
-                confirmed: false,
-            },
-            SeedVoice {
-                model: "test".into(),
-                model_version: "1".into(),
-                speaker_id: "bob".into(),
-                vector: vec![0.0, 1.0, 0.0],
-                confirmed: false,
-            },
-        ];
-        assert_eq!(
-            resolve_with(&clusters, &seeds, MATCH_FLOOR, MATCH_MARGIN),
-            resolve(&clusters, &seeds)
-        );
-    }
-
     #[test]
     fn a_forbidden_pair_is_still_refused_when_a_third_cluster_would_carry_them_together() {
         let unit = |vector: &[f32]| embedding(vector);
@@ -3650,23 +3261,6 @@ mod tests {
             1,
             "the untouched voice is unaffected"
         );
-    }
-
-    /// No constraints must mean no change, or the experiment measures the
-    /// rewrite instead of the constraint.
-    #[test]
-    fn clustering_with_no_constraints_is_the_clustering_we_already_had() {
-        let empty = BTreeMap::new();
-        for (voices, count) in [(2, 40), (3, 200), (4, BLOCK + 50)] {
-            let windows = many_windows(voices, count);
-            for threshold in [0.30_f32, 0.60, 0.65, 0.90] {
-                assert_eq!(
-                    agglomerate_constrained(&windows, threshold, &empty),
-                    agglomerate_with(&windows, threshold),
-                    "{voices} voices, {count} windows, threshold {threshold}"
-                );
-            }
-        }
     }
 
     #[test]

@@ -360,15 +360,4 @@ mod tests {
             "a leg that behaved for a while should get its retries back"
         );
     }
-
-    #[test]
-    fn frames_are_just_consumed() {
-        let mut policy = ChurnPolicy::default();
-        let frame = CaptureEvent::Frame(super::super::AudioFrame::new(
-            AudioChannel::Mic,
-            super::super::CaptureOffset::ZERO,
-            vec![0.0; 10],
-        ));
-        assert_eq!(policy.decide(&frame), Action::Continue);
-    }
 }

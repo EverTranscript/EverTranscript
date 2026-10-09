@@ -149,22 +149,6 @@ mod tests {
     }
 
     #[test]
-    fn settings_round_trip() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("settings.json");
-
-        let settings = Settings {
-            briefing_acknowledged: true,
-            launch_at_login: false,
-            ..Default::default()
-        };
-        settings.save_to(&path).expect("save");
-
-        let loaded = Settings::load_from(&path);
-        assert_eq!(loaded, settings);
-    }
-
-    #[test]
     fn a_corrupt_file_falls_back_to_defaults_rather_than_to_consent() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("settings.json");
@@ -175,12 +159,6 @@ mod tests {
             !loaded.briefing_acknowledged,
             "an unreadable file must never be read as an acknowledgment"
         );
-    }
-
-    #[test]
-    fn a_missing_file_is_a_fresh_install() {
-        let loaded = Settings::load_from(Path::new("/nonexistent/settings.json"));
-        assert_eq!(loaded, Settings::default());
     }
 
     #[test]

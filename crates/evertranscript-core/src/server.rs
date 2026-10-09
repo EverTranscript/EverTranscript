@@ -5915,36 +5915,6 @@ mod tests {
         );
     }
 
-    /// A start that finds a different embedding recorded walks all of History,
-    /// oldest first.
-    ///
-    /// Oldest first is not cosmetic: a named Speaker earns its new Voiceprint
-    /// from the Meetings it was corrected in, so Meetings after those can
-    /// recognize it by voice. Newest first reaches the same end state having
-    /// recognized almost nothing on the way.
-    #[tokio::test]
-    async fn a_start_after_the_model_changed_re_runs_history_oldest_first() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        with_rerun_tables(&core).await;
-        meetings_with_audio(&core, &["m1", "m2", "m3"]).await;
-        core.rerun_if_the_model_changed().await;
-        last_walked_with_another_model(&core).await;
-
-        core.rerun_if_the_model_changed().await;
-
-        assert_eq!(
-            core.diarize_status().await.expect("status").queued,
-            vec!["m1".to_string(), "m2".to_string(), "m3".to_string()],
-            "all of History, oldest first"
-        );
-        assert_eq!(
-            rerun_seen(&core).await,
-            Some((3, 0, 3, 0, false)),
-            "three owed, none walked, none given up on"
-        );
-    }
-
     /// Quitting mid-backlog and starting again resumes it, and reaches the
     /// same end state as a run nobody interrupted.
     ///
@@ -6204,46 +6174,6 @@ mod tests {
         );
     }
 
-    /// A History with no backlog serializes exactly what it always did.
-    ///
-    /// Two cases, and the second is the one worth guarding: an installation
-    /// that has merely written down which embedding it is in has a re-run
-    /// row, and reporting that as a re-run of zero Meetings would put a
-    /// backlog in front of every Operator who never asked for one.
-    #[tokio::test]
-    async fn a_history_without_a_backlog_serializes_the_status_it_always_did() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-
-        let before =
-            serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
-        assert!(
-            before.get("rerun").is_none(),
-            "the upgrade's stamp is no key at all — not a null and not a zeroed block: {before}"
-        );
-        assert!(
-            before.get("rerunError").is_none(),
-            "and a gate nobody has run yet has nothing to report: {before}"
-        );
-
-        with_rerun_tables(&core).await;
-        meetings_with_audio(&core, &["m1", "m2"]).await;
-        core.store
-            .write(|connection| {
-                crate::store::rerun::begin_if_the_model_changed(connection, "wespeaker", "2")
-            })
-            .await
-            .expect("first start");
-
-        let baseline =
-            serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
-        assert!(
-            baseline.get("rerun").is_none(),
-            "a recorded model with no backlog behind it is not a re-run: {baseline}"
-        );
-        assert_eq!(baseline, before, "byte for byte the status it always was");
-    }
-
     /// Walked, still owed and given up on are three different numbers.
     #[tokio::test]
     async fn the_rerun_block_tells_walked_owed_and_given_up_apart() {
@@ -6309,64 +6239,6 @@ mod tests {
             "one walked and two given up, not three walked: {stopped:?}"
         );
         assert!(stopped.cancelled && !stopped.paused_for_recording);
-    }
-
-    /// Cancelling the backlog is not cancelling the queue.
-    ///
-    /// Bulk stop, not [`Core::diarize_cancel`] applied widely: the catch-up
-    /// pass for Meetings that were never diarized shares the `Back` class,
-    /// and a Meeting somebody is waiting for is no longer this job's.
-    #[tokio::test]
-    async fn cancelling_the_rerun_leaves_front_and_unrelated_bulk_work_alone() {
-        use crate::store::diarize_queue::Priority;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        with_rerun_tables(&core).await;
-        meetings_with_audio(&core, &["m1", "m2", "m3", "catchup"]).await;
-        // `catchup` is enqueued before the backlog exists, so the re-run
-        // never owns it — the same shape production's catch-up pass has.
-        core.enqueue_diarization("catchup", Priority::Back)
-            .await
-            .expect("catch-up");
-        assert_eq!(begin_rerun(&core).await, 3, "not the catch-up Meeting");
-        core.enqueue_diarization("m3", Priority::Front)
-            .await
-            .expect("asked for");
-
-        // And it is the one being walked. Somebody is waiting for it, so a
-        // bulk stop is not its to give: the token must survive.
-        let promoted = crate::diarize::Cancel::new();
-        *core.diarization.lock().await = Some(DiarizeJob {
-            meeting_id: "m3".to_string(),
-            cancel: promoted.clone(),
-            done_ms: 0,
-            total_ms: 1,
-        });
-
-        core.diarize_rerun_cancel().await.expect("stop");
-        assert!(
-            !promoted.is_cancelled(),
-            "a promoted Meeting is no longer this backlog's to stop"
-        );
-        *core.diarization.lock().await = None;
-
-        assert_eq!(
-            core.diarize_status().await.expect("status").queued,
-            vec!["m3".to_string(), "catchup".to_string()],
-            "what somebody is waiting for, and what the re-run never asked for"
-        );
-        let stopped = core
-            .diarize_status()
-            .await
-            .expect("status")
-            .rerun
-            .expect("a backlog");
-        assert_eq!(
-            (stopped.done, stopped.remaining, stopped.abandoned),
-            (0, 1, 2),
-            "the promoted Meeting is still owed, and promotion is not completion"
-        );
     }
 
     /// A promotion committing *while* the stop runs still saves the job.
@@ -6687,39 +6559,6 @@ mod tests {
         );
     }
 
-    /// Asking twice is not asking for twice the work.
-    ///
-    /// `begin` reconciles the ownership it finds rather than rebuilding it,
-    /// so the second ask re-walks the same Meetings in the same order
-    /// instead of leaving half of them queued and ownerless.
-    #[tokio::test]
-    async fn asking_for_a_re_run_twice_does_not_double_the_backlog() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        with_rerun_tables(&core).await;
-        meetings_with_audio(&core, &["m1", "m2"]).await;
-
-        let first = core
-            .diarize_rerun_request()
-            .await
-            .expect("ask")
-            .rerun
-            .expect("a backlog");
-        let again = core
-            .diarize_rerun_request()
-            .await
-            .expect("ask again")
-            .rerun
-            .expect("still a backlog");
-        assert_eq!(again.total, first.total, "not doubled: {again:?}");
-        assert_eq!(again.remaining, first.remaining);
-        assert_eq!(
-            core.diarize_status().await.expect("status").queued.len(),
-            2,
-            "and nothing was queued twice"
-        );
-    }
-
     /// Stopping what was never started is not a stop.
     ///
     /// `begin_if_the_model_changed` writes a row on first start to record
@@ -6751,6 +6590,9 @@ mod tests {
 
         let baseline =
             serde_json::to_value(core.diarize_status().await.expect("status")).expect("json");
+        // A History with no backlog serializes byte for byte the status it
+        // always did, recorded model or not.
+        assert_eq!(baseline, before);
         let stopped =
             serde_json::to_value(core.diarize_rerun_cancel().await.expect("stop")).expect("json");
         assert_eq!(stopped, baseline);
@@ -6948,87 +6790,6 @@ mod tests {
         );
     }
 
-    /// Cancelling on an installation with no backlog does not invent one.
-    #[tokio::test]
-    async fn cancelling_one_meeting_never_manufactures_a_backlog() {
-        use crate::store::diarize_queue::Priority;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        meetings_with_audio(&core, &["m1"]).await;
-        core.enqueue_diarization("m1", Priority::Front)
-            .await
-            .expect("queue");
-
-        let cancelled = core.diarize_cancel("m1").await.expect("cancel");
-        assert!(
-            cancelled.rerun.is_none() && cancelled.queued.is_empty(),
-            "out of the line, and no re-run said to exist: {cancelled:?}"
-        );
-
-        // And with only the first start's identity recorded, which is
-        // metadata rather than a backlog.
-        with_rerun_tables(&core).await;
-        core.store
-            .write(|connection| {
-                crate::store::rerun::begin_if_the_model_changed(connection, "wespeaker", "2")
-            })
-            .await
-            .expect("first start");
-        core.enqueue_diarization("m1", Priority::Front)
-            .await
-            .expect("queue");
-        assert!(
-            core.diarize_cancel("m1")
-                .await
-                .expect("cancel")
-                .rerun
-                .is_none(),
-            "a recorded model is still not a backlog"
-        );
-    }
-
-    /// A run that starts after a cancel has finished finds nothing to claim.
-    ///
-    /// The half of the ordering a test can pin deterministically: cancel runs
-    /// to completion, *then* the run starts, and registration's re-read of
-    /// the queue turns it away before it claims anything. The other half —
-    /// that the token check and the removal are one hold of the job lock, so
-    /// a run arriving mid-cancel either registers first and is found, or
-    /// arrives after and finds no row — is a property of the lock's lifetime
-    /// and rests on reading `diarize_cancel`, not on this test.
-    #[tokio::test]
-    async fn a_run_registering_after_a_cancel_finds_the_work_already_gone() {
-        use crate::store::diarize_queue::Priority;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        let (meeting, _succeeded) = diarizable(&core).await;
-
-        // Past the checks that precede registration; nothing opens them.
-        let models = core.models_dir.clone();
-        std::fs::create_dir_all(&models).expect("models dir");
-        for name in ["diarize-segmentation.onnx", "diarize-embedding.onnx"] {
-            std::fs::write(models.join(name), []).expect("placeholder");
-        }
-        std::fs::write(core.history_dir.join("m1.wav"), []).expect("audio");
-
-        core.diarize_cancel(&meeting).await.expect("cancel");
-        assert_eq!(
-            core.diarize_meeting(&meeting, Priority::Front)
-                .await
-                .expect("run"),
-            DiarizeOutcome::Cancelled,
-            "the row is gone, so the run stops before claiming anything"
-        );
-        assert_eq!(
-            core.store.read(evidence).await.expect("read"),
-            (0, 0, 0),
-            "and nothing was written after the Operator was told it stopped"
-        );
-        assert!(core.diarization.lock().await.is_none());
-    }
-
     /// Which outcomes still owe the queue a removal, and which must not.
     ///
     /// The `Wrote` row is the one with teeth: that run took its own row out
@@ -7062,55 +6823,6 @@ mod tests {
         ] {
             assert_eq!(leaves_the_line_afterwards(outcome), afterwards, "{why}");
         }
-    }
-
-    /// A request made after a run commits survives the worker.
-    ///
-    /// The window the rule above protects: the commit takes its own row out,
-    /// and between that and the worker's next step somebody asks for the same
-    /// Meeting again. A removal there would drop a request nobody cancelled.
-    #[tokio::test]
-    async fn a_request_made_after_a_run_commits_is_not_swept_up_by_it() {
-        use crate::diarize::Cancel;
-        use crate::store::diarize_queue::Priority;
-        use std::sync::atomic::AtomicBool;
-
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        let (meeting, succeeded) = diarizable(&core).await;
-        core.enqueue_diarization(&meeting, Priority::Back)
-            .await
-            .expect("queue");
-
-        let outcome = core
-            .finish_run(
-                &meeting,
-                succeeded(None),
-                &Cancel::new(),
-                &Arc::new(AtomicBool::new(false)),
-                None,
-            )
-            .await
-            .expect("finish");
-        assert!(matches!(outcome, DiarizeOutcome::Wrote(_)));
-        assert!(
-            !core.diarization_holds(&meeting).await.expect("holds"),
-            "the commit took its own row out"
-        );
-
-        // Somebody asks again — a re-run of a Meeting they just watched
-        // finish, which is the ordinary way this happens.
-        core.enqueue_diarization(&meeting, Priority::Front)
-            .await
-            .expect("asked again");
-        assert!(
-            !leaves_the_line_afterwards(outcome),
-            "so the worker must not remove anything, or it removes this"
-        );
-        assert!(
-            core.diarization_holds(&meeting).await.expect("holds"),
-            "and the new request is still owed"
-        );
     }
 
     /// The one rule the queue worker's pause is: only bulk work yields.

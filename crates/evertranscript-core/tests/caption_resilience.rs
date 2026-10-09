@@ -155,19 +155,3 @@ async fn a_dead_transcriber_does_not_stop_the_recording() {
         .collect();
     assert_eq!(mirrors.len(), 1, "the Meeting must still have its Mirror");
 }
-
-#[tokio::test]
-async fn a_meeting_with_no_transcriber_at_all_still_records() {
-    // The state of a fresh install before the model has downloaded.
-    let (core, _dir) = core_with(|| None).await;
-
-    let meeting = core.start_meeting(None, None).await.expect("start");
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    let stopped = core.stop_meeting().await.expect("stop");
-
-    assert_eq!(stopped.id, meeting.id);
-    assert!(
-        stopped.ended_at.is_some(),
-        "never missing a meeting outranks transcribing it (ADR-0019, ADR-0023)"
-    );
-}

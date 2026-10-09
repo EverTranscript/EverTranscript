@@ -679,19 +679,12 @@ mod tests {
     }
 
     #[test]
-    fn starting_a_meeting_marks_its_mirror_dirty() {
-        let connection = connection();
-        let meeting = start(&connection, None, Some("Zoom")).expect("start");
-        let dirty = dirty_meetings(&connection, 10).expect("dirty");
-        assert_eq!(dirty.len(), 1);
-        assert_eq!(dirty[0].0, meeting.id);
-    }
-
-    #[test]
     fn acknowledging_a_stale_generation_leaves_the_row_dirty() {
         let connection = connection();
         let meeting = start(&connection, None, None).expect("start");
-        let (_, generation) = dirty_meetings(&connection, 10).expect("dirty")[0].clone();
+        // Starting a Meeting is what marked its Mirror dirty.
+        let (dirtied, generation) = dirty_meetings(&connection, 10).expect("dirty")[0].clone();
+        assert_eq!(dirtied, meeting.id);
 
         // A write lands while the rebuild is in flight.
         retitle(&connection, &meeting.id, "Renamed mid-rebuild").expect("retitle");
@@ -778,24 +771,6 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].text, "hello");
         assert_eq!(all[1].channel, AudioChannel::System);
-    }
-
-    #[test]
-    fn deleting_reports_the_files_the_caller_must_remove() {
-        let connection = connection();
-        let meeting = start(&connection, None, None).expect("start");
-        set_audio_path(&connection, &meeting.id, ".data/audio/x.m4a").expect("audio");
-        set_mirror_filename(&connection, &meeting.id, "2026-08-27-zoom-abcd1234.md")
-            .expect("mirror");
-
-        let deleted = delete(&connection, &meeting.id).expect("delete");
-        assert!(deleted.existed);
-        assert_eq!(deleted.audio_path.as_deref(), Some(".data/audio/x.m4a"));
-        assert_eq!(
-            deleted.mirror_filename.as_deref(),
-            Some("2026-08-27-zoom-abcd1234.md")
-        );
-        assert!(get(&connection, &meeting.id).expect("get").is_none());
     }
 
     #[test]

@@ -302,18 +302,6 @@ mod tests {
     }
 
     #[test]
-    fn a_second_voice_refuses_the_whole_recording() {
-        // Not "use the dominant one". A dominant share is what
-        // `operator::identify` rule 2 already does from a Meeting, and
-        // taking it here would put the guess back inside the act that
-        // exists to replace it — with no threshold, and permanently.
-        assert_eq!(
-            refuse(&[0.5; 48_000], 60_000, 2),
-            Some(Refused::MoreThanOneVoice { voices: 2 })
-        );
-    }
-
-    #[test]
     fn the_floor_is_the_one_the_rules_already_use() {
         assert_eq!(
             refuse(&[0.5; 48_000], MIN_OPERATOR_MS - 1, 1),
@@ -323,6 +311,14 @@ mod tests {
             })
         );
         assert_eq!(refuse(&[0.5; 48_000], MIN_OPERATOR_MS, 1), None);
+
+        // Exactly two voices, a colleague in the room, refuses the whole
+        // recording rather than enrolling the dominant one: taking a share
+        // here would put rule 2's guess back inside the act that replaces it.
+        assert_eq!(
+            refuse(&[0.5; 48_000], 60_000, 2),
+            Some(Refused::MoreThanOneVoice { voices: 2 })
+        );
     }
 
     #[test]

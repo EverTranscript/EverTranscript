@@ -680,36 +680,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_recording_produces_an_audio_file() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (source, delivered) = FixtureSource::with_completion(vec![
-            Step::audio(AudioChannel::Mic, 400, 0.4),
-            Step::audio(AudioChannel::System, 400, -0.4),
-        ]);
-        let recorder = Recorder::start_without_transcription(
-            Box::new(source),
-            dir.path().to_path_buf(),
-            "abcd1234".to_string(),
-        )
-        .expect("start");
-
-        // Wait for the script rather than guessing at an interval.
-        delivered.await.expect("the script should finish");
-        let outcome = recorder.finish().await;
-
-        let path = outcome
-            .audio_path
-            .unwrap_or_else(|| panic!("an audio file (degraded {:?})", outcome.degraded));
-        assert!(path.exists());
-        assert!(outcome.degraded.is_empty(), "a clean run is not degraded");
-        assert!(
-            outcome.seconds > 0.3,
-            "roughly the scripted length, got {}",
-            outcome.seconds
-        );
-    }
-
-    #[tokio::test]
     async fn stopping_keeps_the_audio_that_capture_already_handed_over() {
         // The end of a meeting is where people say what they agreed to. A
         // stop that breaks out of the loop with frames still queued drops

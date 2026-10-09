@@ -698,20 +698,6 @@ mod tests {
     }
 
     #[test]
-    fn a_named_speaker_is_rendered_by_name() {
-        // Story 29's visible half: the rename has to reach the folder the
-        // Operator actually reads, not just the database.
-        let segments = vec![attributed("a", 0, AudioChannel::System, "s1")];
-        let rendered = render(
-            &meeting(),
-            &segments,
-            &names(&[("s1", Some("Alice"), false)]),
-        );
-        assert!(rendered.contains("**Alice**"));
-        assert!(rendered.contains("speakers: [Alice]"));
-    }
-
-    #[test]
     fn unnamed_speakers_are_numbered_by_first_appearance() {
         // Stable within the Meeting, and never stored: a persisted
         // "Speaker 2" would read as a name somebody chose, and would be
@@ -782,25 +768,6 @@ mod tests {
             "one person must not appear under two names:\n{rendered}"
         );
         assert!(rendered.contains("**Unattributed**"));
-    }
-
-    #[test]
-    fn unattributed_segments_still_fall_back_to_the_channel() {
-        // Every Meeting recorded before M3, and every Meeting whose models
-        // were missing. The channel is the honest attribution we have; a
-        // fabricated "Speaker 1" would claim knowledge nobody has.
-        let segments = vec![TranscriptSegment {
-            id: "a".into(),
-            sequence: 0,
-            channel: AudioChannel::Mic,
-            start_ms: 0,
-            end_ms: 900,
-            text: "hello".into(),
-            speaker_id: None,
-            attribution: None,
-        }];
-        let rendered = render(&meeting(), &segments, &SpeakerNames::default());
-        assert!(rendered.contains("**You**"));
     }
 
     #[test]

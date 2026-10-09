@@ -164,20 +164,9 @@ mod tests {
         set(&second, "sk-second").expect("stores");
         assert_eq!(get(&first).expect("reads").as_deref(), Some("sk-first"));
         assert_eq!(get(&second).expect("reads").as_deref(), Some("sk-second"));
+        // Deleting one leaves the other alone.
+        delete(&second).expect("deletes");
+        assert!(exists(&first), "the other key survived");
         delete(&first).expect("cleans up");
-        delete(&second).expect("cleans up");
-    }
-
-    #[test]
-    fn deleting_one_providers_key_leaves_the_others_alone() {
-        if skip_without_a_credential_store() {
-            return;
-        }
-        let (kept, removed) = (account(), account());
-        set(&kept, "sk-kept").expect("stores");
-        set(&removed, "sk-removed").expect("stores");
-        delete(&removed).expect("deletes");
-        assert!(exists(&kept), "the other key survived");
-        delete(&kept).expect("cleans up");
     }
 }

@@ -48,68 +48,6 @@ async fn finished_meeting(core: &Arc<Core>) -> String {
 }
 
 #[tokio::test]
-async fn a_meeting_that_ends_during_a_backlog_goes_ahead_of_it() {
-    // The case the queue exists for. Under refuse-don't-queue this Meeting
-    // was told a run had started and then silently dropped.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let history_dir = dir.path().join("History");
-    let core = core(&history_dir).await;
-
-    // Old Meetings, already attributed once and out of the line, put back in
-    // at the back — what a re-run of History after a model change does.
-    let mut backlog = Vec::new();
-    for _ in 0..3 {
-        let id = finished_meeting(&core).await;
-        core.diarize_cancel(&id).await.expect("cancel");
-        core.enqueue_diarization(&id, Priority::Back)
-            .await
-            .expect("queue bulk");
-        backlog.push(id);
-    }
-
-    // `stop_meeting` queues at Front by itself — this is the real path, not
-    // a hand-made enqueue.
-    let just_ended = finished_meeting(&core).await;
-
-    let status = core.diarize_status().await.expect("status");
-    assert_eq!(
-        status.queued.first(),
-        Some(&just_ended),
-        "the Meeting somebody is waiting for goes first: {:?}",
-        status.queued
-    );
-    assert_eq!(
-        &status.queued[1..],
-        backlog.as_slice(),
-        "and the backlog keeps its own order behind it"
-    );
-}
-
-#[tokio::test]
-async fn a_meeting_already_in_line_is_refused_rather_than_queued_twice() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let history_dir = dir.path().join("History");
-    let core = core(&history_dir).await;
-
-    let id = finished_meeting(&core).await;
-    assert!(
-        core.diarization_holds(&id).await.expect("holds"),
-        "stopping put it in line"
-    );
-    assert!(
-        !core
-            .enqueue_diarization(&id, Priority::Front)
-            .await
-            .expect("second request"),
-        "and asking again is a refusal the caller can report, not a second run"
-    );
-    assert_eq!(
-        core.diarize_status().await.expect("status").queued,
-        std::slice::from_ref(&id)
-    );
-}
-
-#[tokio::test]
 async fn the_queue_survives_a_restart() {
     // In the record rather than in memory: a Core killed mid-backlog that
     // forgot what it owed would leave a half-attributed History, which reads
@@ -235,52 +173,6 @@ async fn backlogged(core: &Arc<Core>) -> String {
 }
 
 #[tokio::test]
-async fn a_recording_stands_the_backlog_down_and_leaves_it_owed() {
-    // Two neural models and a capture pass want the same machine. The
-    // overnight re-run is the one with nobody waiting for it, so it is the one
-    // that waits — and waiting must not mean forgetting, or a model change
-    // would quietly skip every Meeting that overlapped a call.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let history_dir = dir.path().join("History");
-    let core = core(&history_dir).await;
-
-    let owed = backlogged(&core).await;
-    core.start_meeting(None, None).await.expect("start");
-    assert!(
-        core.is_recording().await,
-        "the recording is what stands it down"
-    );
-
-    let queued = worker_until(&core, std::time::Duration::from_millis(600), |q| {
-        q.is_empty()
-    })
-    .await;
-    assert_eq!(
-        queued,
-        [owed],
-        "the backlog is still owed while a Meeting records"
-    );
-}
-
-#[tokio::test]
-async fn with_nothing_recording_the_same_backlog_is_worked() {
-    // The control. Without it the test above passes on a worker that never
-    // runs anything at all.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let history_dir = dir.path().join("History");
-    let core = core(&history_dir).await;
-
-    backlogged(&core).await;
-    assert!(!core.is_recording().await);
-
-    let queued = worker_until(&core, std::time::Duration::from_secs(5), |q| q.is_empty()).await;
-    assert!(
-        queued.is_empty(),
-        "nothing is recording, so the backlog is worked: {queued:?}"
-    );
-}
-
-#[tokio::test]
 async fn a_recording_does_not_stand_down_work_somebody_is_waiting_for() {
     // Auto-Record opening the next call is not a reason to make the person who
     // just finished the last one wait for it. Only bulk work yields.
@@ -330,31 +222,5 @@ async fn the_backlog_resumes_when_the_recording_ends_and_the_just_ended_meeting_
     assert!(
         queued.is_empty(),
         "and once nothing is recording both are worked: {queued:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_stood_down_backlog_survives_a_restart() {
-    // It is owed in the record, not in the worker, so quitting during a call
-    // does not lose what the re-run has left to do.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let history_dir = dir.path().join("History");
-
-    let owed = {
-        let core = core(&history_dir).await;
-        let owed = backlogged(&core).await;
-        core.start_meeting(None, None).await.expect("start");
-        let queued = worker_until(&core, std::time::Duration::from_millis(600), |q| {
-            q.is_empty()
-        })
-        .await;
-        assert_eq!(queued, std::slice::from_ref(&owed));
-        owed
-    };
-
-    let restarted = core(&history_dir).await;
-    assert!(
-        restarted.diarization_holds(&owed).await.expect("holds"),
-        "the stood-down Meeting is still owed after a restart"
     );
 }

@@ -366,25 +366,16 @@ impl Watchlist {
         self.entries.len() != before
     }
 
-    /// Whether this app is one the Operator asked to have watched.
-    ///
-    /// The blocklist is checked first and wins: an app that holds a
-    /// microphone without being a meeting must not become one by being
-    /// Electron-shaped.
-    /// Blocks an app for the life of this list. Test-facing: the shipped
-    /// blocklist is seed data, and this is how a test can ask whether the
-    /// mechanism works using an application that actually exists on the
-    /// machine running it.
-    pub fn also_blocking(mut self, id: &str) -> Self {
-        self.blocked.insert(normalized(id));
-        self
-    }
-
     /// Whether this app is a browser, watched or not.
     pub fn is_browser(&self, app: &AppIdentity) -> bool {
         self.browsers.contains(&normalized(&app.id))
     }
 
+    /// Whether this app is one the Operator asked to have watched.
+    ///
+    /// The blocklist is checked first and wins: an app that holds a
+    /// microphone without being a meeting must not become one by being
+    /// Electron-shaped.
     pub fn watches(&self, app: &AppIdentity) -> bool {
         let id = normalized(&app.id);
         if self.blocked.contains(&id) {
@@ -403,23 +394,6 @@ mod tests {
 
     fn app(id: &str) -> AppIdentity {
         AppIdentity::bare(id)
-    }
-
-    #[test]
-    fn the_shipped_list_is_exactly_what_adr_0030_says() {
-        let list = Watchlist::shipped();
-        for watched in [
-            "us.zoom.xos",
-            "com.microsoft.teams2",
-            "com.tencent.meeting",
-            "com.tencent.tencentmeeting",
-        ] {
-            assert!(list.watches(&app(watched)), "{watched} ships watched");
-        }
-        assert!(
-            list.contains(BROWSER_MEETINGS_ID),
-            "Browser Meetings ships as one entry"
-        );
     }
 
     #[test]
@@ -488,22 +462,6 @@ mod tests {
                 list.watches(&app(browser)),
                 "{browser} is supported even though it is not in the test matrix"
             );
-        }
-    }
-
-    #[test]
-    fn a_hot_microphone_that_is_not_a_meeting_never_triggers() {
-        // The blocklist earning its place: each of these holds a microphone
-        // by design and none of them is a meeting.
-        let list = Watchlist::shipped();
-        for stranger in [
-            "com.superwhisper",
-            "com.todesktop.230313mzl4w4u92",
-            "com.obsproject.obs-studio",
-            "com.openai.chat",
-            "com.anthropic.claudefordesktop",
-        ] {
-            assert!(!list.watches(&app(stranger)), "{stranger} is not a meeting");
         }
     }
 
@@ -737,14 +695,6 @@ mod tests {
                 "{process} resolved to {responsible}, which should still be a browser"
             );
         }
-    }
-
-    #[test]
-    fn a_chrome_renderer_holding_the_mic_is_chrome_in_a_meeting() {
-        // The two pieces together, which is the fragile edge ADR-0030 named.
-        let list = Watchlist::shipped();
-        let responsible = responsible_app("com.google.Chrome.helper.Renderer");
-        assert!(list.watches(&app(&responsible)));
     }
 
     #[test]

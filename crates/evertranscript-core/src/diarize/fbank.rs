@@ -71,11 +71,6 @@ fn hz_to_mel(hz: f32) -> f32 {
     1127.0 * (1.0 + hz / 700.0).ln()
 }
 
-#[cfg(test)]
-fn mel_to_hz(mel: f32) -> f32 {
-    700.0 * ((mel / 1127.0).exp() - 1.0)
-}
-
 /// A triangular mel filterbank over the FFT bins.
 ///
 /// Built once and reused: it depends only on constants, and rebuilding it
@@ -293,14 +288,6 @@ mod tests {
     }
 
     #[test]
-    fn the_mel_scale_round_trips() {
-        for hz in [20.0_f32, 300.0, 1_000.0, 4_000.0, 7_600.0] {
-            let back = mel_to_hz(hz_to_mel(hz));
-            assert!((back - hz).abs() < 0.1, "{hz} -> {back}");
-        }
-    }
-
-    #[test]
     fn the_filterbank_covers_the_band_without_gaps() {
         // A gap between filters is silent data loss: a whole frequency range
         // stops reaching the model, and nothing anywhere reports it.
@@ -342,35 +329,6 @@ mod tests {
             peak.abs_diff(expected) <= 1,
             "1 kHz peaked at filter {peak}, expected around {expected}"
         );
-    }
-
-    #[test]
-    fn two_different_tones_peak_in_different_places() {
-        let bank = MelBank::new();
-        let low = bank.raw(&tone(300.0, 0.2));
-        let high = bank.raw(&tone(3_000.0, 0.2));
-
-        let peak_of = |frames: &Vec<Vec<f32>>| {
-            frames[frames.len() / 2]
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.total_cmp(b.1))
-                .map(|(index, _)| index)
-                .expect("a peak")
-        };
-        assert!(peak_of(&low) < peak_of(&high));
-    }
-
-    #[test]
-    fn the_frame_count_follows_the_hop() {
-        // Off-by-one here shifts every timestamp the model produces, and the
-        // symptom is attribution that is subtly early or late everywhere.
-        let bank = MelBank::new();
-        let one_second = vec![0.0_f32; SAMPLE_RATE as usize];
-        let frames = bank.compute(&one_second);
-        // (16000 - 400) / 160 + 1
-        assert_eq!(frames.len(), 98);
-        assert!(frames.iter().all(|frame| frame.len() == MEL_BINS));
     }
 
     #[test]

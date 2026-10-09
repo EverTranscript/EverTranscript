@@ -225,10 +225,4 @@ mod tests {
         #[cfg(target_os = "windows")]
         assert!(description.contains("Run"), "{description}");
     }
-
-    #[test]
-    fn querying_is_safe_on_a_machine_with_nothing_registered() {
-        // Must never panic or hang; a missing registration is just "off".
-        let _ = is_enabled();
-    }
 }

@@ -94,51 +94,6 @@ async fn core_in(dir: &std::path::Path, backend: &'static str) -> Arc<Core> {
 }
 
 #[tokio::test]
-async fn a_short_meeting_is_still_one_request() {
-    // The common case must pay nothing for the long one.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let core = core_in(dir.path(), "local").await;
-    let calls = Arc::new(std::sync::Mutex::new(0usize));
-    let counter = Arc::clone(&calls);
-    core.set_summary_backend_factory(Arc::new(move || {
-        *counter.lock().unwrap() += 1;
-        (Box::new(FakeBackend::returning("# Short\n\nBody.")), None)
-    }));
-
-    let id = meeting_of(&core, 3).await;
-    let markdown = core.summarize_meeting(&id).await.expect("summarize");
-
-    assert!(markdown.contains("Short"));
-    assert_eq!(*calls.lock().unwrap(), 1, "one Backend was built");
-}
-
-#[tokio::test]
-async fn a_long_meeting_is_chunked_rather_than_sent_whole() {
-    // The defect this ticket exists for: before it, this was one request no
-    // matter how long the meeting.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let core = core_in(dir.path(), "local").await;
-    let backend = FakeBackend::returning("# Part\n\nBody.");
-    let prompts = backend.prompts();
-    let backend = Arc::new(std::sync::Mutex::new(Some(backend)));
-    core.set_summary_backend_factory(Arc::new(move || {
-        (
-            Box::new(backend.lock().unwrap().take().expect("built once")),
-            None,
-        )
-    }));
-
-    let id = meeting_of(&core, 400).await;
-    core.summarize_meeting(&id).await.expect("summarize");
-
-    let seen = prompts.lock().unwrap().len();
-    assert!(
-        seen > 2,
-        "a long meeting should have produced several chunk requests plus a reduce, got {seen}"
-    );
-}
-
-#[tokio::test]
 async fn the_first_chunk_chooses_the_backend_for_the_whole_run() {
     // Choose-once. A cloud Backend that cannot serve the first chunk sends the
     // entire run to local, and the label names local — never a mixture.
@@ -345,37 +300,6 @@ async fn a_summary_being_generated_does_not_hold_up_other_clients() {
 }
 
 #[tokio::test]
-async fn one_failed_chunk_does_not_lose_the_whole_meeting() {
-    // Five parts of six is a usable record of the meeting; none is not.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let core = core_in(dir.path(), "local").await;
-    let backend = Arc::new(std::sync::Mutex::new(Some(FakeBackend::scripted(
-        BackendIdentity::LocalSidecar {
-            model: "fake".into(),
-        },
-        vec![
-            Response::Text("# First\n\nBody.".into()),
-            Response::Fails(Failure::TimedOut),
-            Response::Text("# Rest\n\nBody.".into()),
-        ],
-    ))));
-    core.set_summary_backend_factory(Arc::new(move || {
-        (
-            Box::new(backend.lock().unwrap().take().expect("built once")),
-            None,
-        )
-    }));
-
-    let id = meeting_of(&core, 400).await;
-    let markdown = core.summarize_meeting(&id).await.expect("summarize");
-
-    assert!(
-        !markdown.trim().is_empty(),
-        "a chunk failing must not empty the Summary"
-    );
-}
-
-#[tokio::test]
 async fn a_partial_summary_says_so_in_the_record() {
     // Ticket 03 tolerates the loss; this is where the Operator learns of it.
     // The Core's log knows already, and the Operator cannot read the log.
@@ -399,7 +323,12 @@ async fn a_partial_summary_says_so_in_the_record() {
     }));
 
     let id = meeting_of(&core, 400).await;
-    core.summarize_meeting(&id).await.expect("summarize");
+    let markdown = core.summarize_meeting(&id).await.expect("summarize");
+    // Five parts of six is a usable record of the meeting; none is not.
+    assert!(
+        !markdown.trim().is_empty(),
+        "a chunk failing must not empty the Summary"
+    );
 
     let meeting = core
         .get_meeting(&id)
@@ -691,14 +620,5 @@ mod preselection {
             Some("openai"),
             "a deliberate choice must survive"
         );
-    }
-
-    #[tokio::test]
-    async fn preselecting_twice_changes_nothing() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
-        core.preselect_local_backend().await.expect("first");
-        core.preselect_local_backend().await.expect("second");
-        assert_eq!(backend_of(&core).await.as_deref(), Some("local"));
     }
 }

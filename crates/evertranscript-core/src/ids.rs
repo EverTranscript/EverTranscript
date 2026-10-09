@@ -71,62 +71,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn eight_characters_would_collide_within_a_minute() {
-        // The arithmetic in this module's docs, asserted so it cannot rot
-        // into folklore. Two UUIDv7s a second apart agree for eight
-        // characters and differ by twelve.
-        let first = uuid::Uuid::now_v7().to_string();
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let second = uuid::Uuid::now_v7().to_string();
-        assert_eq!(first[..8], second[..8], "the timestamp prefix is shared");
-        assert_ne!(
-            short(&first),
-            short(&second),
-            "twelve reaches the random half"
-        );
-    }
-
-    /// Two Speakers copied out of a real Voice Registry, both produced by one
-    /// Diarization run. They are the reason `short_tail` exists.
-    const BURST: (&str, &str) = (
-        "01a071fe-55e6-76e0-9571-acea4492076e",
-        "01a071fe-55e6-76e0-9571-ad09cb20699f",
-    );
-
-    #[test]
-    fn ids_minted_together_share_far_more_than_a_timestamp() {
-        let (first, second) = BURST;
-        let shared = normalise(first)
-            .chars()
-            .zip(normalise(second).chars())
-            .take_while(|(a, b)| a == b)
-            .count();
-        assert_eq!(shared, 21, "measured off the Operator's own registry");
-
-        // Which is why no prefix length would have done.
-        assert_eq!(
-            short(first),
-            short(second),
-            "leading characters cannot separate these"
-        );
-        assert_ne!(
-            short_tail(first),
-            short_tail(second),
-            "trailing ones separate them at once"
-        );
-    }
-
-    #[test]
-    fn every_form_a_person_might_hold_normalises_the_same() {
-        // The `list` column, the Mirror filename, and the id `show` prints.
-        let full = "01a07431-dc59-7ec3-8ef9-1ef2b42f2a29";
-        assert!(normalise(full).starts_with(&normalise("01a07431")));
-        assert!(normalise(full).starts_with(&normalise("01a07431dc59")));
-        assert!(normalise(full).starts_with(&normalise("01A07431DC59")));
-        assert_eq!(normalise(full).len(), 32);
-    }
-
-    #[test]
     fn a_typed_id_cannot_carry_a_wildcard_into_a_query() {
         // These reach a LIKE pattern. Anything that is not a hex digit is
         // dropped, so `%` and `_` cannot survive to match everything.

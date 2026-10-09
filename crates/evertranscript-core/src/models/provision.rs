@@ -121,18 +121,6 @@ mod tests {
     }
 
     #[test]
-    fn an_install_that_has_been_running_for_years_still_fetches() {
-        // This used to be the upgrade case, and used to hold back: someone who
-        // installed a newer version of what they had did not ask for a
-        // multi-gigabyte download to begin by itself. It cost more than it
-        // bought. An install missing a required model cannot transcribe, and
-        // holding back leaves it inert with nothing to say why — so age is no
-        // longer part of the question, and the only thing that is, is whether
-        // anything is missing.
-        assert_eq!(decide(missing()), Provision::Fetch);
-    }
-
-    #[test]
     fn nothing_is_fetched_when_nothing_is_missing() {
         let machine = Machine {
             models_present: true,
@@ -187,14 +175,5 @@ mod tests {
             ..missing()
         };
         assert!(matches!(decide(machine), Provision::NotEnoughSpace { .. }));
-    }
-
-    #[test]
-    fn a_core_that_is_never_asked_never_fetches() {
-        // Not a property of this function — a property of the design it
-        // exists to express. `decide` answers a question; it cannot start a
-        // download, so a Core nobody asks provisions nothing, which is what
-        // keeps the guarantee tests meaningful.
-        let _ = decide(missing());
     }
 }

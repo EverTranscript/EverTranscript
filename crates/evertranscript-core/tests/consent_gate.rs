@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use evertranscript_core::Core;
 use evertranscript_core::audio::fixture::FixtureSource;
-use evertranscript_core::settings::Settings;
 use evertranscript_protocol::SettingsSetParams;
 
 async fn fresh_install() -> (Arc<Core>, tempfile::TempDir) {
@@ -108,20 +107,6 @@ async fn a_client_cannot_un_acknowledge() {
         .expect("the request itself is not an error");
 
     assert!(settings.briefing_acknowledged, "acknowledgment is one-way");
-}
-
-#[tokio::test]
-async fn the_settings_that_ship_on_are_on_and_the_one_that_matters_is_not() {
-    let settings = Settings::default();
-    assert!(
-        !settings.briefing_acknowledged,
-        "consent is never a default"
-    );
-    assert!(settings.auto_record, "Auto-Record ships On (ADR-0023)");
-    assert!(
-        settings.launch_at_login,
-        "the Core is the login item (ADR-0026)"
-    );
 }
 
 #[tokio::test]

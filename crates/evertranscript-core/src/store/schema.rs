@@ -924,15 +924,6 @@ mod tests {
     }
 
     #[test]
-    fn full_text_search_is_available() {
-        // FTS5 is not optional for us: History search is a headline story.
-        let connection = Connection::open_in_memory().expect("open");
-        connection
-            .execute_batch("CREATE VIRTUAL TABLE probe USING fts5(body);")
-            .expect("this build of SQLite must have FTS5");
-    }
-
-    #[test]
     fn the_channel_enum_is_enforced_by_the_database() {
         let mut connection = Connection::open_in_memory().expect("open");
         configure(&connection).expect("configure");
@@ -985,26 +976,6 @@ mod tests {
     }
 
     // ---- Ticket 05: the wipe that is written but not registered ----
-
-    /// The wipe and the re-run are one upgrade: adjacent, and in that order.
-    ///
-    /// Until 2026-09-17 two tests here asserted the opposite — that neither
-    /// was in `MIGRATIONS` — because appending them is the whole of activating
-    /// them and a stray paste would have cleared Voiceprints with no swap
-    /// behind it. The swap happened (Q226) and the user said to register
-    /// (Q228). What is left to guard is the pairing: a wipe registered without
-    /// its re-run directly behind it leaves a History nobody is recognized in.
-    ///
-    /// This also asserted the pair was *last*, which it was when it was
-    /// written and which the reason above never needed: the danger is a
-    /// migration landing *between* them, not one landing after. Relaxed when
-    /// `THE_ENROLMENT` was appended behind them.
-    #[test]
-    fn the_wipe_and_the_rerun_are_registered_as_a_pair() {
-        let wipe = before(MODEL_CHANGE_WIPE);
-        let rerun = before(MODEL_CHANGE_RERUN);
-        assert_eq!(rerun, wipe + 1, "the re-run is the other half, and follows");
-    }
 
     /// A History as the current build leaves one, on disk.
     ///

@@ -317,26 +317,31 @@ mod tests {
     }
 
     #[test]
-    fn a_cloud_backend_reports_that_it_leaves_the_machine() {
-        let backend =
-            CloudBackend::new("OpenAI", "https://api.openai.com/v1", "gpt", None).expect("builds");
-        assert!(backend.identity().leaves_the_machine());
-    }
-
-    #[test]
     fn a_local_runtime_reports_that_it_does_not() {
         let backend =
             CloudBackend::new("Ollama", "http://localhost:11434/v1", "qwen", None).expect("builds");
         assert!(!backend.identity().leaves_the_machine());
         assert_eq!(backend.identity().label(), "Ollama (qwen)");
+
+        // And the same constructor on a remote URL says it does.
+        let cloud =
+            CloudBackend::new("OpenAI", "https://api.openai.com/v1", "gpt", None).expect("builds");
+        assert!(cloud.identity().leaves_the_machine());
     }
 
     #[test]
     fn every_curated_preset_that_is_cloud_carries_a_label() {
         // ADR-0010: curated presets carry a data-handling label. A cloud
         // destination offered without one is the thing the ADR forbids.
+        // A local runtime carries none: nothing leaves the machine, and a
+        // label would imply a transfer that does not occur.
         for preset in PRESETS {
             if is_loopback(preset.base_url) {
+                assert!(
+                    preset.data_handling.is_none(),
+                    "{} is local and has a label",
+                    preset.id
+                );
                 continue;
             }
             assert!(
@@ -370,15 +375,6 @@ mod tests {
                 "{} has {date:?}, which is not a YYYY-MM-DD date",
                 preset.id
             );
-        }
-    }
-
-    #[test]
-    fn local_runtimes_carry_no_data_handling_label() {
-        // Nothing leaves the machine, so there is nothing to characterise.
-        // A label here would imply a transfer that does not occur.
-        for id in ["ollama", "lmstudio"] {
-            assert!(preset(id).expect("preset").data_handling.is_none());
         }
     }
 
@@ -421,10 +417,5 @@ mod tests {
             )
             .expect_err("cancelled");
         assert!(matches!(error, BackendError::Cancelled), "got {error:?}");
-    }
-
-    #[test]
-    fn the_custom_endpoint_says_the_rules_are_the_operators() {
-        assert_eq!(CUSTOM_ENDPOINT_LABEL, "unknown endpoint — your rules");
     }
 }

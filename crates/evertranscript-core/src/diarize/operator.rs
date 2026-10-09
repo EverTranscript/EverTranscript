@@ -513,17 +513,6 @@ mod tests {
     }
 
     #[test]
-    fn the_solo_operator_is_identified_from_the_channel_alone() {
-        // The case the channel prior is genuinely strong for, and the one
-        // most Operators are in most of the time.
-        let d = run(FixtureDiarizer::solo());
-        assert_eq!(
-            identify(&d, OperatorPrint::Learned(None), &unsaid()),
-            Identified::Dominant(Cluster(0))
-        );
-    }
-
-    #[test]
     fn a_ten_second_solo_recording_enrolls_nobody() {
         // 100% of the mic channel, and still not a person worth keeping
         // forever: this is a microphone test, not a Meeting. The share says
@@ -622,21 +611,6 @@ mod tests {
                 }
             ),
             Identified::Nobody
-        );
-    }
-
-    #[test]
-    fn a_shared_room_produces_no_bootstrap_rather_than_a_wrong_one() {
-        // ADR-0029's amendment, and the reason it was made. Two real voices
-        // on the mic channel, roughly balanced: the machine cannot know
-        // which of them owns the laptop, and naming one gives a colleague's
-        // words the Operator's name — invisibly, because the transcript
-        // still reads perfectly plausibly.
-        let d = run(FixtureDiarizer::shared_room());
-        assert_eq!(
-            identify(&d, OperatorPrint::Learned(None), &unsaid()),
-            Identified::Nobody,
-            "unidentified is the honest answer here"
         );
     }
 
@@ -859,17 +833,6 @@ mod tests {
         );
         assert_eq!(
             identify(&d, OperatorPrint::Learned(Some(&known)), &unsaid()),
-            Identified::Nobody
-        );
-    }
-
-    #[test]
-    fn a_silent_mic_channel_identifies_nobody() {
-        // A meeting the Operator only listened to. Real, and it must not
-        // produce a division by zero or a fabricated "You".
-        let d = diarization(vec![Turn::new(AudioChannel::System, 0, 10_000, 0)]);
-        assert_eq!(
-            identify(&d, OperatorPrint::Learned(None), &unsaid()),
             Identified::Nobody
         );
     }

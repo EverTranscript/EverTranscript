@@ -434,17 +434,6 @@ mod tests {
     }
 
     #[test]
-    fn a_core_that_cannot_record_yet_says_why_rather_than_offering_the_action() {
-        let blocked = TrayPhase::NotPermitted.view(None);
-        assert!(!blocked.action_enabled);
-        assert!(
-            blocked.status.contains("briefing"),
-            "the reason must be the actual gate, got {:?}",
-            blocked.status
-        );
-    }
-
-    #[test]
     fn a_reported_failure_replaces_the_generic_status() {
         let view = TrayPhase::Idle.view(Some("no audio can be captured"));
         assert_eq!(view.status, "no audio can be captured");

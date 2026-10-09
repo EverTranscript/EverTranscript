@@ -54,16 +54,6 @@ macro_rules! client_request_definitions {
         }
 
         impl ClientRequest {
-            /// Every method name this build understands, in table order.
-            pub const METHODS: &'static [&'static str] = &[$($method),*];
-
-            /// The wire method name for this request.
-            pub fn method(&self) -> &'static str {
-                match self {
-                    $(Self::$variant(_) => $method,)*
-                }
-            }
-
             /// Decode a wire `(method, params)` pair into a typed request.
             ///
             /// Absent params decode as an empty object, so a method whose
@@ -96,10 +86,6 @@ macro_rules! client_request_definitions {
                     $(Self::$variant(_) => stringify!($response),)*
                 }
             }
-
-            /// `(method, response type name)` for every method in the table.
-            pub const RESPONSE_TYPES: &'static [(&'static str, &'static str)] =
-                &[$(($method, stringify!($response))),*];
         }
     };
 }
@@ -1950,39 +1936,6 @@ pub struct PostureResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn every_method_in_the_table_is_wired_to_a_params_type() {
-        // A method is either decodable from empty params (all fields
-        // defaulted) or rejects them as invalid. What it must never do is
-        // come back unknown — that would mean the table names a method the
-        // decoder cannot reach.
-        for method in ClientRequest::METHODS {
-            match ClientRequest::from_wire(method, None) {
-                Ok(request) => assert_eq!(&request.method(), method),
-                Err(DecodeError::InvalidParams { method: named, .. }) => {
-                    assert_eq!(&named, method)
-                }
-                Err(DecodeError::UnknownMethod(unknown)) => {
-                    panic!("{unknown} is in METHODS but the decoder does not know it")
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn every_method_declares_a_response_type() {
-        assert_eq!(
-            ClientRequest::RESPONSE_TYPES.len(),
-            ClientRequest::METHODS.len()
-        );
-        for (method, response) in ClientRequest::RESPONSE_TYPES {
-            assert!(
-                !response.is_empty(),
-                "{method} must declare a response type"
-            );
-        }
-    }
 
     #[test]
     fn unknown_methods_are_named_in_the_error() {

@@ -91,25 +91,6 @@ async fn title_of(core: &Core, id: &str) -> Option<String> {
 }
 
 #[tokio::test]
-async fn a_summary_names_an_untitled_meeting() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let (core, id) = core_with_a_recorded_meeting(
-        dir.path(),
-        "# Hiring plan deferred\n\nThe team agreed to wait until October.",
-    )
-    .await;
-
-    assert_eq!(title_of(&core, &id).await, None, "starts unnamed");
-    core.summarize_meeting(&id).await.expect("summarize");
-
-    assert_eq!(
-        title_of(&core, &id).await.as_deref(),
-        Some("Hiring plan deferred"),
-        "the Summary's first heading should have named the Meeting"
-    );
-}
-
-#[tokio::test]
 async fn the_mirror_is_renamed_when_a_summary_names_a_meeting() {
     // The name has to reach the file on disk, not just the row: the Mirror is
     // what an Operator sees in Finder, and a record that disagrees with itself

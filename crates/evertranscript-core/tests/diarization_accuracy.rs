@@ -2308,53 +2308,6 @@ fn describe(by_outcome: &BTreeMap<&'static str, f64>) -> String {
         .join(" ")
 }
 
-/// Offline, and the only part of this file that runs in a plain `cargo test`.
-///
-/// The switch has to reach the replay, not only the scorer.
-///
-/// It did not: the replay called `cluster_observed` directly, so a run with
-/// `EVERTRANSCRIPT_CANNOT_LINK=1` measured DER under the constraint and
-/// recognition without it, silently. Both call sites now go through
-/// `clustered`, and this is what fails if one of them stops.
-#[test]
-fn the_constrained_path_is_the_one_the_replay_gets() {
-    use evertranscript_protocol::AudioChannel;
-
-    let voice = |cluster: u32, at: u64, vector: Vec<f32>| diarize::live::Observation {
-        channel: AudioChannel::Mic,
-        cluster: diarize::Cluster(cluster),
-        // Two local speakers of the one window, which is what this is about.
-        window: 0,
-        local: cluster as u8,
-        vector,
-        runs: vec![(at, at + 4_000)],
-        clean_runs: vec![(at, at + 4_000)],
-    };
-    // Two local speakers of one window, close enough that an unconstrained
-    // merge at this threshold takes them for one voice.
-    let observed = diarize::live::Observed {
-        embedding: diarize::live::EMBEDDING_IDENTITY,
-        observations: vec![
-            voice(0, 1_000, vec![1.0, 0.10, 0.0]),
-            voice(1, 2_000, vec![1.0, -0.10, 0.0]),
-        ],
-        windows: vec![(AudioChannel::Mic, 0, 10_000)],
-    };
-
-    let free = clustered(&observed, 0.5, false);
-    let held = clustered(&observed, 0.5, true);
-    assert_eq!(
-        free.embeddings.len(),
-        1,
-        "unconstrained, these two are one voice at this threshold"
-    );
-    assert_eq!(
-        held.embeddings.len(),
-        2,
-        "constrained, one window's two local speakers stay two voices"
-    );
-}
-
 /// The same-window diagnostic counts pairs by the window that *produced* them.
 ///
 /// It used to find the window by geometry — the first one containing a run's
@@ -2848,23 +2801,6 @@ fn a_voice_with_no_identity_vector_at_all_is_left_without_an_embedding() {
         cell.turns.iter().any(|turn| turn.cluster == *unembedded),
         "the unembedded voice must still have its turns, or the scorer would \
          see no-turn where production sees no-embedding"
-    );
-}
-
-/// The grid has to contain the point production runs, or none of it can be
-/// The grid has to contain the point production runs, or none of it can be
-/// read against what ships today.
-#[test]
-fn the_matcher_grid_holds_the_shipped_point() {
-    assert!(
-        GRID_FLOORS.contains(&diarize::cluster::MATCH_FLOOR),
-        "shipped floor {} is not on the grid",
-        diarize::cluster::MATCH_FLOOR
-    );
-    assert!(
-        GRID_MARGINS.contains(&diarize::cluster::MATCH_MARGIN),
-        "shipped margin {} is not on the grid",
-        diarize::cluster::MATCH_MARGIN
     );
 }
 

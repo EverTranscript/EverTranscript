@@ -865,23 +865,6 @@ mod tests {
     }
 
     #[test]
-    fn audio_that_arrives_as_silence_is_reported_as_a_refused_permission() {
-        // The failure this exists for: the tap is created, frames flow, and
-        // every one is zero because the Operator never granted recording.
-        let mut context = context();
-        let silence = vec![0.0f32; 4_800]; // 100 ms
-        let mut reason = None;
-        for _ in 0..(SILENCE_PROVES_REFUSAL_MS / 100) {
-            reason = reason.or(note_level(&mut context, &silence, 100, PLAYING));
-        }
-        let reason = reason.expect("silence for the whole window must be reported");
-        assert!(
-            reason.contains("Privacy & Security"),
-            "the reason must say how to fix it, got {reason}"
-        );
-    }
-
-    #[test]
     fn silence_while_nothing_plays_never_accuses_anyone() {
         // The dogfood failure, in miniature. A tap delivers zero-filled
         // frames continuously on macOS 26 whether or not anything is

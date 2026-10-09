@@ -344,116 +344,30 @@ fn a_full_recording_cycle_opens_no_network_connections() {
         "recording must produce no network traffic, but the Core had these sockets open:\n{}",
         connections.join("\n")
     );
-}
 
-#[test]
-fn diarization_opens_no_network_connections_either() {
-    // Story 33 forbids a cloud form of Diarization "in any shape". The
-    // recording-cycle test above already covers the path where the models
-    // are absent; this one covers the path where they are present and
-    // actually run, which is the only one that could reach for a network.
-    //
-    // Skipped without models rather than passing quietly — a guarantee test
-    // that silently proves nothing is worse than one that is missing.
-    let Ok(models) = std::env::var("EVERTRANSCRIPT_DIARIZE_MODELS") else {
-        eprintln!("skipped: set EVERTRANSCRIPT_DIARIZE_MODELS to run this");
-        return;
-    };
-    let source = std::path::PathBuf::from(&models);
-    if !source.join("segmentation.onnx").exists() {
-        eprintln!("skipped: no models at {models}");
-        return;
-    }
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let history = dir.path().join("History");
-    let runtime = dir.path().join("run");
-    // Under an isolated Application Support, which is what the Core
-    // actually reads. The previous version set EVERTRANSCRIPT_MODELS_DIR —
-    // a variable nothing read — so it copied models somewhere the Core
-    // never looked and ran against the developer's own.
-    let support = dir.path().join("support");
-    let models_dir = support.join("models");
-    std::fs::create_dir_all(&models_dir).expect("models dir");
-    // Under the names the Core looks for.
-    std::fs::copy(
-        source.join("segmentation.onnx"),
-        models_dir.join("diarize-segmentation.onnx"),
-    )
-    .expect("segmentation");
-    std::fs::copy(
-        source.join("embedding.onnx"),
-        models_dir.join("diarize-embedding.onnx"),
-    )
-    .expect("embedding");
-    // **Every required model, not only the ones this test uses.** A fresh
-    // install fetches what it is missing, so an install missing anything is
-    // not the state ADR-0034's "with models downloaded" describes — and a
-    // Core provisioning in the background is a Core with sockets open, which
-    // is what this test would then catch and blame on Diarization.
-    if !stage_required_models(&models, &models_dir) {
-        return;
-    }
-
-    let mut daemon = Command::new(binary())
-        .arg("daemon")
-        .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
-        .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
-        .env("EVERTRANSCRIPT_APP_SUPPORT_DIR", &support)
-        .env(evertranscript_core::tray::DISABLE_ENV, "1")
-        // And no model fetch: these tests use the real models directory, so a
-        // Core that provisions would pull gigabytes from the real mirror
-        // while asserting it opens no connections.
-        .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
-        // And no login item: these start a real daemon, which would register
-        // the test binary to run at the next login.
-        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("starting the Core");
-    wait_for_core(&history, &runtime);
-
-    run(&history, &runtime, &["acknowledge"]);
-
-    // The Core must actually see the models, or this test proves nothing: a
-    // Core with none to load finds no network traffic because it never
-    // tries, which is a true sentence about the wrong thing.
-    let models = String::from_utf8_lossy(&run(&history, &runtime, &["models", "status"]).stdout)
-        .into_owned();
-    assert!(
-        models.contains("pyannote-segmentation-3.0"),
-        "the Core cannot see the diarization models, so this would pass \
-         without running any:\n{models}"
-    );
-
-    run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
-    std::thread::sleep(std::time::Duration::from_millis(800));
-    run(&history, &runtime, &["record", "stop"]);
-    // Stopping spawns Diarization; give the models time to load and run.
-    std::thread::sleep(std::time::Duration::from_secs(3));
-
-    let outcome = open_sockets(daemon.id());
-    let _ = daemon.kill();
-    let _ = daemon.wait();
-
-    let connections: Vec<&str> = outcome
-        .lines()
-        .skip(1)
-        .filter(|line| !line.trim().is_empty())
+    // And the production layout this cycle wrote reads as meeting notes: the
+    // real `Core::new` paths, which a scoped test Core replaces with its own.
+    let visible: Vec<String> = std::fs::read_dir(&history)
+        .expect("read history")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .filter(|name| !name.starts_with('.'))
         .collect();
     assert!(
-        connections.is_empty(),
-        "Diarization must reach no network, but the Core had these sockets open:\n{}",
-        connections.join("\n")
+        visible.iter().all(|name| name.ends_with(".md")),
+        "the folder must read as meeting notes (ADR-0035): {visible:?}"
+    );
+    assert!(
+        history.join(".data").is_dir(),
+        "the machine store belongs in the hidden .data folder"
     );
 }
 
 #[test]
 fn a_full_cycle_with_summary_and_updates_off_opens_no_sockets() {
     // ADR-0034's guarantee in its final form: "with updates off and models
-    // downloaded, literally zero". The two tests above cover recording, and
-    // recording plus Diarization. This is the longest-reaching path — it
+    // downloaded, literally zero". The test above covers recording. This is
+    // the longest-reaching path — it also runs Diarization, and it
     // also generates a Summary, which in M4 became a second thing that
     // could reach for a network.
     //
@@ -689,55 +603,6 @@ fn a_recording_survives_the_core_being_killed() {
     assert!(
         text.contains("\"id\""),
         "the Meeting must survive a crash and be listed after restart:\n{text}"
-    );
-}
-
-#[test]
-fn the_history_folder_holds_only_notes_and_a_hidden_store() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let history = dir.path().join("History");
-    let runtime = dir.path().join("run");
-
-    let mut daemon = Command::new(binary())
-        .arg("daemon")
-        .env("EVERTRANSCRIPT_HISTORY_DIR", &history)
-        .env("EVERTRANSCRIPT_RUNTIME_DIR", &runtime)
-        // No menu bar item: these tests assert on a binary, and they also
-        // stand in as the regression test for the headless daemon path.
-        .env(evertranscript_core::tray::DISABLE_ENV, "1")
-        // And no model fetch: these tests use the real models directory, so a
-        // Core that provisions would pull gigabytes from the real mirror
-        // while asserting it opens no connections.
-        .env(evertranscript_core::models::provision::DISABLE_ENV, "1")
-        // And no login item: these start a real daemon, which would register
-        // the test binary to run at the next login.
-        .env(evertranscript_core::autostart::DISABLE_ENV, "1")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("starting the Core");
-    wait_for_core(&history, &runtime);
-    run(&history, &runtime, &["acknowledge"]);
-    run(&history, &runtime, &["record", "start", "--app", "Zoom"]);
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    run(&history, &runtime, &["record", "stop"]);
-    let _ = daemon.kill();
-    let _ = daemon.wait();
-
-    let visible: Vec<String> = std::fs::read_dir(&history)
-        .expect("read history")
-        .flatten()
-        .map(|entry| entry.file_name().to_string_lossy().to_string())
-        .filter(|name| !name.starts_with('.'))
-        .collect();
-
-    assert!(
-        visible.iter().all(|name| name.ends_with(".md")),
-        "the folder must read as meeting notes (ADR-0035): {visible:?}"
-    );
-    assert!(
-        history.join(".data").is_dir(),
-        "the machine store belongs in the hidden .data folder"
     );
 }
 

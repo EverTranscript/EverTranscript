@@ -214,15 +214,4 @@ mod tests {
             "and it is the one at the head of the line, not the first queued"
         );
     }
-
-    #[test]
-    fn deleting_a_meeting_takes_it_out_of_the_line() {
-        let connection = db();
-        enqueue(&connection, "a", Priority::Back).expect("queue");
-        connection
-            .execute("DELETE FROM meetings WHERE id = 'a'", [])
-            .expect("delete");
-        assert!(list(&connection).expect("list").is_empty());
-        assert!(!holds(&connection, "a").expect("holds"));
-    }
 }

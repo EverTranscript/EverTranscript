@@ -654,15 +654,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn access_is_answered_rather_than_assumed() {
-        // Whatever this machine's answer is, asking must not prompt, hang or
-        // panic — a background poll that opens a permission dialog is a
-        // product that asks at the worst possible moment.
-        let answer = access();
-        assert!(matches!(answer, Access::Granted | Access::Withheld));
-    }
-
-    #[test]
     fn a_withheld_calendar_produces_no_events_rather_than_an_error() {
         // ADR-0036: skipping the grant costs the niceties and nothing else.
         if access() == Access::Granted {

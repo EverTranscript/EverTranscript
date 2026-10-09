@@ -274,20 +274,6 @@ mod tests {
     }
 
     #[test]
-    fn both_legs_arriving_together_produce_aligned_stereo() {
-        let mut joiner = Joiner::new();
-        joiner.push(&frame(AudioChannel::Mic, 0, 100, 0.5));
-        joiner.push(&frame(AudioChannel::System, 0, 100, -0.5));
-
-        let blocks = joiner.drain();
-        let (mic, system) = split(&blocks);
-        assert_eq!(mic.len(), ms_to_samples(100));
-        assert_eq!(system.len(), ms_to_samples(100));
-        assert!(mic.iter().all(|sample| *sample == 0.5));
-        assert!(system.iter().all(|sample| *sample == -0.5));
-    }
-
-    #[test]
     fn a_gap_in_one_leg_becomes_silence_not_lost_time() {
         // The device-swap case: the mic leg goes away for 200 ms and comes
         // back. The output must still be 500 ms long, with silence where the

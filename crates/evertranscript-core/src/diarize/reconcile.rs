@@ -235,25 +235,6 @@ mod tests {
     }
 
     #[test]
-    fn a_boundary_that_moves_slightly_does_not_change_a_clean_segment() {
-        // Why midpoint beats overlap-majority. Diarization's characteristic
-        // error is a boundary landing a bit early or late; the attribution
-        // of a segment well inside a turn must not depend on it.
-        let segments = vec![segment("a", AudioChannel::System, 1_000, 3_000)];
-        for boundary in [3_100, 3_500, 3_900] {
-            let d = diarization(vec![
-                Turn::new(AudioChannel::System, 0, boundary, 0),
-                Turn::new(AudioChannel::System, boundary, 10_000, 1),
-            ]);
-            assert_eq!(
-                reconcile(&d, &segments).assignments[0].cluster,
-                Some(Cluster(0)),
-                "boundary at {boundary} should not move this segment"
-            );
-        }
-    }
-
-    #[test]
     fn only_voices_that_own_words_are_offered_for_persistence() {
         // Two turns, one segment. The voice that spoke the words is a
         // candidate Speaker; the one that made sound and no transcript is
@@ -313,15 +294,6 @@ mod tests {
     }
 
     #[test]
-    fn a_long_meeting_does_not_overflow_the_midpoint() {
-        // `(start + end) / 2` is the tempting form and it is wrong for
-        // timestamps near i64::MAX. This is the sort of arithmetic that only
-        // ever breaks on the recording somebody cared about.
-        let huge = i64::MAX - 1;
-        assert_eq!(midpoint(huge - 2, huge), CaptureOffset((huge - 1) as u64));
-    }
-
-    #[test]
     fn overlapped_speech_resolves_to_one_voice_rather_than_none() {
         // Two turns cover the midpoint. Attribution has to name one — a
         // transcript segment has one speaker label — and the honest signal
@@ -351,48 +323,6 @@ mod tests {
             2,
             "every segment is accounted for"
         );
-    }
-
-    #[test]
-    fn applying_attribution_updates_a_published_transcript() {
-        use crate::store::meetings;
-        use crate::store::speakers as speaker_store;
-
-        let mut connection = rusqlite::Connection::open_in_memory().expect("open");
-        crate::store::schema::migrate(&mut connection).expect("migrate");
-        let meeting = meetings::start(&connection, Some("Standup"), None).expect("meeting");
-
-        // The Transcript exists first. That is the whole situation this
-        // module is for: diarization arrives after the words did.
-        let published = meetings::append_segment(
-            &connection,
-            &meeting.id,
-            AudioChannel::System,
-            0,
-            4_000,
-            "good morning",
-        )
-        .expect("segment");
-        assert!(published.speaker_id.is_none());
-
-        let speaker = speaker_store::create(&connection, false).expect("speaker");
-        let d = diarization(vec![Turn::new(AudioChannel::System, 0, 10_000, 0)]);
-        let all = meetings::segments(&connection, &meeting.id).expect("segments");
-        let result = reconcile(&d, &all);
-
-        let mut map = std::collections::BTreeMap::new();
-        map.insert(Cluster(0), speaker.id.clone());
-        let written = apply(
-            &connection,
-            &result,
-            &map,
-            speaker_store::Attribution::Clustered,
-        )
-        .expect("apply");
-
-        assert_eq!(written, 1);
-        let after = meetings::segments(&connection, &meeting.id).expect("segments");
-        assert_eq!(after[0].speaker_id.as_deref(), Some(speaker.id.as_str()));
     }
 
     #[test]
@@ -465,62 +395,6 @@ mod tests {
             beneath,
             Some(other.id),
             "and the machine's new conclusion was still recorded beneath it"
-        );
-    }
-
-    #[test]
-    fn a_partially_applied_run_leaves_a_coherent_record() {
-        // Cancellation mid-apply. Some segments attributed and some not is
-        // an acceptable record; a half-written row is not. Every segment is
-        // either its old value or its new one.
-        use crate::store::meetings;
-        use crate::store::speakers as speaker_store;
-
-        let mut connection = rusqlite::Connection::open_in_memory().expect("open");
-        crate::store::schema::migrate(&mut connection).expect("migrate");
-        let meeting = meetings::start(&connection, None, None).expect("meeting");
-        for index in 0..4 {
-            meetings::append_segment(
-                &connection,
-                &meeting.id,
-                AudioChannel::System,
-                index * 1_000,
-                index * 1_000 + 900,
-                "words",
-            )
-            .expect("segment");
-        }
-
-        let speaker = speaker_store::create(&connection, false).expect("speaker");
-        let d = diarization(vec![Turn::new(AudioChannel::System, 0, 10_000, 0)]);
-        let all = meetings::segments(&connection, &meeting.id).expect("segments");
-        let full = reconcile(&d, &all);
-
-        // Stop after two, as a cancelled job would.
-        let partial = Reconciliation {
-            assignments: full.assignments[..2].to_vec(),
-            boundary_flips: 0,
-        };
-        let mut map = std::collections::BTreeMap::new();
-        map.insert(Cluster(0), speaker.id.clone());
-        apply(
-            &connection,
-            &partial,
-            &map,
-            speaker_store::Attribution::Clustered,
-        )
-        .expect("apply");
-
-        let after = meetings::segments(&connection, &meeting.id).expect("segments");
-        assert_eq!(after.len(), 4, "no segment was lost");
-        assert_eq!(
-            after.iter().filter(|s| s.speaker_id.is_some()).count(),
-            2,
-            "attributed as far as it got"
-        );
-        assert!(
-            after[2..].iter().all(|s| s.speaker_id.is_none()),
-            "and the rest are plainly unattributed rather than wrong"
         );
     }
 

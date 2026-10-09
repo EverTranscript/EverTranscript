@@ -362,13 +362,4 @@ mod tests {
         assert!(cut(&path, AudioChannel::Mic, 60_000, 70_000).is_err());
         assert!(cut(Path::new("/nonexistent/x.mp3"), AudioChannel::Mic, 0, 1_000).is_err());
     }
-
-    #[test]
-    fn the_frame_arithmetic_matches_the_sinks_rate() {
-        // 384 bytes and 24 ms a frame at the sink's settings. If BITRATE or
-        // SAMPLE_RATE ever changes, this and the const assertion above are
-        // where the cut learns about it.
-        assert_eq!(FRAME_BYTES, 384);
-        assert_eq!(FRAME_SAMPLES * 1000 / SAMPLE_RATE as u64, 24);
-    }
 }

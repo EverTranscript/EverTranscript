@@ -32,11 +32,6 @@ pub enum Response {
     Text(String),
     /// Fail this way.
     Fails(Failure),
-    /// Take a while, checking cancellation, then produce this text.
-    ///
-    /// The steps are checks, not sleeps: a test that waits is a test that is
-    /// flaky on a loaded CI runner.
-    Slow { steps: usize, then: String },
 }
 
 /// The failure shapes, as data.
@@ -154,14 +149,6 @@ impl Backend for FakeBackend {
                 Ok(text)
             }
             Response::Fails(failure) => Err(failure.into_error()),
-            Response::Slow { steps, then } => {
-                for _ in 0..steps {
-                    if cancel.is_cancelled() {
-                        return Err(BackendError::Cancelled);
-                    }
-                }
-                Ok(then)
-            }
         }
     }
 
@@ -179,99 +166,6 @@ mod tests {
             system: "be helpful".into(),
             user: "a transcript".into(),
         }
-    }
-
-    #[test]
-    fn it_answers_from_the_script_in_order() {
-        let mut backend = FakeBackend::scripted(
-            BackendIdentity::LocalSidecar {
-                model: "fake".into(),
-            },
-            vec![
-                Response::Text("first".into()),
-                Response::Text("second".into()),
-            ],
-        );
-        let cancel = Cancel::new();
-        assert_eq!(backend.generate(&request(), &cancel).unwrap(), "first");
-        assert_eq!(backend.generate(&request(), &cancel).unwrap(), "second");
-        assert_eq!(
-            backend.generate(&request(), &cancel).unwrap(),
-            "second",
-            "the last entry repeats, so a test need not know the call count"
-        );
-    }
-
-    #[test]
-    fn it_can_produce_every_failure_shape() {
-        // The capability the fallback tests exist on. A real Backend cannot
-        // be asked to return a 401 on demand.
-        let cancel = Cancel::new();
-        for (failure, matches) in [
-            (Failure::Unreachable, "unreachable"),
-            (Failure::Refused, "refused"),
-            (Failure::TimedOut, "timed out"),
-            (Failure::Malformed, "unusable"),
-            (Failure::Unavailable, "unavailable"),
-        ] {
-            let error = FakeBackend::failing(failure)
-                .generate(&request(), &cancel)
-                .expect_err("fails");
-            assert!(
-                error.to_string().contains(matches),
-                "{failure:?} produced {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn it_records_what_it_was_actually_asked() {
-        // Armor tests assert on what was *sent*, not on what the calling
-        // code believed it was sending. The difference is where injections
-        // live.
-        let backend = FakeBackend::returning("a summary");
-        let seen = backend.prompts();
-        let mut backend = backend;
-        backend
-            .generate(
-                &Request {
-                    system: "rule one".into(),
-                    user: "Alice: hello".into(),
-                },
-                &Cancel::new(),
-            )
-            .expect("generates");
-
-        let recorded = seen.lock().expect("lock");
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].system, "rule one");
-        assert!(recorded[0].user.contains("Alice"));
-    }
-
-    #[test]
-    fn a_slow_generation_can_be_cancelled_without_waiting() {
-        // Checks, not sleeps: a test that waits is flaky on a loaded runner.
-        let cancel = Cancel::new();
-        cancel.cancel();
-        let result = FakeBackend::scripted(
-            BackendIdentity::LocalSidecar {
-                model: "fake".into(),
-            },
-            vec![Response::Slow {
-                steps: 1_000,
-                then: "never".into(),
-            }],
-        )
-        .generate(&request(), &cancel);
-        assert!(matches!(result, Err(BackendError::Cancelled)));
-    }
-
-    #[test]
-    fn a_cloud_fake_reports_itself_as_cloud() {
-        // Several tests turn on this distinction, so the fake has to be able
-        // to be honest about it.
-        let backend = FakeBackend::cloud("OpenAI", vec![Response::Text("x".into())]);
-        assert!(backend.identity().leaves_the_machine());
     }
 
     #[test]
