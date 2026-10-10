@@ -11,6 +11,7 @@ import type { Speaker } from "@protocol/Speaker";
 import type { SpeakerMeeting } from "@protocol/SpeakerMeeting";
 import type { SpeakerJoinPreview } from "@protocol/SpeakerJoinPreview";
 import type { DiarizeRerun } from "@protocol/DiarizeRerun";
+import type { UpdateState } from "../main/update-state";
 import {
   useAudioCheck,
   useCalendarAccess,
@@ -203,6 +204,7 @@ export function App(): React.JSX.Element {
             </button>
           )}
         </div>
+        <UpdateStrip />
         {showingSettings ? (
           <SettingsPanel
             onClose={() => setShowingSettings(false)}
@@ -2278,6 +2280,111 @@ function ModelDownload(): React.ReactElement | null {
           {t("models.stop")}
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The update offer (DECISIONS Q324): one quiet strip under the toolbar, and
+ * nothing anywhere else — no notification, no menu item, no dialog.
+ *
+ * It only shows what the main process decided; whether an install may run
+ * now is the Core's answer there (Q330), never this page's.
+ */
+function UpdateStrip(): React.JSX.Element | null {
+  const [update, setUpdate] = useState<UpdateState>({ phase: "none" });
+  useEffect(() => {
+    const updates = window.evertranscript.updates;
+    const off = updates.onState(setUpdate);
+    void updates.state().then(setUpdate);
+    return off;
+  }, []);
+
+  if (update.phase === "none") return null;
+  const { updates } = window.evertranscript;
+  const notes = (
+    <a
+      href={`https://github.com/EverTranscript/EverTranscript/releases/tag/v${update.version}`}
+      className="underline"
+      target="_blank"
+      rel="noreferrer"
+    >
+      {t("updates.notes")}
+    </a>
+  );
+
+  let line: React.ReactNode;
+  let actions: React.ReactNode = null;
+  switch (update.phase) {
+    case "available":
+      line = `${t("updates.available")} ${update.version}`;
+      actions = (
+        <>
+          <button type="button" className="push" onClick={() => void updates.download()}>
+            {t("updates.download")}
+          </button>
+          {notes}
+          <button type="button" className="push" onClick={updates.later}>
+            {t("updates.later")}
+          </button>
+        </>
+      );
+      break;
+    case "downloading":
+      line = `${t("updates.downloading")} ${update.version} — ${update.percent}%`;
+      actions = (
+        <progress
+          value={update.percent}
+          max={100}
+          aria-label={t("updates.downloading")}
+          className="w-40"
+        />
+      );
+      break;
+    case "downloaded":
+      line = `${t("updates.ready")} ${update.version}`;
+      actions = (
+        <>
+          <button type="button" className="push" onClick={() => void updates.install()}>
+            {t("updates.restart")}
+          </button>
+          {notes}
+        </>
+      );
+      break;
+    case "waiting":
+      line = (
+        <>
+          {`${t("updates.ready")} ${update.version}`}{" "}
+          <span className="text-ink-muted">{t(`updates.waiting.${update.busy}`)}</span>
+        </>
+      );
+      actions = notes;
+      break;
+    case "installing":
+      line = t("updates.installing");
+      break;
+    case "failed":
+      line = `${t(update.retry === "download" ? "updates.failed.download" : "updates.failed.install")} ${update.message}`;
+      actions = (
+        <button
+          type="button"
+          className="push"
+          onClick={() => void (update.retry === "download" ? updates.download() : updates.install())}
+        >
+          {t("core.retry")}
+        </button>
+      );
+      break;
+  }
+
+  return (
+    <div
+      role="status"
+      className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-6 py-2 text-sm"
+    >
+      <span className="min-w-0 flex-1">{line}</span>
+      {actions}
     </div>
   );
 }

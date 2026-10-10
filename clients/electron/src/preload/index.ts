@@ -10,6 +10,8 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { JsonRpcNotification } from "@protocol/JsonRpcNotification";
 import type { StatusResponse } from "@protocol/StatusResponse";
 
+import type { UpdateState } from "../main/update-state";
+
 /** What the menu bar needs from the page: its words, and what can be done now. */
 export type MenuState = {
   available: boolean;
@@ -91,6 +93,20 @@ const api = {
   rerunSetup: (): void => ipcRenderer.send("setup:rerun"),
   confirm: (request: ConfirmRequest): Promise<boolean> =>
     ipcRenderer.invoke("dialog:confirm", request),
+  /** The update offer (DECISIONS Q324). Installing is the main process's call, never the page's. */
+  updates: {
+    state: (): Promise<UpdateState> => ipcRenderer.invoke("updates:state"),
+    onState: (handler: (state: UpdateState) => void) => {
+      const listener = (_event: unknown, state: UpdateState) => handler(state);
+      ipcRenderer.on("updates:state", listener);
+      return (): void => {
+        ipcRenderer.off("updates:state", listener);
+      };
+    },
+    download: (): Promise<void> => ipcRenderer.invoke("updates:download"),
+    later: (): void => ipcRenderer.send("updates:later"),
+    install: (): Promise<void> => ipcRenderer.invoke("updates:install"),
+  },
 };
 
 contextBridge.exposeInMainWorld("evertranscript", api);

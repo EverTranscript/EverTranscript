@@ -33,6 +33,8 @@ const englishOnMac: Partial<Record<MessageKey, string>> = {
   "registry.reenrol": "Record It Again",
   "registry.rename": "Name This Voice",
   "registry.rerun.stop": "Stop the Update",
+  "updates.notes": "Release Notes",
+  "updates.restart": "Restart to Update",
 };
 
 const en = {
@@ -194,6 +196,19 @@ const en = {
   "updates.title": "Check for updates",
   "updates.hint":
     "Asks GitHub which version is latest, and sends only the version you are running. Turn it off and — with models downloaded — this app makes no network calls at all.",
+  "updates.available": "A new version is available:",
+  "updates.download": "Download",
+  "updates.notes": "Release notes",
+  "updates.later": "Later",
+  "updates.downloading": "Downloading the update",
+  "updates.ready": "Ready to install:",
+  "updates.restart": "Restart to update",
+  "updates.waiting.recording": "It installs when the recording ends.",
+  "updates.waiting.diarizing": "It installs when Diarization finishes.",
+  "updates.waiting.unreadable": "It installs once the Core answers.",
+  "updates.installing": "Installing the update…",
+  "updates.failed.download": "The download failed:",
+  "updates.failed.install": "The update did not install:",
   "notes.title": "Notes",
   "notes.hint":
     "Your own writing. Editable during the call and forever after, and it steers the Summary.",
@@ -489,6 +504,19 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "updates.title": "检查更新",
     "updates.hint":
       "向 GitHub 询问最新版本，只发送你当前运行的版本号。关闭它，并在模型已下载的情况下，本应用不会发起任何网络请求。",
+    "updates.available": "有新版本可用：",
+    "updates.download": "下载",
+    "updates.notes": "更新说明",
+    "updates.later": "稍后",
+    "updates.downloading": "正在下载更新",
+    "updates.ready": "可以安装：",
+    "updates.restart": "重启以更新",
+    "updates.waiting.recording": "录音结束后自动安装。",
+    "updates.waiting.diarizing": "Diarization 完成后自动安装。",
+    "updates.waiting.unreadable": "Core 应答后自动安装。",
+    "updates.installing": "正在安装更新…",
+    "updates.failed.download": "下载失败：",
+    "updates.failed.install": "更新未能安装：",
     "notes.title": "笔记",
     "notes.hint": "你自己写的内容。通话中和事后随时可改，并会影响摘要的生成。",
     "notes.placeholder": "重要的事……",

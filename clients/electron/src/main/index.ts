@@ -16,6 +16,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  shell,
   systemPreferences,
   type MenuItemConstructorOptions,
 } from "electron";
@@ -721,6 +722,20 @@ function buildMenu(): void {
     ]),
   );
 }
+
+/**
+ * A link the page opens goes to the browser, and only a link to this
+ * project's own repository: the release notes, and the source the trust
+ * surface points at. Left to Electron, `target="_blank"` opened GitHub in a
+ * window of this app rather than in the browser.
+ */
+const PROJECT = "https://github.com/EverTranscript/EverTranscript";
+app.on("web-contents-created", (_event, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    if (url === PROJECT || url.startsWith(`${PROJECT}/`)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+});
 
 ipcMain.handle("updates:state", () => updates.state());
 ipcMain.handle("updates:download", () => updates.download());
