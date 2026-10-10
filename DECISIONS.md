@@ -3599,7 +3599,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The user asked for the screen to be driven there; the defaults would have mutated the user's real data, and the variables are the Core's documented overrides, honoured by both versions (`paths.rs`, `autostart.rs`).
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 5611cb4
 
 ## Q320 — interactive/zx8-upgrade-e2e — finding
 
@@ -3609,4 +3609,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Observed live on windows-zx8 and read back from the test History's database (`diarize_rerun`, `meetings.diarized_at`, `speaker_exemplars`, `speakers`); code path `lib.rs:90`, `server.rs:4022`, `server.rs:1961`, `server.rs:342` at d6ddd18. Fix and recovery are ticketed in `.scratch/zx8-upgrade-e2e/issues/01`.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 5611cb4
