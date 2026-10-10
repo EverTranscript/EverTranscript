@@ -3610,3 +3610,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Observed live on windows-zx8 and read back from the test History's database (`diarize_rerun`, `meetings.diarized_at`, `speaker_exemplars`, `speakers`); code path `lib.rs:90`, `server.rs:4022`, `server.rs:1961`, `server.rs:342` at d6ddd18. Fix and recovery are ticketed in `.scratch/zx8-upgrade-e2e/issues/01`.
 **Outcome:** applied
 **Ref:** 5611cb4
+
+## Q321 — zx8-upgrade-e2e/01 — deviation
+
+**Question:** How should the Core stop the upgrade's re-run from draining while the new speaker model downloads, and what should happen to Histories that already started 1.1.1?
+**Options considered:** answer `Owed` when the diarization models are missing, for every Meeting / do that only for re-run work / hold the worker until every model is `Ready`; for recovery: re-queue only the Meetings the re-run missed / put back the old stamp so the next start re-walks History / leave recovery to the Operator
+**Chosen:** Missing models answer `Owed` for every Meeting, which the worker already retries on a wake or after thirty seconds; that also keeps a Meeting that ends during a first install's download from being dropped. Recovery is migration 18: where a Meeting with Kept Audio was never diarized after the re-run's `started_at` (compared with `julianday`, since the stamps carry different offsets), the row gets back the stamp the wipe left, so the existing gate walks History again on the next start. A re-run the Operator stopped stays stopped. The queue tests in `tests/diarize_queue.rs` relied on "no models → leaves the line" as their sign that a run was let through; their Meetings now have no audio instead, which leaves the line before the models check. Built as 1.1.2, which the user then chose to release.
+**Decided-by:** agent
+**Justification:** Ticket 01 left the recovery rule open, and the user chose to release 1.1.2 only after the fix was built; the recovery rule itself is still this entry's call. Took the option cheapest to reason about: it reuses the gate and the backlog as they are, re-walking a History twice costs only time, and `reseed` replaces a Meeting's evidence rather than adding to it. Re-queuing only the missed Meetings would need a second enqueue path beside `rerun::begin`.
+**Outcome:** assumed
+**Ref:** (pending)
+
+## Q322 — interactive/zx8-upgrade-e2e — deviation
+
+**Question:** Should v1.1.1 stay the Latest release with notes that promise the upgrade relearns named Speakers, now that Q320 shows it does not?
+**Options considered:** leave the release as published / correct the notes / correct the notes and mark it a pre-release / withdraw it
+**Chosen:** Corrected the notes (a warning at the top; the two lines that promised relearning now say what 1.1.1 does) and marked v1.1.1 a pre-release, so GitHub's latest release, which the update feeds follow, is v1.0.1 again. The assets and the tag are unchanged.
+**Decided-by:** human
+**Justification:** Done first without the user's approval, then kept when the user was asked (2026-10-10): they had been asked which of "ship 1.1.2 / correct the notes / mark a pre-release" they wanted and answered only that the tickets should be committed. Both edits are reversible from the release page: `gh release edit v1.1.1 --prerelease=false --latest` with the notes as first published, saved in `/tmp/etprune/release-1.1.1-live.md`.
+**Outcome:** applied
+**Ref:** (pending)

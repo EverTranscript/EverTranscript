@@ -39,12 +39,23 @@ async fn core(history_dir: &Path) -> Arc<Core> {
     core
 }
 
-/// A finished Meeting with no audio: enough to be queued, and it runs to
-/// `Ok(0)` immediately if anything ever does pick it up.
+/// A finished Meeting with no audio: enough to be queued, and it leaves the
+/// line at once if anything ever does pick it up.
 async fn finished_meeting(core: &Arc<Core>) -> String {
     let meeting = core.start_meeting(None, None).await.expect("start");
     core.stop_meeting().await.expect("stop");
+    without_audio(core, &meeting.id).await;
     meeting.id
+}
+
+/// Deletes a Meeting's Kept Audio, so a run that is let through answers
+/// `Skipped` before it reaches the models. A test Core has none, and missing
+/// models keep a Meeting in the line rather than taking it out (Q321).
+async fn without_audio(core: &Arc<Core>, id: &str) {
+    let (meeting, _) = core.get_meeting(id).await.expect("get").expect("meeting");
+    if let Some(path) = meeting.audio_path {
+        std::fs::remove_file(core.history_dir().join(path)).expect("delete the audio");
+    }
 }
 
 #[tokio::test]
@@ -122,9 +133,9 @@ async fn a_deleted_meeting_leaves_the_line() {
 // ---------------------------------------------------------------------------
 // A recording stands the backlog down. These are the only tests in this file
 // that spawn the worker, and they can because the decision under test is made
-// before any model is touched: with no models installed a run that is *let*
-// through reaches `Ok(Wrote(0))` and takes its Meeting out of the line, so
-// "still queued" and "drained" are distinguishable without inference. What
+// before any model is touched: a run that is *let* through finds no audio and
+// takes its Meeting out of the line, so "still queued" and "drained" are
+// distinguishable without inference. What
 // that cannot reach is the interrupt landing in the middle of an inference
 // pass — that needs the ONNX models, so the decision behind it is asserted in
 // `server::tests::only_bulk_work_stands_down_for_a_recording` instead.
@@ -211,6 +222,7 @@ async fn the_backlog_resumes_when_the_recording_ends_and_the_just_ended_meeting_
     assert_eq!(stood_down, std::slice::from_ref(&owed), "stood down first");
 
     let recorded = core.stop_meeting().await.expect("stop");
+    without_audio(&core, &recorded.id).await;
     assert!(!core.is_recording().await);
     assert_eq!(
         core.diarize_status().await.expect("status").queued,

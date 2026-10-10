@@ -471,6 +471,7 @@ const MIGRATIONS: &[&str] = &[
     MODEL_CHANGE_WIPE,
     MODEL_CHANGE_RERUN,
     THE_ENROLMENT,
+    A_RERUN_THE_DOWNLOAD_OUTRAN,
 ];
 
 /// 15 — the wipe a model change owes.
@@ -662,6 +663,28 @@ const THE_ENROLMENT: &str = r#"
         duration_ms  INTEGER NOT NULL,
         recorded_at  TEXT NOT NULL
     ) STRICT;
+"#;
+
+/// 18 — a re-run that the new model's download outran.
+///
+/// 1.1.1 started the re-run while it was still downloading the embedding it
+/// re-runs with, and every Meeting reached before the file landed left the
+/// line unwalked. The row then carried the new stamp, so nothing would walk
+/// History again (Q320). Where a Meeting with Kept Audio was never diarized
+/// after the re-run began, this puts back the stamp the wipe left, and the
+/// next start's gate walks History again. A re-run the Operator stopped
+/// stays stopped. Compared through `julianday` because the stamps carry
+/// different offsets.
+const A_RERUN_THE_DOWNLOAD_OUTRAN: &str = r#"
+    UPDATE diarize_rerun
+       SET model = 'wespeaker-voxceleb-resnet34-LM', model_version = '2', total = 0
+     WHERE cancelled = 0
+       AND EXISTS (
+           SELECT 1 FROM meetings
+            WHERE audio_path IS NOT NULL
+              AND (diarized_at IS NULL
+                   OR julianday(diarized_at) < julianday(diarize_rerun.started_at))
+       );
 "#;
 
 /// Applies every migration the database has not seen yet.
@@ -1340,5 +1363,70 @@ mod tests {
         // always going to get a Voiceprint the next time it was heard.
         assert!(relearnable.contains(&fresh));
         assert!(!relearnable.contains(&gone), "still forgotten");
+    }
+
+    /// The History 1.1.1 left on windows-zx8 (Q320): the re-run stamped the
+    /// new model at 10:04:24 while its one Meeting was last diarized by
+    /// 1.0.1 at 09:59:36. The upgrade must put back the stamp that makes the
+    /// next start walk History, and leave alone a re-run that did its work
+    /// or that the Operator stopped.
+    #[test]
+    fn a_re_run_that_walked_nothing_is_owed_again() {
+        let stamp_after = |diarized_at: Option<&str>, cancelled: i64| -> String {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let mut connection = Connection::open(dir.path().join("h.sqlite3")).expect("open");
+            configure(&connection).expect("configure");
+            for migration in &MIGRATIONS[..before(A_RERUN_THE_DOWNLOAD_OUTRAN)] {
+                connection.execute_batch(migration).expect("migrate");
+            }
+            connection
+                .pragma_update(
+                    None,
+                    "user_version",
+                    before(A_RERUN_THE_DOWNLOAD_OUTRAN) as i64,
+                )
+                .expect("user_version");
+            connection
+                .execute(
+                    "UPDATE diarize_rerun SET model = 'redimnet2-b3', model_version = '1',
+                     total = 1, cancelled = ?1,
+                     started_at = '2026-10-10T10:04:24.832663400-07:00'",
+                    [cancelled],
+                )
+                .expect("1.1.1's stamp");
+            connection
+                .execute(
+                    "INSERT INTO meetings (id, started_at, created_at, updated_at, audio_path,
+                     diarized_at)
+                     VALUES ('m1', '2026-10-10T09:38:10Z', 'now', 'now', 'm1.mp3', ?1)",
+                    [diarized_at],
+                )
+                .expect("meeting");
+            migrate(&mut connection).expect("upgrade");
+            connection
+                .query_row("SELECT model FROM diarize_rerun", [], |row| row.get(0))
+                .expect("stamp")
+        };
+
+        assert_eq!(
+            stamp_after(Some("2026-10-10T09:59:36.703752100-07:00"), 0),
+            "wespeaker-voxceleb-resnet34-LM",
+            "diarized only before the re-run began: walk it again"
+        );
+        assert_eq!(
+            stamp_after(None, 0),
+            "wespeaker-voxceleb-resnet34-LM",
+            "never diarized at all: the same"
+        );
+        assert_eq!(
+            stamp_after(Some("2026-10-10T17:09:41Z"), 0),
+            "redimnet2-b3",
+            "diarized after the re-run began, in another offset: done"
+        );
+        assert_eq!(
+            stamp_after(Some("2026-10-10T09:59:36-07:00"), 1),
+            "redimnet2-b3",
+            "a re-run the Operator stopped stays stopped"
+        );
     }
 }

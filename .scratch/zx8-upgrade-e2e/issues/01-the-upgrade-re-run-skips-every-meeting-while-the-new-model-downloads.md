@@ -1,6 +1,6 @@
 # 01: The upgrade's re-run skips every Meeting while the new speaker model downloads
 
-Status: ready-for-agent
+Status: done
 
 Priority: high. It breaks the one promise ADR-0037 makes to people upgrading
 from 1.0.x, and the 1.1.1 release notes repeat that promise: "Named Speakers
@@ -68,3 +68,28 @@ Alice Test got a `redimnet2-b3` Voiceprint from one 5,190 ms exemplar. So
 
 - The macOS upgrade. The code path is shared, so it should behave the same.
 - A History with many Meetings. The test had one.
+
+## Answer
+
+Fixed in 1.1.2 (Q321).
+
+1. **The race.** Missing diarization models now answer `Owed` for every
+   Meeting, not only bulk work. The worker already keeps an owed Meeting at
+   the head of the line and retries it on a wake or after 30 seconds, so a
+   Meeting reached during the download waits for the file instead of leaving
+   the line. Nothing wakes the worker when a download finishes; the 30-second
+   timer covers it.
+2. **Recovery.** Migration 18 in `store/schema.rs`. Where a Meeting with Kept
+   Audio was never diarized after the re-run's `started_at`, it puts back the
+   stamp the 1.1.1 wipe left, so the existing gate walks History again on the
+   next start. A re-run the Operator stopped stays stopped.
+3. **Tests.** `server::tests::a_meeting_reached_before_the_models_arrive_stays_owed`
+   and `store::schema::tests::a_re_run_that_walked_nothing_is_owed_again`;
+   each fails without its half of the fix. Deviation: neither provides the
+   model and asserts a Voiceprint comes back, because that needs the real
+   ONNX models, which tests do not have. The live run in Q320 showed that
+   half: with the model on disk, the re-run relearned Alice Test in 2 s.
+4. **The stale doc** in `diarize/reseed.rs` now names its caller.
+
+`tests/diarize_queue.rs` used "no models → leaves the line" as its sign that
+a run was let through. Its Meetings now have no audio instead.

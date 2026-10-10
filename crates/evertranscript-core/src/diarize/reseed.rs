@@ -1,5 +1,4 @@
-//! Re-teaching one Meeting's named voices in a new embedding space,
-//! **written and unreachable from production**.
+//! Re-teaching one Meeting's named voices in a new embedding space.
 //!
 //! Ticket 12's bounded rebuild. A model change clears every Voiceprint; this
 //! is what earns the named ones back, one Meeting at a time, from the audio
@@ -75,11 +74,10 @@
 //! replacement does not tell them apart: it replaces what they jointly say
 //! about one Meeting with what the Meeting now says.
 //!
-//! # Nothing calls this
+//! # Who calls this
 //!
-//! It is reachable from tests and from nothing else. Activation is the
-//! user's model decision plus ticket 05, the same two this whole ticket
-//! waits on.
+//! `Core::diarize_meeting`, for a Meeting the bulk re-run owns: it plans
+//! before inference and commits in the same transaction as the attribution.
 
 use std::collections::BTreeSet;
 use std::path::Path;

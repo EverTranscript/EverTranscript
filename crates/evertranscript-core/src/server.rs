@@ -268,8 +268,8 @@ pub enum DiarizeOutcome {
     /// by then a row under that id could be a fresh request somebody made in
     /// between.
     Wrote(usize),
-    /// Nothing ran and nothing was written: no audio, no models, or a run
-    /// that failed on its own recording. The Meeting still leaves the line,
+    /// Nothing ran and nothing was written: no audio, or a run that failed
+    /// on its own recording. The Meeting still leaves the line,
     /// because the next pass would fail in exactly the same way — but it
     /// leaves it afterwards, since there was no transaction to leave it in.
     Skipped,
@@ -355,8 +355,8 @@ fn leaves_the_line_afterwards(outcome: DiarizeOutcome) -> bool {
 /// re-seeded evidence and the queue removal together; answering `Skipped`
 /// would then throw the Meeting away for a failure that rolled back cleanly
 /// and might not recur. A Meeting that genuinely cannot be processed says so
-/// as an explicit `Skipped` — no audio, no models, audio gone — and those
-/// paths are untouched.
+/// as an explicit `Skipped` — no audio, audio gone — and those paths are
+/// untouched. Missing models are not among them: they are owed (Q320).
 ///
 /// Separate from the loop so the classification can be asserted without
 /// running a worker.
@@ -1957,10 +1957,11 @@ impl Core {
         let segmentation = self.models_dir.join("diarize-segmentation.onnx");
         let embedding = self.models_dir.join("diarize-embedding.onnx");
         if !segmentation.exists() || !embedding.exists() {
-            tracing::info!(
-                "diarization models are not downloaded; leaving the Meeting unattributed"
-            );
-            return Ok(DiarizeOutcome::Skipped);
+            // Owed, not skipped: a model change deletes the old file and
+            // downloads the new one while the re-run is already walking, and a
+            // skip there drained the whole backlog unwalked (Q320).
+            tracing::info!("diarization models are not downloaded yet; the Meeting waits for them");
+            return Ok(DiarizeOutcome::Owed);
         }
 
         // Claimed before the job entry is written, not inside the spawned
@@ -6159,6 +6160,32 @@ mod tests {
             exemplars_of(&core, "alice").await,
             vec![vec![1.0_f32]],
             "and it wrote nothing: Alice keeps what she had"
+        );
+    }
+
+    /// Models that are not on disk yet are a wait, not a verdict.
+    ///
+    /// The first start after a model change deletes the old embedding file
+    /// and downloads the new one while the re-run is already walking. Answered
+    /// `Skipped`, every Meeting reached in that window left the line unwalked,
+    /// and the re-run reported itself finished with nobody relearned (Q320).
+    #[tokio::test]
+    async fn a_meeting_reached_before_the_models_arrive_stays_owed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = Core::with_history_dir_acknowledged(dir.path().join("History")).expect("core");
+        let (meeting, _) = reseedable(&core, false).await;
+        std::fs::write(core.history_dir.join("m1.wav"), b"").expect("kept audio");
+
+        let outcome = core
+            .diarize_meeting(&meeting, crate::store::diarize_queue::Priority::Back)
+            .await
+            .expect("run");
+
+        assert_eq!(outcome, DiarizeOutcome::Owed);
+        assert!(!leaves_the_line_afterwards(outcome));
+        assert!(
+            still_queued(&core, &meeting).await,
+            "the re-run must still owe it when the model lands"
         );
     }
 
