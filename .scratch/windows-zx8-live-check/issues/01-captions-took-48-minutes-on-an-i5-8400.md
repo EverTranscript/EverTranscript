@@ -1,6 +1,6 @@
 # 01: Captions for a 53-second recording took 48 minutes on an i5-8400
 
-Status: needs-triage
+Status: done
 
 Found during the live v1.0.1 check on windows-zx8 on 2026-10-09 (Q313).
 
@@ -54,5 +54,45 @@ would take more than two days to caption.
 3. Repeat the same recording. Note the time from the stop to
    `audio finalized`, and the Core's CPU time.
 4. If `main` is still slow, log each block's decode time and try 6 threads.
+
+## Answer
+
+**Cause: whisper.cpp was compiled without optimization on Windows.**
+whisper-rs-sys's CMakeCache on windows-zx8 read
+`CMAKE_C_FLAGS_RELEASE= -nologo -MD -Brepro -W0`, with no `/O` flag, so MSVC
+built ggml at `/Od`. cmake-rs replaces CMake's Release flags for the Visual
+Studio generator and drops every `/O` (rust-lang/cmake-rs#240).
+llama-cpp-sys-2 adds `/O2` back itself, so the summarizer was fine.
+whisper-rs-sys 0.15.0 does not. The AVX2 instructions in the binary were
+real, but unoptimized code around them made the decode about 50 times
+slower. This was true of v1.0.1 and of `main`.
+
+**Fix (Q315):** on Windows, both workflows now set `CMAKE_C_FLAGS_RELEASE`
+and `CMAKE_CXX_FLAGS_RELEASE` to `-O2 -Ob2 -DNDEBUG`. whisper-rs-sys passes
+`CMAKE_*` through, and cmake-rs keeps a flag variable once it is set. The CI
+Rust cache prefix is now `v2-rust`, because whisper-rs-sys does not rebuild
+when these variables change. The CMakeCache guard in both workflows also
+fails when either Release flag lacks `-O2`. Tested locally against five
+cache shapes: unoptimized, optimized, C++ only unoptimized, native on, and
+no cache.
+
+**Measured on windows-zx8** (same 53 s recording, `main` at c8895d8):
+
+| Build | Threads | Time per chunk | Stop to `audio finalized` |
+|---|---|---|---|
+| v1.0.1, unoptimized | 3 | not logged | 48 min 2 s |
+| `main`, unoptimized | 3 | none done after 5 min | stopped at 5 min |
+| `main`, `-O2` | 3 | 55.0–55.8 s | 4 min 12 s |
+| `main`, `-O2`, every core (experiment) | 6 | 35.3–38.1 s | about 2 min 40 s |
+
+Both legs transcribed correctly in the optimized run.
+
+**What is left** is filed as ticket 03: each chunk costs the same whatever
+its length (2 s and 25 s chunks both took about 55 s), so even optimized,
+this CPU cannot keep up with two legs of live speech. The thread rule stays
+at half the cores (Q316).
+
+Local Windows builds outside CI are still unoptimized unless the developer
+sets the same two variables.
 
 ## Comments

@@ -3540,3 +3540,33 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** windows-zx8 has an Intel Core i5-8400 (AVX2, no AVX-512), the kind of CPU an AVX-512 build would crash on. I copied the installer's `resources/evertranscript.exe` there, ran it as a daemon with its own History and app-support folders, and recorded 53 s while a 27 s spoken clip played through the speakers. Both the microphone and WASAPI loopback legs were captured, and the loopback transcript matched the clip word for word. The daemon never exited during the run. Two problems surfaced and are filed as `.scratch/windows-zx8-live-check/issues/01` (transcription took 48 minutes to drain) and `02` (two downloads of one model clash). The test copy registered itself in the user's `Run` key because the run did not set `EVERTRANSCRIPT_NO_LOGIN_ITEM`; I removed that value and the 3.3 GB test folder afterwards.
 **Outcome:** applied
 **Ref:** 6a54568
+
+## Q314 — windows-zx8-live-check/02 — deviation
+
+**Question:** The ticket asks for a test where two fetches of one model both succeed and the server sees one full download. The fix goes through `Core::fetch_models`, which only fetches real registry entries, and a stub cannot serve their bytes. What should the test assert instead?
+**Options considered:** add a way to give the Core its own registry for tests / assert at the Core level that the two downloads took turns, with both failing verification on the stub's bytes / test only `Downloader`
+**Chosen:** Assert at the Core level: the stub server records how many downloads it sent at once, and two concurrent `fetch_models` calls must peak at one. A second test checks that a fetch waiting its turn is stopped by `cancel_fetch` and never reaches the server.
+**Decided-by:** agent
+**Justification:** The lock lives in the Core, so a `Downloader`-only test would not cover it, and a test-only registry hook is production code added for a test. "Both succeed" follows from taking turns: `Downloader::fetch` returns early when the model is already `Ready` (`models/mod.rs:316`), which `a_verified_model_is_not_downloaded_again` covers. Removing the lock fails the first test; removing the cancel counter fails the second.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q315 — windows-zx8-live-check/01 — gate-resolution
+
+**Question:** On windows-zx8 (i5-8400), captions for a 53-second recording took 48 minutes with v1.0.1, and `main` was no better. Why, and where should the fix live?
+**Options considered:** force CMake's Release flags through the environment in both workflows / patch or fork whisper-rs-sys to add `/O2` itself / set the flags in `.cargo/config.toml` / change whisper's thread count
+**Chosen:** whisper.cpp was compiled without optimization on Windows. Both workflows now set `CMAKE_C_FLAGS_RELEASE` and `CMAKE_CXX_FLAGS_RELEASE` to `-O2 -Ob2 -DNDEBUG` on Windows, the CI Rust cache prefix moves to `v2-rust`, and the existing CMakeCache guard also fails when either Release flag lacks `-O2`.
+**Decided-by:** agent
+**Justification:** whisper-rs-sys's CMakeCache on windows-zx8 read `CMAKE_C_FLAGS_RELEASE= -nologo -MD -Brepro -W0`, with no `/O` flag, so MSVC compiled ggml at `/Od`. cmake-rs 0.1.58 (`src/lib.rs` around line 746) overwrites `CMAKE_<LANG>_FLAGS_<CONFIG>` for the Visual Studio generator and drops every `-O`/`/O` argument (rust-lang/cmake-rs#240). llama-cpp-sys-2 0.1.154 adds `/O2 /DNDEBUG /Ob2` back in its `build.rs`, so the summarizer was never affected; whisper-rs-sys 0.15.0 does not. whisper-rs-sys forwards every `CMAKE_*` variable as a define, and cmake-rs leaves a flag variable alone once it is defined, so the environment fixes it without touching the dependency. This follows Q310, which set `GGML_NATIVE` the same way. `.cargo/config.toml` cannot scope an `[env]` entry to Windows, and the MSVC-style value would break the macOS build. Dashes instead of slashes keep Git Bash from rewriting the values as paths. Measured on windows-zx8 with `main`: unoptimized, no chunk had finished 5 minutes after the stop; with the flags, the drain took 4 min 12 s, and each chunk decoded in about 55 s. Local Windows builds outside CI stay unoptimized unless a developer sets the same two variables.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q316 — windows-zx8-live-check/01 — tradeoff
+
+**Question:** Ticket 01 asked to try 6 threads if `main` was still slow. With every core, whisper decoded each chunk 1.5 times faster on windows-zx8. Should the Core give whisper every core instead of half?
+**Options considered:** keep half the cores (`asr/whisper.rs:81`) / give whisper every core / file the throughput limit as its own ticket
+**Chosen:** Keep half the cores, and file the limit as `.scratch/windows-zx8-live-check/issues/03`.
+**Decided-by:** agent
+**Justification:** On the i5-8400 with the Q315 flags, a chunk took about 55 s on 3 threads and about 37 s on 6, whatever its length, because whisper encodes a fixed 30 s window. Neither keeps up with two legs of live speech, so 6 threads moves the limit without removing it. The half-the-cores rule is deliberate: the code comment keeps headroom for capture and encoding, and during a meeting the call app is also on this CPU. Spending that headroom is a product call that needs a measurement during a real call, which this run did not make. The cheaper levers named in ticket 03 (cutting the cost of short chunks, a clang build, a smaller model on slow CPUs) can come first.
+**Outcome:** assumed
+**Ref:** (pending)

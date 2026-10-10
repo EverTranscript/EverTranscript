@@ -65,18 +65,29 @@ jobs:
       # first time it transcribes (DECISIONS Q310). `GGML_NATIVE=OFF` leaves
       # ggml's defaults, the AVX2 set. The sidecar's llama.cpp already builds
       # this way. macos-14 is an M1, the oldest Apple Silicon there is.
+      #
+      # It is also built optimized. On MSVC, cmake-rs drops every `/O` from
+      # CMake's Release flags (rust-lang/cmake-rs#240), so v1.0.1 shipped
+      # whisper.cpp at `/Od` and captioned 53 seconds in 48 minutes on an
+      # i5-8400 (DECISIONS Q315). llama-cpp-sys-2 adds `/O2` back itself;
+      # whisper-rs-sys does not, but forwards `CMAKE_*`.
       - name: Build the Core and the sidecar
         shell: bash
         run: |
-          [[ "${{ runner.os }}" == "Windows" ]] && export GGML_NATIVE=OFF
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            export GGML_NATIVE=OFF
+            export CMAKE_C_FLAGS_RELEASE='-O2 -Ob2 -DNDEBUG'
+            export CMAKE_CXX_FLAGS_RELEASE='-O2 -Ob2 -DNDEBUG'
+          fi
           cargo build --release -p evertranscript -p evertranscript-summarizer
 
-      - name: whisper.cpp was built for the baseline
+      - name: whisper.cpp was built for the baseline, optimized
         if: runner.os == 'Windows'
         shell: bash
         run: |
           caches=$(ls target/*/build/whisper-rs-sys-*/out/build/CMakeCache.txt)
-          ! grep -H 'GGML_NATIVE:BOOL=ON\|GGML_AVX512:BOOL=ON' $caches
+          ! grep -H 'GGML_NATIVE:BOOL=ON\|GGML_AVX512:BOOL=ON' $caches || exit 1
+          ! grep -H 'CMAKE_C\(XX\)\?_FLAGS_RELEASE:STRING=' $caches | grep -v -- '-O2'
 
       - name: Stage the binaries
         shell: bash
