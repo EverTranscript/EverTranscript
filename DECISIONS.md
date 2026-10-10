@@ -3590,3 +3590,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** whisper-rs-sys 0.15.0 defines `CMAKE_BUILD_TYPE=RelWithDebInfo` when its build script has `debug_assertions`, as under `cargo test`, and `Release` otherwise, while it always calls `.profile("Release")`. cmake-rs 0.1.58 replaces the flags of the defined `CMAKE_BUILD_TYPE` (`src/lib.rs:710`) but passes the profile to `--config` (`src/lib.rs:879`). In a debug build it therefore strips `CMAKE_C_FLAGS_RELWITHDEBINFO` and builds the untouched Release config at `/O2`; in a release build it strips `CMAKE_C_FLAGS_RELEASE` and builds that config at `/Od`. That matches every measurement: CI's test time did not move, and windows-zx8's release build went from 48 minutes to 4 minutes 12 seconds. The CI guard still checks the flags of the config that is built.
 **Outcome:** applied
 **Ref:** 6e58f0a
+
+## Q319 — interactive/zx8-upgrade-e2e — tradeoff
+
+**Question:** How should the 1.0.1 → 1.1.1 upgrade be driven on windows-zx8, which already holds a real History in `OneDrive\Documents\EverTranscript` and an older `%APPDATA%\EverTranscript\settings.json`?
+**Options considered:** install with defaults (the upgrade would wipe and re-run the real History, and OneDrive would upload test recordings) / start the installer and app from a screen helper that sets `EVERTRANSCRIPT_HISTORY_DIR`, `EVERTRANSCRIPT_APP_SUPPORT_DIR` and `EVERTRANSCRIPT_NO_LOGIN_ITEM` / test on a separate Windows account (none exists)
+**Chosen:** The helper route. Both installers' "Run EverTranscript" boxes were unticked, because electron-builder's finish page starts the app through Explorer without the test variables; the helper started the app instead. No runtime-dir override: the 1.0.1 client ignores it on Windows while its Core hashes it into the pipe name, so they never meet (fixed in 1.1.1). Buttons were pressed through UI Automation, with `--force-renderer-accessibility` so the page's controls are visible; a raw click refuses unless the expected window is in front. Afterwards the app was uninstalled and every test folder, profile, installer cache and the helper task removed; the real History's fingerprint (7 entries, 1,866,176 bytes, newest 2026-08-31 05:34:23) and the old settings file were unchanged.
+**Decided-by:** agent
+**Justification:** The user asked for the screen to be driven there; the defaults would have mutated the user's real data, and the variables are the Core's documented overrides, honoured by both versions (`paths.rs`, `autostart.rs`).
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q320 — interactive/zx8-upgrade-e2e — finding
+
+**Question:** Does the upgrade from 1.0.1 bring a named Speaker's Voiceprint back, as ADR-0037 and the 1.1.1 release notes say?
+**Options considered:** —
+**Chosen:** **No, on the first start after the upgrade.** The re-run started at 10:04:24.8 and reported "finished, 1 processed", but the Meeting's `diarized_at` stayed at the 1.0.1 run and Alice Test kept no Voiceprint. Cause: at boot `fetch_models` deletes the old wrong-size `diarize-embedding.onnx` and downloads the new one (written 10:04:34.4); in that window the worker answers `Skipped` for "models are not downloaded", and `leaves_the_line_afterwards` removes a skipped Meeting from the queue for good. Confirmed by a controlled rerun on the test copy only: with the re-run row reset to the stamp the upgrade migration seeds and the model already on disk, the next start diarized the Meeting in 2 s and Alice Test got a `redimnet2-b3` Voiceprint from her 5.19 s segment.
+**Decided-by:** agent
+**Justification:** Observed live on windows-zx8 and read back from the test History's database (`diarize_rerun`, `meetings.diarized_at`, `speaker_exemplars`, `speakers`); code path `lib.rs:90`, `server.rs:4022`, `server.rs:1961`, `server.rs:342` at d6ddd18. Fix and recovery are ticketed in `.scratch/zx8-upgrade-e2e/issues/01`.
+**Outcome:** applied
+**Ref:** (pending)
