@@ -3570,3 +3570,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** On the i5-8400 with the Q315 flags, a chunk took about 55 s on 3 threads and about 37 s on 6, whatever its length, because whisper encodes a fixed 30 s window. Neither keeps up with two legs of live speech, so 6 threads moves the limit without removing it. The half-the-cores rule is deliberate: the code comment keeps headroom for capture and encoding, and during a meeting the call app is also on this CPU. Spending that headroom is a product call that needs a measurement during a real call, which this run did not make. The cheaper levers named in ticket 03 (cutting the cost of short chunks, a clang build, a smaller model on slow CPUs) can come first.
 **Outcome:** assumed
 **Ref:** 544a519
+
+## Q317 — interactive/release-1.1.1 — irreversible-action
+
+**Question:** The user asked to ship v1.0.2 with the Windows caption fix, but `main` has carried version 1.1.1 since 2026-09-16, with 245 commits since v1.0.1 and no release since. Which release ships the fix?
+**Options considered:** a v1.0.2 hotfix branched from the v1.0.1 tag with only the Q310 and Q315 build changes / release `main` as v1.1.1 / release `main` renumbered as v1.0.2
+**Chosen:** Release `main` as v1.1.1, tagged on a commit whose CI passed on both platforms, published as a GitHub release with the packaging job's artifacts.
+**Decided-by:** human
+**Justification:** The user chose it when asked, over the hotfix the agent recommended. The release follows v1.0.1's pattern: a signed annotated tag starts `package.yml`, and the release is assembled from its artifacts, including `latest.yml` and `latest-mac.yml`. Upgrading Operators get ADR-0037's model change: every Voiceprint is discarded and Meetings with Kept Audio are re-run oldest first. Still unverified and named in the release notes: Q296 (enrolment with a real voice), Q301 (a real declined calendar event), any update installed through electron-updater, and live captions on CPUs like the i5-8400 (`.scratch/windows-zx8-live-check/issues/03`).
+**Outcome:** applied
+**Ref:** v1.1.1 (tag on a97dca6), https://github.com/EverTranscript/EverTranscript/releases/tag/v1.1.1
+
+## Q318 — windows-zx8-live-check/01 — finding
+
+**Question:** After Q315, Windows CI's `transcription_quality` still took 541 s, against 527 s before. Did the fix fail to reach the runner?
+**Options considered:** the flags did not reach whisper.cpp on CI / CI's debug builds were never unoptimized
+**Chosen:** **CI's debug builds were never unoptimized.** Only `--release` builds were, which is what `package.yml` ships and what windows-zx8 measured. Q315's fix stands; its CI comment overstated where the bug applied and is corrected.
+**Decided-by:** agent
+**Justification:** whisper-rs-sys 0.15.0 defines `CMAKE_BUILD_TYPE=RelWithDebInfo` when its build script has `debug_assertions`, as under `cargo test`, and `Release` otherwise, while it always calls `.profile("Release")`. cmake-rs 0.1.58 replaces the flags of the defined `CMAKE_BUILD_TYPE` (`src/lib.rs:710`) but passes the profile to `--config` (`src/lib.rs:879`). In a debug build it therefore strips `CMAKE_C_FLAGS_RELWITHDEBINFO` and builds the untouched Release config at `/O2`; in a release build it strips `CMAKE_C_FLAGS_RELEASE` and builds that config at `/Od`. That matches every measurement: CI's test time did not move, and windows-zx8's release build went from 48 minutes to 4 minutes 12 seconds. The CI guard still checks the flags of the config that is built.
+**Outcome:** applied
+**Ref:** (pending)

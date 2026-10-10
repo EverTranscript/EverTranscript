@@ -49,12 +49,17 @@ jobs:
       # defaults are the AVX2 set without AVX-512. Windows only: macos-14 is
       # an M1, the oldest Apple Silicon there is.
       #
-      # **And optimized.** On MSVC, cmake-rs replaces CMake's Release flags
-      # with cc's and drops every `/O` (rust-lang/cmake-rs#240), so
-      # whisper.cpp built at `/Od` and a 53-second recording took 48 minutes
-      # to caption on an i5-8400 (DECISIONS Q315). whisper-rs-sys forwards
-      # `CMAKE_*`, and cmake-rs keeps a flag variable that is already set.
-      # Dashes, not slashes, so Git Bash does not rewrite them as paths.
+      # **And optimized.** On MSVC, cmake-rs replaces the flags of the CMake
+      # build type it is given and drops every `/O` (rust-lang/cmake-rs#240).
+      # In a `--release` build that type is Release, the one built, so the
+      # shipped whisper.cpp ran at `/Od` and a 53-second recording took 48
+      # minutes to caption on an i5-8400 (DECISIONS Q315). This job's debug
+      # builds were never hit: whisper-rs-sys gives RelWithDebInfo there,
+      # while `--config Release` still builds with Release's flags (Q318).
+      # They are set here anyway, so CI and packaging build it the same way.
+      # whisper-rs-sys forwards `CMAKE_*`, and cmake-rs keeps a flag variable
+      # that is already set. Dashes, not slashes, so Git Bash does not
+      # rewrite them as paths.
       - name: Build whisper.cpp for a CPU baseline, not this runner
         if: runner.os == 'Windows'
         shell: bash
