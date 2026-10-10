@@ -21,9 +21,14 @@
  * (`update-state.ts`, DECISIONS Q324). The updater is passed in, so the
  * whole path — the install's wait and its failure included — is tested
  * without Electron (Q330).
+ *
+ * The Core's hold is what keeps an update from stopping a recording, and it
+ * belongs to a connection: it lasts while that connection is open, then for
+ * as long as the installer this Client names keeps running (Q333).
  */
 
 import type { AppUpdater } from "electron-updater";
+import { lt, valid } from "semver";
 
 import {
   nextUpdateState,
@@ -47,10 +52,13 @@ export type Updater = Pick<
 export type UpdateSteps = {
   /** Every change to the offer, for every window. */
   publish: (state: UpdateState) => void;
-  /** Asks the Core to hold off new work. Never rejects: a failure is an answer. */
-  hold: () => Promise<HoldAnswer>;
-  /** Ends a hold this Client was granted. */
-  release: () => Promise<void>;
+  /**
+   * Asks the Core to hold off new work while `installers` run. Never
+   * rejects: a failure is an answer.
+   */
+  hold: (installers: string[]) => Promise<HoldAnswer>;
+  /** Ends a hold this Client was granted, by closing its connection. */
+  release: () => void;
   /** Resolves when it is time to ask the Core again. */
   pause: () => Promise<void>;
 };
@@ -66,6 +74,8 @@ export function createUpdates(updater: () => Updater, steps: UpdateSteps) {
   let state: UpdateState = { phase: "none" };
   // Whether this install holds the Core, so a failure knows to hand it back.
   let holding = false;
+  // What the download wrote: on Windows, the installer that will stop the Core.
+  let downloadedFiles: string[] = [];
 
   function apply(event: UpdateEvent): void {
     const next = nextUpdateState(state, event);
@@ -78,7 +88,7 @@ export function createUpdates(updater: () => Updater, steps: UpdateSteps) {
     apply({ type: "installFailed", message: error instanceof Error ? error.message : String(error) });
     if (holding) {
       holding = false;
-      void steps.release();
+      steps.release();
     }
   }
 
@@ -129,7 +139,7 @@ export function createUpdates(updater: () => Updater, steps: UpdateSteps) {
       apply({ type: "downloadStarted" });
       if (state.phase !== "downloading") return;
       try {
-        await configure().downloadUpdate();
+        downloadedFiles = await configure().downloadUpdate();
         apply({ type: "downloaded" });
       } catch (error) {
         apply({ type: "downloadFailed", message: error instanceof Error ? error.message : String(error) });
@@ -142,20 +152,21 @@ export function createUpdates(updater: () => Updater, steps: UpdateSteps) {
      * A click while the Core records or diarizes is not refused — it waits,
      * asking again every `HOLD_RETRY_MS`, and installs once, when the Core
      * grants the hold. The hold is what makes that safe: the Core will not
-     * start a recording or a Diarization until the installer has run or the
-     * hold is released, so nothing begins between the answer and the install
-     * (Q330). Only no Core listening at all installs without one.
+     * start a recording or a Diarization while this Client is connected, nor
+     * afterwards while the installer it names still runs, so nothing begins
+     * between the answer and the install however late the installer gets to
+     * the Core (Q333). Only no Core listening at all installs without one.
      */
     async install(): Promise<void> {
       // Waiting already, or nothing downloaded: one install at a time.
       if (state.phase !== "downloaded" && !(state.phase === "failed" && state.retry === "install")) {
         return;
       }
-      let answer: HoldAnswer = await steps.hold();
+      let answer: HoldAnswer = await steps.hold(downloadedFiles);
       while (answer !== "held" && answer !== "absent") {
         apply({ type: "installWaiting", busy: answer });
         await steps.pause();
-        answer = await steps.hold();
+        answer = await steps.hold(downloadedFiles);
       }
       holding = answer === "held";
       apply({ type: "installStarted" });
@@ -170,4 +181,53 @@ export function createUpdates(updater: () => Updater, steps: UpdateSteps) {
       }
     },
   };
+}
+
+export type CatchUpSteps = {
+  /** Asks the Core for a hold. Never rejects: a failure is an answer. */
+  hold: () => Promise<HoldAnswer>;
+  /** Stops the held Core and starts the one this Client shipped with. */
+  restart: () => Promise<void>;
+  /** Resolves when it is time to ask the Core again. */
+  pause: () => Promise<void>;
+};
+
+/**
+ * Restarts a Core older than this Client, once that stops nothing (Q12,
+ * Q333, Q334). Returns whether it did.
+ *
+ * On macOS the Core is a LaunchAgent and lives through the bundle swap, so
+ * after an update the new Client finds the old Core still running. It is
+ * stopped only under the Core's hold: the hold is granted on an idle Core
+ * and keeps it idle, so no recording can start between the look and the
+ * stop — the window a status read followed by a kill would leave. A busy
+ * Core is asked again until it is idle. A Core that cannot answer, one
+ * older than `update/hold` among them, is left running: the next login
+ * starts the new one, and stopping it without a hold could stop a
+ * recording.
+ *
+ * Upgrade-only: an older Client — a rollback, a second copy of the app —
+ * never replaces a newer Core, and a version that does not parse says
+ * nothing about which side is older.
+ */
+export async function catchUpCore(
+  coreVersion: string,
+  clientVersion: string,
+  steps: CatchUpSteps,
+): Promise<boolean> {
+  if (!isOlder(coreVersion, clientVersion)) return false;
+  for (;;) {
+    const answer = await steps.hold();
+    if (answer === "held") {
+      await steps.restart();
+      return true;
+    }
+    if (answer === "absent" || answer === "unreadable") return false;
+    await steps.pause();
+  }
+}
+
+/** Whether `version` is a lower semver than `than`. Unparseable is never older. */
+export function isOlder(version: string, than: string): boolean {
+  return valid(version) !== null && valid(than) !== null && lt(version, than);
 }

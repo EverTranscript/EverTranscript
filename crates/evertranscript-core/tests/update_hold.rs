@@ -1,21 +1,31 @@
 //! An update installs only when nothing would be interrupted, and nothing
-//! starts while it does (DECISIONS Q330).
+//! starts while it does (DECISIONS Q330, Q333).
 //!
 //! The Client asks the Core for a hold before it installs. On Windows the
 //! installer stops the Core outright, so a recording that started between
 //! "the Core is idle" and the install would be killed; the hold is what
 //! closes that gap, which makes it the Core's to enforce rather than the
-//! Client's to check.
+//! Client's to check. It lasts while the asking connection is open and then
+//! while the installer runs — never on a timer, because nothing bounds when
+//! the installer gets to the Core.
+
+mod common;
 
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
+use evertranscript_core::Server;
 use evertranscript_core::audio::fixture::FixtureSource;
 use evertranscript_core::audio::fixture::Step;
+use evertranscript_core::client::CoreClient;
 use evertranscript_core::server::Core;
 use evertranscript_core::store::diarize_queue::Priority;
 use evertranscript_protocol::AudioChannel;
 use evertranscript_protocol::UpdateBusy;
+use evertranscript_protocol::UpdateHoldResponse;
+use serde_json::json;
 
 /// A Core whose capture is scripted: a real device here is what crashed the
 /// Windows runner in Q55.
@@ -33,6 +43,25 @@ async fn core(history_dir: &Path) -> Arc<Core> {
 
 /// A finished Meeting with no audio and out of the line: what a worker that
 /// is let through drops at once, and what leaves the Core idle.
+/// The connection a test's Client asks on.
+const CLIENT: u64 = 7;
+
+/// The installer the Windows Client names, wherever it downloaded it.
+const SETUP: &str =
+    r"C:\Users\o\AppData\Local\evertranscript-updater\pending\EverTranscript-Setup-1.2.0.exe";
+
+/// Stands in for the installer process, which a test starts and stops by
+/// hand; returns the switch.
+async fn scripted_installer(core: &Arc<Core>) -> Arc<AtomicBool> {
+    let running = Arc::new(AtomicBool::new(false));
+    let probe = Arc::clone(&running);
+    core.set_installer_probe(Arc::new(move |path| {
+        path == Path::new(SETUP) && probe.load(Ordering::SeqCst)
+    }))
+    .await;
+    running
+}
+
 async fn finished_meeting(core: &Arc<Core>) -> String {
     let meeting = core.start_meeting(None, None).await.expect("start");
     core.stop_meeting().await.expect("stop");
@@ -56,7 +85,10 @@ async fn a_recording_refuses_the_hold() {
     let core = core(&dir.path().join("History")).await;
 
     core.start_meeting(None, None).await.expect("start");
-    let hold = core.hold_for_update().await.expect("hold");
+    let hold = core
+        .hold_for_update(CLIENT, Vec::new())
+        .await
+        .expect("hold");
     assert!(!hold.held);
     assert_eq!(hold.busy, Some(UpdateBusy::Recording));
     core.stop_meeting().await.expect("stop");
@@ -73,17 +105,23 @@ async fn a_meeting_waiting_to_be_diarized_refuses_the_hold() {
     core.enqueue_diarization(&id, Priority::Back)
         .await
         .expect("queue");
-    let hold = core.hold_for_update().await.expect("hold");
+    let hold = core
+        .hold_for_update(CLIENT, Vec::new())
+        .await
+        .expect("hold");
     assert!(!hold.held);
     assert_eq!(hold.busy, Some(UpdateBusy::Diarizing));
 }
 
 #[tokio::test]
-async fn a_hold_refuses_every_recording_until_it_is_released() {
+async fn a_hold_refuses_every_recording_until_its_connection_closes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let core = core(&dir.path().join("History")).await;
 
-    let hold = core.hold_for_update().await.expect("hold");
+    let hold = core
+        .hold_for_update(CLIENT, Vec::new())
+        .await
+        .expect("hold");
     assert!(hold.held, "an idle Core grants the hold: {hold:?}");
     let refused = core
         .start_meeting(None, Some("Zoom".into()))
@@ -95,26 +133,113 @@ async fn a_hold_refuses_every_recording_until_it_is_released() {
     );
     assert!(!core.is_recording().await);
 
-    // An install that failed hands the Core back at once.
-    assert!(!core.release_update_hold().await.held);
+    // An install that failed, or a Client that crashed, closes the
+    // connection, and with no installer named that hands the Core back.
+    core.connection_closed(CLIENT).await;
     core.start_meeting(None, None).await.expect("records again");
     core.stop_meeting().await.expect("stop");
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_hold_nobody_releases_lapses_on_its_own() {
-    // A Client that crashed holding it must not leave the Core unable to
-    // record for the rest of the day.
+async fn an_installer_that_starts_late_still_holds_the_core() {
+    // The race Q332 found in Q330's two-minute lease: the Client quits, and
+    // the installer it started gets to stopping the Core whenever it does.
+    // Ten minutes on, the hold still stands for as long as the installer
+    // runs, and ends the moment it exits.
     let dir = tempfile::tempdir().expect("tempdir");
     let core = core(&dir.path().join("History")).await;
+    let installer = scripted_installer(&core).await;
 
-    assert!(core.hold_for_update().await.expect("hold").held);
-    core.start_meeting(None, None).await.expect_err("held");
-    tokio::time::advance(std::time::Duration::from_secs(3 * 60)).await;
+    let hold = core
+        .hold_for_update(CLIENT, vec![SETUP.into()])
+        .await
+        .expect("hold");
+    assert!(hold.held);
+    installer.store(true, Ordering::SeqCst);
+    core.connection_closed(CLIENT).await;
+
+    tokio::time::advance(std::time::Duration::from_secs(10 * 60)).await;
+    core.start_meeting(None, Some("Teams".into()))
+        .await
+        .expect_err("the installer that will stop this Core is still running");
+    assert!(!core.is_recording().await);
+
+    installer.store(false, Ordering::SeqCst);
     core.start_meeting(None, None)
         .await
-        .expect("past the two-minute lease, recording is allowed again");
+        .expect("the installer is gone, so nothing can stop a recording now");
     core.stop_meeting().await.expect("stop");
+}
+
+#[tokio::test]
+async fn an_install_that_never_ran_hands_the_core_back() {
+    // quitAndInstall failed, or the installer was cancelled before it got
+    // anywhere: the Client is gone and nothing runs from the installer.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core(&dir.path().join("History")).await;
+    let _installer = scripted_installer(&core).await;
+
+    assert!(
+        core.hold_for_update(CLIENT, vec![SETUP.into()])
+            .await
+            .expect("hold")
+            .held
+    );
+    core.connection_closed(CLIENT).await;
+    core.start_meeting(None, None)
+        .await
+        .expect("no installer runs, so the hold is over");
+    core.stop_meeting().await.expect("stop");
+}
+
+#[tokio::test]
+async fn a_restart_needs_the_hold_and_starts_nothing_after() {
+    // The catch-up (Q12): a new Client stops an older Core so its own can
+    // start. Asked without the hold, it is refused — the hold is what keeps
+    // a recording from starting between the Client's look and the stop.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core(&dir.path().join("History")).await;
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    core.set_shutdown(shutdown.clone());
+
+    core.restart_for_update(CLIENT)
+        .await
+        .expect_err("no hold, no restart");
+    assert!(!shutdown.is_cancelled());
+
+    assert!(
+        core.hold_for_update(CLIENT, Vec::new())
+            .await
+            .expect("hold")
+            .held
+    );
+    core.restart_for_update(CLIENT).await.expect("restart");
+    assert!(shutdown.is_cancelled(), "the daemon is told to stop");
+
+    // The Client's connection closes as the Core goes down; nothing starts.
+    core.connection_closed(CLIENT).await;
+    core.start_meeting(None, Some("Zoom".into()))
+        .await
+        .expect_err("a Core stopping for an update records nothing");
+}
+
+#[tokio::test]
+async fn a_hold_on_another_connection_does_not_allow_a_restart() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core(&dir.path().join("History")).await;
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    core.set_shutdown(shutdown.clone());
+
+    assert!(
+        core.hold_for_update(CLIENT, Vec::new())
+            .await
+            .expect("hold")
+            .held
+    );
+    core.restart_for_update(CLIENT + 1)
+        .await
+        .expect_err("only the holder restarts");
+    assert!(!shutdown.is_cancelled());
 }
 
 #[tokio::test]
@@ -125,7 +250,12 @@ async fn work_queued_during_a_hold_waits_for_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let core = core(&dir.path().join("History")).await;
     let id = finished_meeting(&core).await;
-    assert!(core.hold_for_update().await.expect("hold").held);
+    assert!(
+        core.hold_for_update(CLIENT, Vec::new())
+            .await
+            .expect("hold")
+            .held
+    );
     core.enqueue_diarization(&id, Priority::Front)
         .await
         .expect("queue");
@@ -139,7 +269,7 @@ async fn work_queued_during_a_hold_waits_for_it() {
         "held: the worker left it in the line"
     );
 
-    core.release_update_hold().await;
+    core.connection_closed(CLIENT).await;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     while !core
         .diarize_status()
@@ -182,7 +312,12 @@ async fn a_recording_and_a_hold_never_both_win() {
             }),
             tokio::spawn({
                 let core = Arc::clone(&core);
-                async move { core.hold_for_update().await.expect("hold").held }
+                async move {
+                    core.hold_for_update(CLIENT, Vec::new())
+                        .await
+                        .expect("hold")
+                        .held
+                }
             }),
         );
         let (recording, held) = (recording.expect("join"), hold.expect("join"));
@@ -197,7 +332,56 @@ async fn a_recording_and_a_hold_never_both_win() {
                 .await
                 .expect("out of the line");
         } else {
-            core.release_update_hold().await;
+            core.connection_closed(CLIENT).await;
         }
     }
+}
+
+#[tokio::test]
+async fn over_a_real_connection_the_hold_ends_when_the_client_goes() {
+    // What a Client that crashed, or quit with no installer to run, does:
+    // its socket closes, and the server is what turns that into the end of
+    // the hold.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = core(&dir.path().join("History")).await;
+    let endpoint = common::endpoint(dir.path());
+    let listener = evertranscript_core::transport::bind(&endpoint)
+        .await
+        .expect("bind");
+    let (events_tx, events_rx) = tokio::sync::mpsc::channel(64);
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    tokio::spawn(Server::new(Arc::clone(&core)).run(events_rx, shutdown.clone()));
+    tokio::spawn(evertranscript_core::transport::serve(
+        listener,
+        events_tx,
+        shutdown.clone(),
+    ));
+
+    let mut client = CoreClient::connect_to(&endpoint).await.expect("connect");
+    client
+        .initialize("test-client", "0.0.0")
+        .await
+        .expect("initialize");
+    let hold: UpdateHoldResponse = client
+        .request("update/hold", Some(json!({})))
+        .await
+        .expect("hold");
+    assert!(hold.held);
+    core.start_meeting(None, None)
+        .await
+        .expect_err("held while the Client is connected");
+
+    drop(client);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let started = loop {
+        match core.start_meeting(None, None).await {
+            Ok(meeting) => break meeting,
+            Err(_) if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(error) => panic!("the hold outlived its connection: {error}"),
+        }
+    };
+    assert_eq!(core.stop_meeting().await.expect("stop").id, started.id);
+    shutdown.cancel();
 }

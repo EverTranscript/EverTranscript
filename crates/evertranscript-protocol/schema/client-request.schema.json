@@ -701,7 +701,7 @@
       ]
     },
     {
-      "description": "Holds off new work so an update can install (DECISIONS Q330).\n\nGranted only while nothing is recording and no Meeting is diarizing\nor waiting to be, and checked in the same step that starts a\nrecording, so nothing can begin between the check and the install.\nWhile held, no recording starts — Auto-Record's included — and no\nqueued Diarization begins. A lease rather than a switch: it lapses\non its own after two minutes, so a Client that crashed holding it\ncannot leave the Core unable to record.",
+      "description": "Holds off new work so an update can install (DECISIONS Q330, Q333).\n\nGranted only while nothing is recording and no Meeting is diarizing\nor waiting to be, and checked in the same step that starts a\nrecording, so nothing can begin between the check and the install.\nWhile held, no recording starts — Auto-Record's included — and no\nqueued Diarization begins. No timer ends it: it lasts while the\nconnection that asked for it is open, and after that for as long as\nany process runs from one of `installers` — the installer that will\nstop this Core. A Client ends it by closing that connection.",
       "type": "object",
       "properties": {
         "method": {
@@ -718,15 +718,15 @@
       ]
     },
     {
-      "description": "Ends a hold early, when the install failed or was not started.\nReleasing a hold that is not there is not an error.",
+      "description": "Stops this Core so the newer one an update installed can start in its\nplace (Q12). Only for the connection that holds `update/hold`, so the\nCore is idle and cannot start a recording before it exits.",
       "type": "object",
       "properties": {
         "method": {
           "type": "string",
-          "const": "update/release"
+          "const": "update/restart"
         },
         "params": {
-          "$ref": "#/$defs/UpdateReleaseParams"
+          "$ref": "#/$defs/UpdateRestartParams"
         }
       },
       "required": [
@@ -1164,9 +1164,18 @@
       "type": "object"
     },
     "UpdateHoldParams": {
-      "type": "object"
+      "type": "object",
+      "properties": {
+        "installers": {
+          "description": "Paths of the installer that will stop this Core. The hold outlasts\nthe connection for as long as a process runs from one of them.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     },
-    "UpdateReleaseParams": {
+    "UpdateRestartParams": {
       "type": "object"
     },
     "WatchlistAddParams": {

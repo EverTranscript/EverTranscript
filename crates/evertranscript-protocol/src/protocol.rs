@@ -437,24 +437,26 @@ client_request_definitions! {
         params: DiarizeRerunCancelParams,
         response: DiarizeStatusResponse,
     },
-    /// Holds off new work so an update can install (DECISIONS Q330).
+    /// Holds off new work so an update can install (DECISIONS Q330, Q333).
     ///
     /// Granted only while nothing is recording and no Meeting is diarizing
     /// or waiting to be, and checked in the same step that starts a
     /// recording, so nothing can begin between the check and the install.
     /// While held, no recording starts — Auto-Record's included — and no
-    /// queued Diarization begins. A lease rather than a switch: it lapses
-    /// on its own after two minutes, so a Client that crashed holding it
-    /// cannot leave the Core unable to record.
+    /// queued Diarization begins. No timer ends it: it lasts while the
+    /// connection that asked for it is open, and after that for as long as
+    /// any process runs from one of `installers` — the installer that will
+    /// stop this Core. A Client ends it by closing that connection.
     UpdateHold => "update/hold" {
         params: UpdateHoldParams,
         response: UpdateHoldResponse,
     },
-    /// Ends a hold early, when the install failed or was not started.
-    /// Releasing a hold that is not there is not an error.
-    UpdateRelease => "update/release" {
-        params: UpdateReleaseParams,
-        response: UpdateReleaseResponse,
+    /// Stops this Core so the newer one an update installed can start in its
+    /// place (Q12). Only for the connection that holds `update/hold`, so the
+    /// Core is idle and cannot start a recording before it exits.
+    UpdateRestart => "update/restart" {
+        params: UpdateRestartParams,
+        response: UpdateRestartResponse,
     },
 }
 
@@ -1755,7 +1757,12 @@ pub struct DiarizeRerunCancelParams {}
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct UpdateHoldParams {}
+pub struct UpdateHoldParams {
+    /// Paths of the installer that will stop this Core. The hold outlasts
+    /// the connection for as long as a process runs from one of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub installers: Vec<String>,
+}
 
 /// What an update would interrupt, and so is waiting for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
@@ -1781,14 +1788,12 @@ pub struct UpdateHoldResponse {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct UpdateReleaseParams {}
+pub struct UpdateRestartParams {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
-pub struct UpdateReleaseResponse {
-    pub held: bool,
-}
+pub struct UpdateRestartResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

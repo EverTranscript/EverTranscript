@@ -31,7 +31,7 @@ import { CoreClient, nobodyListening } from "./core-client.js";
 import { locateCore } from "./core-location.js";
 import { classifyCoreExit } from "./core-start.js";
 import type { HoldAnswer, UpdateState } from "./update-state.js";
-import { CHECK_INTERVAL_MS, HOLD_RETRY_MS, createUpdates } from "./updates.js";
+import { CHECK_INTERVAL_MS, HOLD_RETRY_MS, catchUpCore, createUpdates } from "./updates.js";
 
 /**
  * The app icon, for the surfaces packaging does not cover yet.
@@ -76,6 +76,10 @@ let settingsWindow: BrowserWindow | null = null;
 let startAttempted = false;
 /** Why starting the Core failed, when it did. */
 let startFailure: string | null = null;
+/** The version the connected Core reported, for the catch-up (Q12). */
+let coreVersion: string | null = null;
+/** The connection an install's hold on the Core belongs to (Q333). */
+let installHold: CoreClient | null = null;
 
 /**
  * Where the Core binary is, or `null` if it cannot be found.
@@ -187,7 +191,8 @@ async function coreClient(): Promise<CoreClient> {
   if (!connecting) {
     connecting = (async () => {
       const connected = await connectWithRetry();
-      await connected.initialize("evertranscript-client", app.getVersion());
+      const info = await connected.initialize("evertranscript-client", app.getVersion());
+      coreVersion = info.serverInfo.version;
       // Every window, not just the main one: Settings on a Mac is a window of
       // its own, and it shows the Core's state too.
       connected.onNotification((notification) => {
@@ -528,41 +533,118 @@ async function maybeCheckForUpdates(): Promise<void> {
 }
 
 /**
- * Asks the Core to hold off new work while an update installs (Q330).
+ * Asks the Core to hold off new work, on a connection of its own (Q333).
+ *
+ * The hold lasts while that connection is open, and then while a process
+ * runs from one of `installers` — so it is handed back by closing the
+ * connection, and outlives this Client only for as long as the installer it
+ * started. Never the window's connection: closing that to hand a hold back
+ * would cut every window off from the Core.
  *
  * Bounded: a Core that does not answer within 5 s is not known to be idle,
- * so it reads `unreadable` and the install waits. So does a Core too old to
- * know `update/hold`, until the new Client restarts it (Q12). Only nothing
- * listening at all reads `absent`.
+ * so it reads `unreadable` and the caller waits. So does a Core too old to
+ * know `update/hold`. Only nothing listening at all reads `absent`. A hold
+ * granted after the 5 s dies with the connection, which is closed.
  */
-async function holdCore(): Promise<HoldAnswer> {
+async function askForHold(installers: string[]): Promise<[HoldAnswer, CoreClient | null]> {
+  let core: CoreClient;
+  try {
+    core = await CoreClient.connect();
+  } catch (error) {
+    return [nobodyListening(error) ? "absent" : "unreadable", null];
+  }
   const silence = new Promise<never>((_, reject) => {
     setTimeout(() => reject(new Error("the Core did not answer")), 5000).unref();
   });
   try {
     const answer = await Promise.race([
-      withRunningCore((core) => core.request<UpdateHoldResponse>("update/hold", {})),
+      (async () => {
+        await core.initialize("evertranscript-client", app.getVersion());
+        return core.request<UpdateHoldResponse>("update/hold", { installers });
+      })(),
       silence,
     ]);
-    return answer.held ? "held" : (answer.busy ?? "unreadable");
-  } catch (error) {
-    return nobodyListening(error) ? "absent" : "unreadable";
+    if (answer.held) return ["held", core];
+    core.close();
+    return [answer.busy ?? "unreadable", null];
+  } catch {
+    core.close();
+    return ["unreadable", null];
   }
 }
 
+/**
+ * The install's hold. On Windows it names the installer the download wrote,
+ * and `elevate.exe`, which electron-updater runs it through when it cannot
+ * start it directly. On macOS no installer stops the Core — the swap leaves
+ * it running, and the catch-up restarts it — so the hold ends with this
+ * Client.
+ */
+async function holdForInstall(downloaded: string[]): Promise<HoldAnswer> {
+  releaseInstallHold();
+  const installers = WINDOWS ? [...downloaded, join(process.resourcesPath, "elevate.exe")] : [];
+  const [answer, connection] = await askForHold(installers);
+  installHold = connection;
+  return answer;
+}
+
 /** Hands the Core back after an install that did not happen. */
-async function releaseHold(): Promise<void> {
+function releaseInstallHold(): void {
+  installHold?.close();
+  installHold = null;
+}
+
+/**
+ * Stops the Core this Client holds and starts the one it shipped with
+ * (Q12). `update/restart` is refused unless `held` holds the Core, so this
+ * cannot stop a recording that started after the Client looked.
+ */
+async function restartCore(held: CoreClient): Promise<void> {
   try {
-    await withRunningCore((core) => core.request("update/release", {}));
-  } catch {
-    // The hold lapses on its own after two minutes.
+    await held.request("update/restart", {});
+  } catch (error) {
+    // The Core may go before it answers. If it is still here, it refused.
+    if (held.open) {
+      held.close();
+      throw error;
+    }
   }
+  await held.closed;
+  forgetClient();
+  // Until the old Core has let go of its address, or a starting Core would
+  // find it taken and this Client would reconnect to the one going away.
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    try {
+      (await CoreClient.connect()).close();
+    } catch (error) {
+      if (nobodyListening(error)) break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  await coreClient();
+}
+
+/** Restarts the Core once it is idle, if it is older than this Client (Q334). */
+async function catchUp(): Promise<void> {
+  if (!app.isPackaged || coreVersion === null) return;
+  let held: CoreClient | null = null;
+  await catchUpCore(coreVersion, app.getVersion(), {
+    hold: async () => {
+      const [answer, connection] = await askForHold([]);
+      held = connection;
+      return answer;
+    },
+    restart: async () => {
+      if (held) await restartCore(held);
+    },
+    pause: () => new Promise((resolve) => setTimeout(resolve, HOLD_RETRY_MS)),
+  });
 }
 
 const updates = createUpdates(() => autoUpdater, {
   publish: publishUpdate,
-  hold: holdCore,
-  release: releaseHold,
+  hold: holdForInstall,
+  release: releaseInstallHold,
   pause: () => new Promise((resolve) => setTimeout(resolve, HOLD_RETRY_MS)),
 });
 
@@ -771,11 +853,11 @@ void app.whenReady().then(() => {
   createWindow();
   // After the window's own connection, which starts the Core if it is not
   // running; later checks never do (Q10). A Core that ran through a macOS
-  // update still holds for it, so the new Client hands it back first.
+  // update is still the old one, and is restarted once it is idle (Q12).
   void coreClient().then(
-    async () => {
-      await releaseHold();
-      await maybeCheckForUpdates();
+    () => {
+      void catchUp().catch(() => {});
+      void maybeCheckForUpdates();
     },
     () => {},
   );

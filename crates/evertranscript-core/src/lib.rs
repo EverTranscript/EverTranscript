@@ -74,6 +74,8 @@ pub async fn start_daemon(shutdown: CancellationToken) -> anyhow::Result<Daemon>
     };
 
     let core = Core::new()?;
+    // So `update/restart` can stop this daemon the way a signal would.
+    core.set_shutdown(shutdown.clone());
 
     // Before serving anything: settle whatever a previous run left half
     // done. A Core that was killed mid-meeting gets its recording back, minus

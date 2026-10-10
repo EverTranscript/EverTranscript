@@ -84,6 +84,9 @@ export class CoreClient {
   #pending = new Map<number, Pending>();
   #handlers = new Set<NotificationHandler>();
   #closed = false;
+  #markClosed: () => void = () => {};
+  /** Settles when the connection closes, from either end. */
+  readonly closed = new Promise<void>((resolve) => (this.#markClosed = resolve));
 
   private constructor(socket: Socket) {
     this.#socket = socket;
@@ -157,6 +160,11 @@ export class CoreClient {
     this.#onClose();
   }
 
+  /** Whether the connection is still open. */
+  get open(): boolean {
+    return !this.#closed;
+  }
+
   #onData(chunk: string): void {
     this.#buffer += chunk;
     let newline: number;
@@ -204,6 +212,7 @@ export class CoreClient {
   #onClose(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#markClosed();
     for (const pending of this.#pending.values()) {
       pending.reject(new Error("the Core closed the connection"));
     }

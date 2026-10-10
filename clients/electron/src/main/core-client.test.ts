@@ -57,3 +57,19 @@ test("a Core that fails to answer is not proof that none is running", () => {
   assert.equal(nobodyListening(new Error("the connection to the Core is closed")), false);
   assert.equal(nobodyListening("unknown method: update/hold"), false);
 });
+
+test("a Core going away settles `closed`, which is how a restart knows it went", async () => {
+  // The catch-up waits on this before starting the new Core (Q12): starting
+  // it while the old one still holds the address would reconnect to the old.
+  const address =
+    process.platform === "win32"
+      ? `\\\\.\\pipe\\evertranscript-test-closing-${process.pid}`
+      : join(mkdtempSync(join(tmpdir(), "et-")), "evertranscript.sock");
+  const server = createServer((socket) => socket.destroy());
+  await new Promise<void>((resolve) => server.listen(address, resolve));
+  const core = await CoreClient.connect(address);
+  await core.closed;
+  assert.equal(core.open, false);
+  await assert.rejects(core.request("status"), /closed/);
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+});

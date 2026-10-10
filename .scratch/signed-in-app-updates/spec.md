@@ -47,7 +47,7 @@ session on 2026-10-10 (Q1–Q17 below).
 | Q9 | One strip in the main window: Download / Release notes / Later → progress → Restart to update. No menu item, notification or tray item. |
 | Q10 | Check at start, then every 24 hours. |
 | Q11 | Install only on an explicit click. `autoInstallOnAppQuit` is off. |
-| Q12 | The new Client restarts an older Core once it is Idle (`launchctl kickstart` on macOS). |
+| Q12 | The new Client restarts an older Core (semver, upgrade-only, Q334) once it is Idle, through `update/restart` under the Core's hold (Q333, which replaced `launchctl kickstart`). A Core from before `update/hold` is quit by hand once (`packaging/README.md`). |
 | Q13 | The offer ships on Windows too, unsigned, behind the same gate. |
 | Q14 | Amend ADR-0034 to cover the download; correct "nothing listens on a socket" in the entitlements comment and on What It Knows. |
 | Q15 | Rehearse `v1.2.0-beta.1` → `beta.2` on this Mac and on windows-zx8 before stable 1.2.0. |
@@ -64,7 +64,7 @@ Each lands on `main` after fmt, clippy, the Rust suite and the Electron tests.
    `packaging/README.md`.
 2. **Updater in main.** Checks at start and every 24 hours, no install on quit,
    events forwarded to the window, and the Q4 gate enforced by a hold the
-   Core grants and keeps until the installer runs (Q330).
+   Core grants and keeps while the installer runs (Q330, Q333).
 3. **Preload bridge and the strip,** English and Chinese, with Q17 errors.
 4. **Core catch-up** (Q12).
 5. **Trust surface** (Q14).

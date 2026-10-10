@@ -7,6 +7,9 @@
 //! child process (ADR-0026).
 
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -70,7 +73,7 @@ use evertranscript_protocol::TranscriptSnapshotResponse;
 use evertranscript_protocol::TranscriptUnsubscribeResponse;
 use evertranscript_protocol::UpdateBusy;
 use evertranscript_protocol::UpdateHoldResponse;
-use evertranscript_protocol::UpdateReleaseResponse;
+use evertranscript_protocol::UpdateRestartResponse;
 use evertranscript_protocol::WatchlistAddParams;
 use evertranscript_protocol::WatchlistKind;
 use evertranscript_protocol::WatchlistResponse;
@@ -102,14 +105,47 @@ use crate::transport::TransportEvent;
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const DEFAULT_SEARCH_LIMIT: u32 = 25;
 
-/// How long `update/hold` lasts unless released. Long enough for the
-/// Windows installer to start and stop this process, short enough that a
-/// Client that died holding it costs a couple of minutes of recording, not
-/// the rest of the day.
-const UPDATE_HOLD_LEASE: std::time::Duration = std::time::Duration::from_secs(120);
+/// Whether a process is running the executable at a path.
+pub type InstallerProbe = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
 
-fn update_hold_live(until: Option<tokio::time::Instant>) -> bool {
-    until.is_some_and(|until| tokio::time::Instant::now() < until)
+/// An update's hold on new work (`update/hold`, DECISIONS Q330, Q333).
+///
+/// **No timer ends it.** It lasts while a connection it was granted to is
+/// open, then for as long as a process runs from one of the installers the
+/// Client named — the installer that will stop this Core, which can start
+/// any time after the Client quits. A lease long enough for every installer
+/// does not exist, and one that lapsed early is the killed recording the
+/// hold is there to prevent. A Client that crashed closes its connection
+/// with it, and an installer that failed or was cancelled exits: either way
+/// the hold ends, so nothing is left unable to record.
+struct UpdateHold {
+    /// The connections it was granted to, while they are open.
+    connections: HashSet<ConnectionId>,
+    /// The installer that will stop this Core.
+    installers: Vec<PathBuf>,
+    /// This Core is stopping so a newer one can start (`update/restart`),
+    /// and starts nothing more.
+    restarting: bool,
+    /// `updates::installer_running`, except in tests, which stand in an
+    /// installer that outlives any timer.
+    running: InstallerProbe,
+}
+
+impl UpdateHold {
+    fn new() -> Self {
+        Self {
+            connections: HashSet::new(),
+            installers: Vec::new(),
+            restarting: false,
+            running: Arc::new(crate::updates::installer_running),
+        }
+    }
+
+    fn live(&self) -> bool {
+        self.restarting
+            || !self.connections.is_empty()
+            || self.installers.iter().any(|path| (self.running)(path))
+    }
 }
 
 /// The Core's own state, independent of any Client.
@@ -175,12 +211,15 @@ pub struct Core {
     /// Counts `cancel_fetch` calls, so a fetch that waited its turn can tell
     /// it was cancelled while it waited.
     fetch_cancels: std::sync::atomic::AtomicU64,
-    /// When an update's hold on new work lapses, if one is held (`update/hold`).
+    /// An update's hold on new work (`update/hold`).
     ///
     /// Taken by `start_meeting_armed` for as long as it takes to start a
     /// recording, which is what makes granting a hold and starting a
     /// recording one step apart rather than two that can interleave.
-    update_hold: Mutex<Option<tokio::time::Instant>>,
+    update_hold: Mutex<UpdateHold>,
+    /// Stops the daemon this Core serves in, for `update/restart`. Unset in
+    /// a Core that serves no daemon, which then refuses to restart.
+    shutdown: std::sync::OnceLock<CancellationToken>,
     /// This installation's settings, including the Briefing acknowledgment
     /// that gates all capture.
     settings: Mutex<Settings>,
@@ -706,7 +745,8 @@ impl Core {
             fetching: std::sync::Mutex::new(None),
             downloading: Mutex::new(()),
             fetch_cancels: std::sync::atomic::AtomicU64::new(0),
-            update_hold: Mutex::new(None),
+            update_hold: Mutex::new(UpdateHold::new()),
+            shutdown: std::sync::OnceLock::new(),
             settings: Mutex::new(Settings::load_from(&settings_path)),
             settings_path,
             models_dir,
@@ -3400,8 +3440,13 @@ impl Core {
     // ------------------------------------------------------------ Updates
 
     /// Holds off new work so an update can install, unless something would
-    /// be interrupted (DECISIONS Q330).
-    pub async fn hold_for_update(&self) -> Result<UpdateHoldResponse> {
+    /// be interrupted (DECISIONS Q330, Q333). The hold belongs to
+    /// `connection` and outlasts it while one of `installers` runs.
+    pub async fn hold_for_update(
+        &self,
+        connection: ConnectionId,
+        installers: Vec<String>,
+    ) -> Result<UpdateHoldResponse> {
         let mut hold = self.update_hold.lock().await;
         let busy = if self.state().await == CoreState::Recording {
             Some(UpdateBusy::Recording)
@@ -3413,7 +3458,13 @@ impl Core {
                 .then_some(UpdateBusy::Diarizing)
         };
         if busy.is_none() {
-            *hold = Some(tokio::time::Instant::now() + UPDATE_HOLD_LEASE);
+            // Installers named by a hold that has ended are not this one's.
+            if !hold.live() {
+                hold.installers.clear();
+            }
+            hold.connections.insert(connection);
+            hold.installers
+                .extend(installers.into_iter().map(PathBuf::from));
         }
         Ok(UpdateHoldResponse {
             held: busy.is_none(),
@@ -3421,16 +3472,56 @@ impl Core {
         })
     }
 
-    /// Ends an update's hold, if there is one.
-    pub async fn release_update_hold(&self) -> UpdateReleaseResponse {
-        *self.update_hold.lock().await = None;
-        self.diarize_wake.notify_one();
-        UpdateReleaseResponse { held: false }
+    /// A connection closed: a hold it had now lasts only while its
+    /// installer runs, and ends at once if there is none.
+    pub async fn connection_closed(&self, connection: ConnectionId) {
+        let mut hold = self.update_hold.lock().await;
+        if hold.connections.remove(&connection) && !hold.live() {
+            hold.installers.clear();
+            self.diarize_wake.notify_one();
+        }
+    }
+
+    /// Stops this Core so a newer one can start in its place (Q12, Q333).
+    ///
+    /// Only for a connection that holds `update/hold`, which was granted on
+    /// an idle Core and keeps it idle — so no recording can start between
+    /// the Client's look at the version and this Core going away. The hold
+    /// stays for the rest of this process: a Core that is stopping starts
+    /// nothing.
+    pub async fn restart_for_update(
+        &self,
+        connection: ConnectionId,
+    ) -> Result<UpdateRestartResponse> {
+        let Some(shutdown) = self.shutdown.get() else {
+            anyhow::bail!("this Core serves no daemon to restart");
+        };
+        let mut hold = self.update_hold.lock().await;
+        anyhow::ensure!(
+            hold.connections.contains(&connection),
+            "update/restart needs this connection to hold update/hold first"
+        );
+        hold.restarting = true;
+        drop(hold);
+        info!("stopping for an update; the Client starts the new Core");
+        shutdown.cancel();
+        Ok(UpdateRestartResponse {})
+    }
+
+    /// The token that stops the daemon this Core serves in.
+    pub fn set_shutdown(&self, shutdown: CancellationToken) {
+        let _ = self.shutdown.set(shutdown);
+    }
+
+    /// Replaces how the hold sees an installer, so a test can run one that
+    /// outlives any timer.
+    pub async fn set_installer_probe(&self, probe: InstallerProbe) {
+        self.update_hold.lock().await.running = probe;
     }
 
     /// Whether an update holds off new work right now.
     async fn update_held(&self) -> bool {
-        update_hold_live(*self.update_hold.lock().await)
+        self.update_hold.lock().await.live()
     }
 
     // ------------------------------------------------------------ Meetings
@@ -3466,7 +3557,7 @@ impl Core {
         // Held until the state reads Recording, so `hold_for_update` sees
         // either no recording and refuses this one, or the recording.
         let hold = self.update_hold.lock().await;
-        if update_hold_live(*hold) {
+        if hold.live() {
             anyhow::bail!("an update is installing; recording resumes when it is done");
         }
 
@@ -4275,6 +4366,7 @@ impl Server {
             }
             TransportEvent::Closed { connection_id } => {
                 self.connections.remove(&connection_id);
+                self.core.connection_closed(connection_id).await;
             }
             TransportEvent::Line {
                 connection_id,
@@ -4695,13 +4787,15 @@ impl Server {
                 Ok(serde_json::to_value(self.core.diarize_status().await?)?)
             }
 
-            ClientRequest::UpdateHold(_) => {
-                Ok(serde_json::to_value(self.core.hold_for_update().await?)?)
-            }
+            ClientRequest::UpdateHold(params) => Ok(serde_json::to_value(
+                self.core
+                    .hold_for_update(connection_id, params.installers)
+                    .await?,
+            )?),
 
-            ClientRequest::UpdateRelease(_) => {
-                Ok(serde_json::to_value(self.core.release_update_hold().await)?)
-            }
+            ClientRequest::UpdateRestart(_) => Ok(serde_json::to_value(
+                self.core.restart_for_update(connection_id).await?,
+            )?),
 
             ClientRequest::DiarizeRun(params) => {
                 let meeting_id = self

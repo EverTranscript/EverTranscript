@@ -121,6 +121,37 @@ The first tagged build is the proof: its "The package must actually contain
 the product" step accepts only an app that Gatekeeper reports as
 `Notarized Developer ID` and that is signed by team `9958A27J47`.
 
+### Once per machine: the first signed install is by hand
+
+No installation before the first signed release can update itself into it.
+Every earlier Mac release is signed ad hoc, so Squirrel.Mac accepts no other
+bundle in its place, and no earlier release has the update strip. Its Core
+also predates `update/hold`, so a new Client cannot restart it safely: it
+would have no way to keep a recording from starting first (DECISIONS Q333,
+Q334). So the first signed install is manual, and it includes quitting the
+old Core while it is Idle:
+
+1. **Wait for Idle.** Using the installed app's own Core:
+
+   ```sh
+   ET=/Applications/EverTranscript.app/Contents/Resources/evertranscript
+   $ET status            # state must be Idle
+   $ET diarize status    # must say nothing is being diarized
+   ```
+
+   On Windows, the same two commands, with
+   `"%LOCALAPPDATA%\Programs\EverTranscript\resources\evertranscript.exe"`.
+2. **Quit both halves.** Quit the app. On macOS, then choose **Quit
+   EverTranscript** from the menu-bar icon: that stops the Core, which
+   quitting the app never does. Windows has no menu-bar Core; there the
+   installer stops the old Core itself, so run it only right after step 1.
+3. **Install by hand.** Replace the app with the signed release and open it.
+   It starts its own Core. On macOS, grant the permissions it asks for
+   again: the old grants belong to the old signature.
+
+Every update after that one arrives in the app, and the release notes of the
+first signed release say so.
+
 ## Artifact names are load-bearing
 
 The in-app updater downloads by filename. electron-builder writes
