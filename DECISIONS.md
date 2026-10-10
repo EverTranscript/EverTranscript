@@ -3589,4 +3589,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** whisper-rs-sys 0.15.0 defines `CMAKE_BUILD_TYPE=RelWithDebInfo` when its build script has `debug_assertions`, as under `cargo test`, and `Release` otherwise, while it always calls `.profile("Release")`. cmake-rs 0.1.58 replaces the flags of the defined `CMAKE_BUILD_TYPE` (`src/lib.rs:710`) but passes the profile to `--config` (`src/lib.rs:879`). In a debug build it therefore strips `CMAKE_C_FLAGS_RELWITHDEBINFO` and builds the untouched Release config at `/O2`; in a release build it strips `CMAKE_C_FLAGS_RELEASE` and builds that config at `/Od`. That matches every measurement: CI's test time did not move, and windows-zx8's release build went from 48 minutes to 4 minutes 12 seconds. The CI guard still checks the flags of the config that is built.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 6e58f0a
