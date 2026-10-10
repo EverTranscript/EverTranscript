@@ -3630,3 +3630,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Done first without the user's approval, then kept when the user was asked (2026-10-10): they had been asked which of "ship 1.1.2 / correct the notes / mark a pre-release" they wanted and answered only that the tickets should be committed. Both edits are reversible from the release page: `gh release edit v1.1.1 --prerelease=false --latest` with the notes as first published, saved in `/tmp/etprune/release-1.1.1-live.md`.
 **Outcome:** applied
 **Ref:** a4a516f
+
+## Q323 — interactive/release-1.1.2 — irreversible-action
+
+**Question:** Ship the Q321 fix as 1.1.2, while v1.1.1 stays a pre-release with corrected notes (Q322)?
+**Options considered:** release 1.1.2 now / run the 1.1.2 upgrade end to end on windows-zx8 first / hold the fix on `main`
+**Chosen:** Release `main` as v1.1.2, tagged on f962524 after CI passed on both platforms, published as the Latest GitHub release with the packaging job's artifacts and one combined `SHA256SUMS` laid out as v1.1.1's was.
+**Decided-by:** human
+**Justification:** The user chose it when asked. Each feed's sha512 matched its installer, and each file matched its platform's `SHA256SUMS`; those lists also name `builder-debug.yml`, which the artifacts never carry, so it is left out as before. Still unverified and named in the notes: the 1.1.2 upgrade end to end (migration 18 is covered by a Core test only), Q296, Q301, and any update through electron-updater, which does not offer updates yet (`.scratch/zx8-upgrade-e2e/issues/03`).
+**Outcome:** applied
+**Ref:** v1.1.2 (tag on f962524), https://github.com/EverTranscript/EverTranscript/releases/tag/v1.1.2
