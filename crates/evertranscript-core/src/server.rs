@@ -155,6 +155,13 @@ pub struct Core {
     /// wants to stop a download is not the one that started it — on a fresh
     /// install nobody started it, the binary did.
     fetching: std::sync::Mutex<Option<CancellationToken>>,
+    /// Makes model fetches take turns. Two downloads of one model would
+    /// write one partial file, and the loser would report a failed
+    /// verification for a model that was fine.
+    downloading: Mutex<()>,
+    /// Counts `cancel_fetch` calls, so a fetch that waited its turn can tell
+    /// it was cancelled while it waited.
+    fetch_cancels: std::sync::atomic::AtomicU64,
     /// This installation's settings, including the Briefing acknowledgment
     /// that gates all capture.
     settings: Mutex<Settings>,
@@ -678,6 +685,8 @@ impl Core {
             summary_backend_factory: std::sync::Mutex::new(None),
             summarizing: Mutex::new(()),
             fetching: std::sync::Mutex::new(None),
+            downloading: Mutex::new(()),
+            fetch_cancels: std::sync::atomic::AtomicU64::new(0),
             settings: Mutex::new(Settings::load_from(&settings_path)),
             settings_path,
             models_dir,
@@ -3967,6 +3976,11 @@ impl Core {
     /// Downloads what is missing. A corrupted file is removed first so the
     /// fetch starts from a clean slate rather than trying to resume garbage.
     pub async fn fetch_models(&self, key: Option<&str>, cancel: CancellationToken) -> Result<()> {
+        let cancels = self.fetch_cancels.load(std::sync::atomic::Ordering::SeqCst);
+        let _turn = self.downloading.lock().await;
+        if self.fetch_cancels.load(std::sync::atomic::Ordering::SeqCst) != cancels {
+            return Err(anyhow::anyhow!("cancelled"));
+        }
         *self
             .fetching
             .lock()
@@ -3979,8 +3993,11 @@ impl Core {
         result
     }
 
-    /// Stops a fetch in flight. Partial files stay, so asking again resumes.
+    /// Stops the fetch in flight and any waiting their turn. Partial files
+    /// stay, so asking again resumes.
     pub fn cancel_fetch(&self) {
+        self.fetch_cancels
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if let Some(token) = self
             .fetching
             .lock()

@@ -1,6 +1,6 @@
 # 02: Two downloads of the same model write one partial file
 
-Status: ready-for-agent
+Status: done
 
 Priority: low. The Electron client never sends `models/fetch`, so this
 happens only when someone runs `evertranscript models fetch` while the Core
@@ -46,5 +46,30 @@ code is the same on `main`.
   `cancel_fetch`. Do not leave a queued download running after a cancel.
 - Test: start two `fetch_models` calls for one model against a slow local
   server. Both must succeed, and the server must see one full download.
+
+## Answer
+
+`Core::fetch_models` now takes turns: it holds a new `downloading` lock
+for the whole fetch, the way `summarizing` makes Summaries take turns. A
+second request waits, and then finds the model `Ready` or downloads it
+alone.
+
+`cancel_fetch` also counts its calls in `fetch_cancels`. A fetch notes the
+count before it waits for its turn. If the count changed while it waited,
+it returns `cancelled` without downloading.
+
+Two new tests in `tests/model_download.rs` use a slow stub server that
+records how many downloads it sent at once:
+
+- `two_fetches_of_one_model_take_turns`: two concurrent fetches peak at one
+  download. It fails without the lock (peak 2).
+- `a_cancel_also_stops_a_fetch_waiting_its_turn`: after a cancel, the
+  queued fetch never reaches the server. It fails without the cancel count
+  (2 requests).
+
+The tests cannot check "both succeed", because the Core fetches only real
+registry entries and the stub cannot serve their bytes (Q314). Every test
+that sets `EVERTRANSCRIPT_MODEL_BASE_URL` now holds one lock, so no test can
+clear it while another Core reads it.
 
 ## Comments

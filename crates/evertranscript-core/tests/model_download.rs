@@ -28,12 +28,22 @@ enum Behavior {
     TruncateAfter(usize),
     /// Ignore Range and always send the whole body from zero.
     IgnoreRange,
+    /// Serve the whole body in small pieces with pauses, so two downloads
+    /// overlap if nothing stops them.
+    Slow,
 }
+
+/// Held by every test that points `BASE_URL_ENV` at its own stub: tests in
+/// one binary share the process environment, and a Core that read another
+/// test's cleared value would download from the real mirror.
+static BASE_URL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 struct TestServer {
     address: SocketAddr,
     requests: Arc<AtomicUsize>,
     ranges_seen: Arc<std::sync::Mutex<Vec<Option<u64>>>>,
+    /// The most downloads this server was sending at the same time.
+    most_at_once: Arc<AtomicUsize>,
 }
 
 impl TestServer {
@@ -44,9 +54,12 @@ impl TestServer {
         let address = listener.local_addr().expect("addr");
         let requests = Arc::new(AtomicUsize::new(0));
         let ranges_seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let most_at_once = Arc::new(AtomicUsize::new(0));
+        let sending = Arc::new(AtomicUsize::new(0));
 
         let counter = Arc::clone(&requests);
         let ranges = Arc::clone(&ranges_seen);
+        let most = Arc::clone(&most_at_once);
         tokio::spawn(async move {
             loop {
                 let Ok((mut stream, _)) = listener.accept().await else {
@@ -55,6 +68,8 @@ impl TestServer {
                 let payload = payload.clone();
                 let counter = Arc::clone(&counter);
                 let ranges = Arc::clone(&ranges);
+                let most = Arc::clone(&most);
+                let sending = Arc::clone(&sending);
                 tokio::spawn(async move {
                     let mut buffer = vec![0u8; 4096];
                     let read = stream.read(&mut buffer).await.unwrap_or(0);
@@ -101,6 +116,8 @@ impl TestServer {
                     if stream.write_all(head.as_bytes()).await.is_err() {
                         return;
                     }
+                    let now = sending.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(now, Ordering::SeqCst);
 
                     match behavior {
                         // Announce the full length, then stop early and hang
@@ -109,11 +126,25 @@ impl TestServer {
                             let cut = bytes.min(body.len());
                             let _ = stream.write_all(&body[..cut]).await;
                         }
+                        Behavior::Slow => {
+                            for (index, piece) in body.chunks(512).enumerate() {
+                                // Between pieces only: a pause after the last
+                                // would count this download as live after
+                                // the client already has every byte.
+                                if index > 0 {
+                                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                                }
+                                if stream.write_all(piece).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
                         _ => {
                             let _ = stream.write_all(body).await;
                         }
                     }
                     let _ = stream.flush().await;
+                    sending.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         });
@@ -122,6 +153,7 @@ impl TestServer {
             address,
             requests,
             ranges_seen,
+            most_at_once,
         }
     }
 
@@ -317,6 +349,7 @@ async fn cancelling_keeps_the_partial_so_the_retry_resumes() {
 /// how DECISIONS Q44 shipped: the logic was right and nothing ran it.
 #[tokio::test]
 async fn a_core_provisions_only_when_it_is_asked_to() {
+    let _base_url = BASE_URL.lock().await;
     let payload = ggml_payload(4096);
     let server = TestServer::start(payload.clone(), Behavior::Complete).await;
     let dir = tempfile::tempdir().expect("tempdir");
@@ -389,4 +422,102 @@ async fn a_core_provisions_only_when_it_is_asked_to() {
         std::env::remove_var(evertranscript_core::models::registry::BASE_URL_ENV);
     }
     drop(server);
+}
+
+/// A Core pointed at `server`, with the env lock held for as long as it lives.
+async fn core_against(
+    server: &TestServer,
+    dir: &tempfile::TempDir,
+) -> (
+    tokio::sync::MutexGuard<'static, ()>,
+    Arc<evertranscript_core::Core>,
+) {
+    let guard = BASE_URL.lock().await;
+    // SAFETY: the lock keeps every other test in this binary off the variable.
+    unsafe {
+        std::env::set_var(
+            evertranscript_core::models::registry::BASE_URL_ENV,
+            server.base_url(),
+        );
+    }
+    let core = evertranscript_core::Core::with_paths_and_models(
+        dir.path().join("History"),
+        dir.path().join("settings.json"),
+        dir.path().join("models"),
+    )
+    .expect("core");
+    (guard, core)
+}
+
+/// Two downloads of one model used to write the same partial file at once,
+/// and the loser reported a failed verification for a model that was fine
+/// (windows-zx8-live-check/02). The stub serves the wrong bytes for the real
+/// entry, so both fail verification here; what matters is that they took
+/// turns.
+#[tokio::test]
+async fn two_fetches_of_one_model_take_turns() {
+    let server = TestServer::start(ggml_payload(4096), Behavior::Slow).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_base_url, core) = core_against(&server, &dir).await;
+    let key = evertranscript_core::models::registry::required()
+        .next()
+        .expect("a required model")
+        .key;
+
+    let (first, second) = tokio::join!(
+        core.fetch_models(Some(key), CancellationToken::new()),
+        core.fetch_models(Some(key), CancellationToken::new()),
+    );
+
+    assert!(
+        first.is_err() && second.is_err(),
+        "the stub's bytes never verify"
+    );
+    assert_eq!(
+        server.most_at_once.load(Ordering::SeqCst),
+        1,
+        "two downloads of one model ran at the same time"
+    );
+    assert_eq!(server.requests.load(Ordering::SeqCst), 2);
+}
+
+/// Stop means stop: a fetch queued behind the running one must not start
+/// its own download once the running one is cancelled.
+#[tokio::test]
+async fn a_cancel_also_stops_a_fetch_waiting_its_turn() {
+    let server = TestServer::start(ggml_payload(4096), Behavior::Slow).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_base_url, core) = core_against(&server, &dir).await;
+    let key = evertranscript_core::models::registry::required()
+        .next()
+        .expect("a required model")
+        .key;
+
+    let running = core.fetch_models(Some(key), CancellationToken::new());
+    let waiting = core.fetch_models(Some(key), CancellationToken::new());
+    tokio::pin!(running, waiting);
+    tokio::select! {
+        _ = &mut running => panic!("the slow download ended before it could be cancelled"),
+        _ = async {
+            while server.requests.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        } => {}
+    }
+    // Polled once, the second fetch queues behind the first.
+    tokio::select! {
+        biased;
+        _ = &mut waiting => panic!("the second fetch did not wait its turn"),
+        _ = std::future::ready(()) => {}
+    }
+
+    core.cancel_fetch();
+    let (running, waiting) = tokio::join!(running, waiting);
+
+    assert!(running.is_err() && waiting.is_err(), "both were stopped");
+    assert_eq!(
+        server.requests.load(Ordering::SeqCst),
+        1,
+        "the queued fetch downloaded after the cancel"
+    );
 }
