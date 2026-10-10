@@ -21,12 +21,16 @@ import {
 } from "electron";
 import { join } from "node:path";
 
+import type { UpdateHoldResponse } from "@protocol/UpdateHoldResponse";
+import { autoUpdater } from "electron-updater";
+
 import type { ConfirmRequest, MenuState } from "../preload/index";
 
-import { CoreClient } from "./core-client.js";
+import { CoreClient, nobodyListening } from "./core-client.js";
 import { locateCore } from "./core-location.js";
 import { classifyCoreExit } from "./core-start.js";
-import { downloadUpdate, installUpdate, startUpdateChecks } from "./updates.js";
+import type { HoldAnswer, UpdateState } from "./update-state.js";
+import { CHECK_INTERVAL_MS, HOLD_RETRY_MS, createUpdates } from "./updates.js";
 
 /**
  * The app icon, for the surfaces packaging does not cover yet.
@@ -470,28 +474,96 @@ function forgetClient(): void {
 
 
 /**
- * Starts update checks only if the Operator has them on.
+ * Runs `use` against a Core that is already running, without starting one.
+ *
+ * A timer must not bring back a Core the Operator quit from the tray, and an
+ * install must not start a Core just to ask whether it is busy. Rejects
+ * when none is listening, as it does when one fails to answer —
+ * `nobodyListening` is what tells the two apart. A connection of its own is
+ * initialized first: the Core refuses every other request before
+ * `initialize`, which is why the update check of 1.0.1 to 1.1.2 never ran
+ * (DECISIONS Q328).
+ */
+async function withRunningCore<T>(use: (core: CoreClient) => Promise<T>): Promise<T> {
+  if (client) return use(client);
+  const core = await CoreClient.connect();
+  try {
+    await core.initialize("evertranscript-client", app.getVersion());
+    return await use(core);
+  } finally {
+    core.close();
+  }
+}
+
+/** Pushes the update offer to every window, as Core notifications are. */
+function publishUpdate(state: UpdateState): void {
+  for (const target of BrowserWindow.getAllWindows()) {
+    target.webContents.send("updates:state", state);
+  }
+}
+
+/**
+ * Checks for an update only if the Operator has checks on.
  *
  * The setting is read from the Core rather than kept here, because it is
- * the same switch the trust surface shows — two sources for one switch is how a switch ends up meaning different
- * things in two places. A Core that is not up yet simply means no check
- * this launch, which is the safe direction: the failure mode of asking
- * later is a missed update, and of assuming yes is traffic the Operator
- * turned off.
+ * the same switch the trust surface shows — two sources for one switch is
+ * how a switch ends up meaning different things in two places. It is read
+ * before every check, so turning it off takes effect at the next one. A Core
+ * that is not up means no check this time, which is the safe direction: the
+ * failure mode of asking later is a missed update, and of assuming yes is
+ * traffic the Operator turned off.
  */
 async function maybeCheckForUpdates(): Promise<void> {
   // Unpackaged builds have no update to install and no signature to check.
   if (!app.isPackaged) return;
   try {
-    const core = await connectWithRetry();
-    const settings = (await core.request("settings/get", {})) as {
-      checkForUpdates?: boolean;
-    };
-    startUpdateChecks(settings.checkForUpdates === true);
+    const settings = await withRunningCore((core) =>
+      core.request<{ checkForUpdates?: boolean }>("settings/get", {}),
+    );
+    if (settings.checkForUpdates === true) updates.check();
   } catch {
-    // No Core, no check.
+    // No answer, no check.
   }
 }
+
+/**
+ * Asks the Core to hold off new work while an update installs (Q330).
+ *
+ * Bounded: a Core that does not answer within 5 s is not known to be idle,
+ * so it reads `unreadable` and the install waits. So does a Core too old to
+ * know `update/hold`, until the new Client restarts it (Q12). Only nothing
+ * listening at all reads `absent`.
+ */
+async function holdCore(): Promise<HoldAnswer> {
+  const silence = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error("the Core did not answer")), 5000).unref();
+  });
+  try {
+    const answer = await Promise.race([
+      withRunningCore((core) => core.request<UpdateHoldResponse>("update/hold", {})),
+      silence,
+    ]);
+    return answer.held ? "held" : (answer.busy ?? "unreadable");
+  } catch (error) {
+    return nobodyListening(error) ? "absent" : "unreadable";
+  }
+}
+
+/** Hands the Core back after an install that did not happen. */
+async function releaseHold(): Promise<void> {
+  try {
+    await withRunningCore((core) => core.request("update/release", {}));
+  } catch {
+    // The hold lapses on its own after two minutes.
+  }
+}
+
+const updates = createUpdates(() => autoUpdater, {
+  publish: publishUpdate,
+  hold: holdCore,
+  release: releaseHold,
+  pause: () => new Promise((resolve) => setTimeout(resolve, HOLD_RETRY_MS)),
+});
 
 /**
  * A destructive confirmation, asked the way the OS asks it.
@@ -650,13 +722,10 @@ function buildMenu(): void {
   );
 }
 
-ipcMain.handle("updates:download", async () => {
-  await downloadUpdate();
-});
-
-ipcMain.handle("updates:install", () => {
-  installUpdate();
-});
+ipcMain.handle("updates:state", () => updates.state());
+ipcMain.handle("updates:download", () => updates.download());
+ipcMain.on("updates:later", () => updates.dismiss());
+ipcMain.handle("updates:install", () => updates.install());
 
 void app.whenReady().then(() => {
   // An unpackaged Client has no bundle for the Dock to read an icon from.
@@ -685,7 +754,17 @@ void app.whenReady().then(() => {
   }
 
   createWindow();
-  void maybeCheckForUpdates();
+  // After the window's own connection, which starts the Core if it is not
+  // running; later checks never do (Q10). A Core that ran through a macOS
+  // update still holds for it, so the new Client hands it back first.
+  void coreClient().then(
+    async () => {
+      await releaseHold();
+      await maybeCheckForUpdates();
+    },
+    () => {},
+  );
+  setInterval(() => void maybeCheckForUpdates(), CHECK_INTERVAL_MS);
   // The Dock icon brings back the main window, even with Settings still open.
   app.on("activate", () => {
     if (!window) createWindow();

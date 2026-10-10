@@ -29,3 +29,14 @@ code is the same in v1.0.1, v1.1.1 and `main` (d6ddd18).
 
 The 1.1.1 release notes say no update has yet been installed through the
 in-app updater. That is true, but it reads as if one could be.
+
+## Comments
+
+**2026-10-10.** Decided: build the offer, and sign and notarize the Mac app.
+The plan is `.scratch/signed-in-app-updates/spec.md` (DECISIONS Q324).
+
+One correction to "What the code does": the check does not run either.
+`maybeCheckForUpdates` sends `settings/get` on a connection it never
+initialized, the Core refuses it with `NOT_INITIALIZED`, and the `catch`
+treats that as "no Core". So no release from v1.0.1 to v1.1.2 has asked
+GitHub for an update (DECISIONS Q328). Slice 2 fixes it.

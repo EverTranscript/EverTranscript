@@ -13,50 +13,161 @@
  * makes this Sanctioned Traffic entry one, disableable, and the guarantee
  * test's final form depends on it: with updates off and models downloaded,
  * literally zero. An updater that checked the setting after building a
- * client would already have resolved a hostname, and DNS is traffic.
+ * client would already have resolved a hostname, and DNS is traffic. The
+ * caller reads the setting before every check, so turning it off takes
+ * effect at the next one rather than the next launch.
+ *
+ * What the Operator sees is one state, held here and pushed to every window
+ * (`update-state.ts`, DECISIONS Q324). The updater is passed in, so the
+ * whole path — the install's wait and its failure included — is tested
+ * without Electron (Q330).
  */
 
-import { autoUpdater } from "electron-updater";
+import type { AppUpdater } from "electron-updater";
 
-/** Whether a check has been started, so a second call is a no-op. */
-let started = false;
+import {
+  nextUpdateState,
+  type HoldAnswer,
+  type UpdateEvent,
+  type UpdateState,
+} from "./update-state.js";
+
+/** How often a running Client checks again (Q10). A Mac app stays open for weeks. */
+export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/** How long a waiting install waits before asking the Core again. */
+export const HOLD_RETRY_MS = 10 * 1000;
+
+/** The part of electron-updater this uses. */
+export type Updater = Pick<
+  AppUpdater,
+  "autoDownload" | "autoInstallOnAppQuit" | "on" | "checkForUpdates" | "downloadUpdate" | "quitAndInstall"
+>;
+
+export type UpdateSteps = {
+  /** Every change to the offer, for every window. */
+  publish: (state: UpdateState) => void;
+  /** Asks the Core to hold off new work. Never rejects: a failure is an answer. */
+  hold: () => Promise<HoldAnswer>;
+  /** Ends a hold this Client was granted. */
+  release: () => Promise<void>;
+  /** Resolves when it is time to ask the Core again. */
+  pause: () => Promise<void>;
+};
+
+export type Updates = ReturnType<typeof createUpdates>;
 
 /**
- * Starts update checks, if the Operator has them on.
- *
- * `enabled` comes from the Core's settings — the same value the trust
- * surface shows — rather than from a preference this process keeps
- * separately. Two sources for one
- * switch is how a switch ends up meaning different things in two places.
+ * The update offer, over `updater()` — called only once checks are on, so
+ * an Operator who turned them off never has an updater constructed.
  */
-export function startUpdateChecks(enabled: boolean): void {
-  if (!enabled || started) return;
-  started = true;
+export function createUpdates(updater: () => Updater, steps: UpdateSteps) {
+  let configured: Updater | null = null;
+  let state: UpdateState = { phase: "none" };
+  // Whether this install holds the Core, so a failure knows to hand it back.
+  let holding = false;
 
-  // Downloading is opt-in per update. An updater that fetched a hundred
-  // megabytes in the background would be spending someone's tethered
-  // connection on a decision they have not made.
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  function apply(event: UpdateEvent): void {
+    const next = nextUpdateState(state, event);
+    if (next === state) return;
+    state = next;
+    steps.publish(state);
+  }
 
-  // Never surfaced as an error the Operator must dismiss. A laptop on a
-  // plane is not a problem to report, and nothing here may interrupt a
-  // recording — which is running in the Core whether or not this window is
-  // even open.
-  autoUpdater.on("error", () => {});
+  function failInstall(error: unknown): void {
+    apply({ type: "installFailed", message: error instanceof Error ? error.message : String(error) });
+    if (holding) {
+      holding = false;
+      void steps.release();
+    }
+  }
 
-  void autoUpdater.checkForUpdates().catch(() => {});
-}
+  function configure(): Updater {
+    if (configured) return configured;
+    const it = updater();
+    // Downloading is opt-in per update. An updater that fetched a hundred
+    // megabytes in the background would be spending someone's tethered
+    // connection on a decision they have not made.
+    it.autoDownload = false;
+    // Installing is opt-in too, and never on quit (Q11): on Windows the
+    // installer stops the Core, recording or not, and on macOS it would swap
+    // the bundle under a Core that is still running. Only Restart to update
+    // installs, and only under the Core's hold.
+    it.autoInstallOnAppQuit = false;
+    // A failed check is never shown (Q17): a laptop on a plane is not a
+    // problem to report. Only an install the Operator started reports here —
+    // Squirrel.Mac refusing the bundle's signature arrives this way.
+    it.on("error", (error: Error) => {
+      if (state.phase === "installing") failInstall(error);
+    });
+    it.on("update-available", (info) => apply({ type: "found", version: info.version }));
+    it.on("download-progress", (progress) => apply({ type: "progress", percent: progress.percent }));
+    configured = it;
+    return it;
+  }
 
-/** Downloads a found update, when the Operator asks for it. */
-export async function downloadUpdate(): Promise<void> {
-  await autoUpdater.downloadUpdate();
-}
+  return {
+    /** The offer as it stands, for a window that has just opened. */
+    state: (): UpdateState => state,
 
-/** Quits and installs a downloaded update. */
-export function installUpdate(): void {
-  // The Core is a separate process and is quit by the app's own teardown;
-  // installing while it holds the History database open would leave a WAL
-  // behind for the next version to recover from.
-  autoUpdater.quitAndInstall();
+    /** Checks for an update. Call it only when the Operator has checks on. */
+    check(): void {
+      const it = configure();
+      // electron-updater keeps one download per check; checking mid-download,
+      // or after it, has nothing to offer the Operator that they do not have.
+      if (state.phase !== "none" && state.phase !== "available" && state.phase !== "failed") return;
+      void it.checkForUpdates().catch(() => {});
+    },
+
+    /** Hides the offer until the next check finds it again (Later). */
+    dismiss(): void {
+      apply({ type: "dismissed" });
+    },
+
+    /** Downloads the offered update, when the Operator asks for it. */
+    async download(): Promise<void> {
+      apply({ type: "downloadStarted" });
+      if (state.phase !== "downloading") return;
+      try {
+        await configure().downloadUpdate();
+        apply({ type: "downloaded" });
+      } catch (error) {
+        apply({ type: "downloadFailed", message: error instanceof Error ? error.message : String(error) });
+      }
+    },
+
+    /**
+     * Restart to update: installs once the Core holds off new work (Q4).
+     *
+     * A click while the Core records or diarizes is not refused — it waits,
+     * asking again every `HOLD_RETRY_MS`, and installs once, when the Core
+     * grants the hold. The hold is what makes that safe: the Core will not
+     * start a recording or a Diarization until the installer has run or the
+     * hold is released, so nothing begins between the answer and the install
+     * (Q330). Only no Core listening at all installs without one.
+     */
+    async install(): Promise<void> {
+      // Waiting already, or nothing downloaded: one install at a time.
+      if (state.phase !== "downloaded" && !(state.phase === "failed" && state.retry === "install")) {
+        return;
+      }
+      let answer: HoldAnswer = await steps.hold();
+      while (answer !== "held" && answer !== "absent") {
+        apply({ type: "installWaiting", busy: answer });
+        await steps.pause();
+        answer = await steps.hold();
+      }
+      holding = answer === "held";
+      apply({ type: "installStarted" });
+      try {
+        // Silent, and relaunched after: the Windows installer is a wizard
+        // otherwise, which is not what Restart to update says. macOS ignores
+        // both. The Core keeps running through a macOS swap — a LaunchAgent —
+        // so the new Client restarts it once it is idle (Q12).
+        configure().quitAndInstall(true, true);
+      } catch (error) {
+        failInstall(error);
+      }
+    },
+  };
 }

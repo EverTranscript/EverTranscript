@@ -699,6 +699,40 @@
         "method",
         "params"
       ]
+    },
+    {
+      "description": "Holds off new work so an update can install (DECISIONS Q330).\n\nGranted only while nothing is recording and no Meeting is diarizing\nor waiting to be, and checked in the same step that starts a\nrecording, so nothing can begin between the check and the install.\nWhile held, no recording starts — Auto-Record's included — and no\nqueued Diarization begins. A lease rather than a switch: it lapses\non its own after two minutes, so a Client that crashed holding it\ncannot leave the Core unable to record.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "update/hold"
+        },
+        "params": {
+          "$ref": "#/$defs/UpdateHoldParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
+    },
+    {
+      "description": "Ends a hold early, when the install failed or was not started.\nReleasing a hold that is not there is not an error.",
+      "type": "object",
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "update/release"
+        },
+        "params": {
+          "$ref": "#/$defs/UpdateReleaseParams"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ]
     }
   ],
   "$defs": {
@@ -1127,6 +1161,12 @@
       }
     },
     "TranscriptUnsubscribeParams": {
+      "type": "object"
+    },
+    "UpdateHoldParams": {
+      "type": "object"
+    },
+    "UpdateReleaseParams": {
       "type": "object"
     },
     "WatchlistAddParams": {

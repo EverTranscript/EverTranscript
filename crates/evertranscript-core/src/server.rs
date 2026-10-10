@@ -68,6 +68,9 @@ use evertranscript_protocol::TranscriptSegment;
 use evertranscript_protocol::TranscriptSegmentAddedParams;
 use evertranscript_protocol::TranscriptSnapshotResponse;
 use evertranscript_protocol::TranscriptUnsubscribeResponse;
+use evertranscript_protocol::UpdateBusy;
+use evertranscript_protocol::UpdateHoldResponse;
+use evertranscript_protocol::UpdateReleaseResponse;
 use evertranscript_protocol::WatchlistAddParams;
 use evertranscript_protocol::WatchlistKind;
 use evertranscript_protocol::WatchlistResponse;
@@ -98,6 +101,16 @@ use crate::transport::TransportEvent;
 /// The default page size for `meeting/list`.
 const DEFAULT_LIST_LIMIT: u32 = 50;
 const DEFAULT_SEARCH_LIMIT: u32 = 25;
+
+/// How long `update/hold` lasts unless released. Long enough for the
+/// Windows installer to start and stop this process, short enough that a
+/// Client that died holding it costs a couple of minutes of recording, not
+/// the rest of the day.
+const UPDATE_HOLD_LEASE: std::time::Duration = std::time::Duration::from_secs(120);
+
+fn update_hold_live(until: Option<tokio::time::Instant>) -> bool {
+    until.is_some_and(|until| tokio::time::Instant::now() < until)
+}
 
 /// The Core's own state, independent of any Client.
 pub struct Core {
@@ -162,6 +175,12 @@ pub struct Core {
     /// Counts `cancel_fetch` calls, so a fetch that waited its turn can tell
     /// it was cancelled while it waited.
     fetch_cancels: std::sync::atomic::AtomicU64,
+    /// When an update's hold on new work lapses, if one is held (`update/hold`).
+    ///
+    /// Taken by `start_meeting_armed` for as long as it takes to start a
+    /// recording, which is what makes granting a hold and starting a
+    /// recording one step apart rather than two that can interleave.
+    update_hold: Mutex<Option<tokio::time::Instant>>,
     /// This installation's settings, including the Briefing acknowledgment
     /// that gates all capture.
     settings: Mutex<Settings>,
@@ -687,6 +706,7 @@ impl Core {
             fetching: std::sync::Mutex::new(None),
             downloading: Mutex::new(()),
             fetch_cancels: std::sync::atomic::AtomicU64::new(0),
+            update_hold: Mutex::new(None),
             settings: Mutex::new(Settings::load_from(&settings_path)),
             settings_path,
             models_dir,
@@ -2619,6 +2639,18 @@ impl Core {
                 break;
             }
 
+            // Checked after the read: a hold is granted only on an empty
+            // queue, so anything here joined after it, and must wait for
+            // the install rather than be stopped by it.
+            if self.update_held().await {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = self.diarize_wake.notified() => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+                }
+                continue;
+            }
+
             let outcome = outcome_of(
                 &meeting_id,
                 self.diarize_meeting(&meeting_id, priority).await,
@@ -3365,6 +3397,42 @@ impl Core {
         }
     }
 
+    // ------------------------------------------------------------ Updates
+
+    /// Holds off new work so an update can install, unless something would
+    /// be interrupted (DECISIONS Q330).
+    pub async fn hold_for_update(&self) -> Result<UpdateHoldResponse> {
+        let mut hold = self.update_hold.lock().await;
+        let busy = if self.state().await == CoreState::Recording {
+            Some(UpdateBusy::Recording)
+        } else {
+            // A queued Meeting counts: the worker starts it the moment it
+            // looks, and a running job stays in the queue until it is done.
+            let status = self.diarize_status().await?;
+            (status.state == DiarizeState::Running || !status.queued.is_empty())
+                .then_some(UpdateBusy::Diarizing)
+        };
+        if busy.is_none() {
+            *hold = Some(tokio::time::Instant::now() + UPDATE_HOLD_LEASE);
+        }
+        Ok(UpdateHoldResponse {
+            held: busy.is_none(),
+            busy,
+        })
+    }
+
+    /// Ends an update's hold, if there is one.
+    pub async fn release_update_hold(&self) -> UpdateReleaseResponse {
+        *self.update_hold.lock().await = None;
+        self.diarize_wake.notify_one();
+        UpdateReleaseResponse { held: false }
+    }
+
+    /// Whether an update holds off new work right now.
+    async fn update_held(&self) -> bool {
+        update_hold_live(*self.update_hold.lock().await)
+    }
+
     // ------------------------------------------------------------ Meetings
 
     /// Starts a Meeting. Refuses if one is already running: a Meeting runs
@@ -3394,6 +3462,12 @@ impl Core {
                 "recording is blocked until the first-run briefing is acknowledged \
                  (run `evertranscript acknowledge` or complete first-run setup)"
             );
+        }
+        // Held until the state reads Recording, so `hold_for_update` sees
+        // either no recording and refuses this one, or the recording.
+        let hold = self.update_hold.lock().await;
+        if update_hold_live(*hold) {
+            anyhow::bail!("an update is installing; recording resumes when it is done");
         }
 
         let meeting = self
@@ -3462,6 +3536,7 @@ impl Core {
         }
 
         self.set_state(CoreState::Recording).await;
+        drop(hold);
         self.wake_mirror();
         Ok(meeting)
     }
@@ -4618,6 +4693,14 @@ impl Server {
 
             ClientRequest::DiarizeStatus(_) => {
                 Ok(serde_json::to_value(self.core.diarize_status().await?)?)
+            }
+
+            ClientRequest::UpdateHold(_) => {
+                Ok(serde_json::to_value(self.core.hold_for_update().await?)?)
+            }
+
+            ClientRequest::UpdateRelease(_) => {
+                Ok(serde_json::to_value(self.core.release_update_hold().await)?)
             }
 
             ClientRequest::DiarizeRun(params) => {

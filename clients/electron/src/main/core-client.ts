@@ -55,6 +55,21 @@ export function pipeNameFor(runtimeDir: string | undefined, user: string): strin
   return `\\\\.\\pipe\\evertranscript-${user}-${hash.toString(16).padStart(16, "0")}`;
 }
 
+/**
+ * Whether `error` proves no Core is listening, rather than one failing to
+ * answer.
+ *
+ * Only the two answers the OS gives when nothing has the address: no socket
+ * or pipe there (`ENOENT`), or a socket file nothing accepts on — what a Core
+ * that died leaves behind (`ECONNREFUSED`). A busy pipe, a refused
+ * permission, a timeout or an error reply are a Core that may be running,
+ * and an update must not take any of them as leave to install (Q330).
+ */
+export function nobodyListening(error: unknown): boolean {
+  const cause = error instanceof Error ? (error.cause as NodeJS.ErrnoException | undefined) : undefined;
+  return cause?.code === "ENOENT" || cause?.code === "ECONNREFUSED";
+}
+
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -86,6 +101,7 @@ export class CoreClient {
         reject(
           new Error(
             `no Core is listening at ${address} — start it with \`evertranscript daemon\` (${error.message})`,
+            { cause: error },
           ),
         );
       };

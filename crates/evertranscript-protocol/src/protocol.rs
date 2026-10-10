@@ -437,6 +437,25 @@ client_request_definitions! {
         params: DiarizeRerunCancelParams,
         response: DiarizeStatusResponse,
     },
+    /// Holds off new work so an update can install (DECISIONS Q330).
+    ///
+    /// Granted only while nothing is recording and no Meeting is diarizing
+    /// or waiting to be, and checked in the same step that starts a
+    /// recording, so nothing can begin between the check and the install.
+    /// While held, no recording starts — Auto-Record's included — and no
+    /// queued Diarization begins. A lease rather than a switch: it lapses
+    /// on its own after two minutes, so a Client that crashed holding it
+    /// cannot leave the Core unable to record.
+    UpdateHold => "update/hold" {
+        params: UpdateHoldParams,
+        response: UpdateHoldResponse,
+    },
+    /// Ends a hold early, when the install failed or was not started.
+    /// Releasing a hold that is not there is not an error.
+    UpdateRelease => "update/release" {
+        params: UpdateReleaseParams,
+        response: UpdateReleaseResponse,
+    },
 }
 
 server_notification_definitions! {
@@ -1732,6 +1751,44 @@ pub struct DiarizeRerunRequestParams {}
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct DiarizeRerunCancelParams {}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateHoldParams {}
+
+/// What an update would interrupt, and so is waiting for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub enum UpdateBusy {
+    Recording,
+    /// A Meeting is being diarized, or is waiting its turn.
+    Diarizing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateHoldResponse {
+    pub held: bool,
+    /// Why the hold was refused. Absent when it was granted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub busy: Option<UpdateBusy>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateReleaseParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateReleaseResponse {
+    pub held: bool,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]

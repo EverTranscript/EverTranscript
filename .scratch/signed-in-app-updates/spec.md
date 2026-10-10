@@ -63,7 +63,8 @@ Each lands on `main` after fmt, clippy, the Rust suite and the Electron tests.
    codesign identifier under Developer ID. Put the Operator's checklist in
    `packaging/README.md`.
 2. **Updater in main.** Checks at start and every 24 hours, no install on quit,
-   events forwarded to the window, and the Q4 gate enforced in main.
+   events forwarded to the window, and the Q4 gate enforced by a hold the
+   Core grants and keeps until the installer runs (Q330).
 3. **Preload bridge and the strip,** English and Chinese, with Q17 errors.
 4. **Core catch-up** (Q12).
 5. **Trust surface** (Q14).
