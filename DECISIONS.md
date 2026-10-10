@@ -3619,7 +3619,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Ticket 01 left the recovery rule open, and the user chose to release 1.1.2 only after the fix was built; the recovery rule itself is still this entry's call. Took the option cheapest to reason about: it reuses the gate and the backlog as they are, re-walking a History twice costs only time, and `reseed` replaces a Meeting's evidence rather than adding to it. Re-queuing only the missed Meetings would need a second enqueue path beside `rerun::begin`.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** a4a516f
 
 ## Q322 — interactive/zx8-upgrade-e2e — deviation
 
@@ -3629,4 +3629,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** human
 **Justification:** Done first without the user's approval, then kept when the user was asked (2026-10-10): they had been asked which of "ship 1.1.2 / correct the notes / mark a pre-release" they wanted and answered only that the tickets should be committed. Both edits are reversible from the release page: `gh release edit v1.1.1 --prerelease=false --latest` with the notes as first published, saved in `/tmp/etprune/release-1.1.1-live.md`.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** a4a516f
