@@ -43,10 +43,17 @@ something that looks signed.
 
 These need credentials that are deliberately not in this repository:
 
-1. **Developer ID Application certificate** (macOS) — signs all four
-   binaries. Their codesigning identifiers must agree, or macOS refuses to
-   launch the child processes; the failure presents as the Core "not
-   starting", with nothing in any log.
+1. **Developer ID Application certificate** (macOS) — signs every binary in
+   the bundle. What must agree across releases is the **team**, not the
+   identifiers. The signer passes no `--identifier`, so codesign names the
+   Core `evertranscript` and the sidecar `evertranscript-summarizer` after
+   their files. That is stable, and the same as a local build's. Ad hoc, it
+   would be `evertranscript-<LC_UUID>`, new with every build. The app's
+   designated requirement names team `9958A27J47`. Privacy grants are charged
+   to the bundle, and Squirrel.Mac installs only an update that satisfies the
+   running app's requirement. So a renewed certificate, or a CI-built update,
+   keeps every grant and installs. A certificate from another team does
+   neither. (Measured 2026-10-10, DECISIONS Q326.)
 2. **App Store Connect API key** — notarization. Notarization passes on
    merits; it is Mac App Store *human review* of system-audio capture that
    ADR-0016 rejected, not this.
@@ -72,6 +79,48 @@ These need credentials that are deliberately not in this repository:
    should confirm the shape of this before the first release that carries
    it.
 
+## Signing and notarizing releases: the Operator's checklist
+
+Done once, by the Account Holder of team `9958A27J47`. CI then signs and
+notarizes every tagged Mac build, and a tagged build fails without these
+secrets (DECISIONS Q324). The repository is on github.com, so name it in
+full: a bare `EverTranscript/EverTranscript` can resolve to another GitHub
+host.
+
+1. **Create the certificate.** In Keychain Access, choose Certificate
+   Assistant → Request a Certificate From a Certificate Authority, and save
+   the request to disk. On developer.apple.com, open Certificates and add a
+   **Developer ID Application** certificate from that request. Download it
+   and double-click it, so it lands in your login keychain beside its
+   private key.
+2. **Export it.** In Keychain Access → My Certificates, export
+   "Developer ID Application: Frank Dai (9958A27J47)" as a `.p12` with a
+   password.
+3. **Create the notarization key.** In App Store Connect → Users and
+   Access → Integrations → App Store Connect API, add a Team Key with
+   Developer access. Download `AuthKey_<KEYID>.p8`; Apple offers it once.
+   Note the Key ID and the Issuer ID shown on that page.
+4. **Add the five secrets.** Each value goes from a file or a prompt
+   straight into GitHub, never through the clipboard:
+
+   ```sh
+   R=github.com/EverTranscript/EverTranscript
+   base64 -i DeveloperID.p12 | gh secret set MACOS_CERTIFICATE -R $R
+   gh secret set MACOS_CERTIFICATE_PASSWORD -R $R    # prompts for it
+   gh secret set APPLE_API_KEY -R $R < AuthKey_<KEYID>.p8
+   gh secret set APPLE_API_KEY_ID -R $R --body <KEYID>
+   gh secret set APPLE_API_ISSUER -R $R --body <issuer-id>
+   gh secret list -R $R                              # five names
+   ```
+
+5. **Delete the exported `.p12`.** The certificate stays in your login
+   keychain, which is where local builds on this Mac sign from. A lost `.p8`
+   is revoked and replaced in App Store Connect, not recovered.
+
+The first tagged build is the proof: its "The package must actually contain
+the product" step accepts only an app that Gatekeeper reports as
+`Notarized Developer ID` and that is signed by team `9958A27J47`.
+
 ## Artifact names are load-bearing
 
 The in-app updater downloads by filename. electron-builder writes
@@ -88,9 +137,9 @@ have 404'd. The assets were renamed by hand after publishing; macOS was never
 affected, because its name has no spaces to rewrite.
 
 So `nsis.artifactName` is pinned to the hyphenated form, and the packaging
-job asserts the agreement rather than trusting it: every name in
-`latest*.yml` must exist among the built artifacts, and no artifact may carry
-a space. **Any new target — dmg, msi, appimage — needs the same treatment**,
+job asserts the agreement rather than trusting it: every name in every
+channel's feed (`latest*.yml`, or `beta*.yml` for a pre-release) must exist
+among the built artifacts, and no artifact may carry a space. **Any new target — dmg, msi, appimage — needs the same treatment**,
 because the default names for several of them also contain spaces.
 
 ## Entitlements

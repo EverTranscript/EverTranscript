@@ -13,7 +13,9 @@ name: Package
 # and a log line saying so — never something that looks signed and is not.
 # The one exception is the Mac bundle, which is sealed ad hoc (see Package).
 # An ad hoc signature names no one, and Gatekeeper rejects it as it rejects
-# no signature at all.
+# no signature at all. A *tagged* Mac build is the other way round: it fails
+# without the signing and notarization secrets, because an ad hoc release can
+# never update in-app (see "Signing credentials").
 
 on:
   push:
@@ -131,9 +133,35 @@ jobs:
               echo "  $1: absent — artifacts will be unsigned"
             fi
           }
+          # **A tagged Mac release is signed and notarized, or it fails.** An ad
+          # hoc release can never update itself: its requirement is its own
+          # cdhash, and Squirrel.Mac installs only what satisfies the running
+          # app's requirement (DECISIONS Q324). A manual run may still build
+          # ad hoc, for testing.
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$RUNNER_OS" == "macOS" ]]; then
+            missing=0
+            for pair in MACOS_CERTIFICATE:MACOS_CERTIFICATE \
+                        MACOS_CERTIFICATE_PASSWORD:MACOS_CERTIFICATE_PASSWORD \
+                        APPLE_API_KEY:APPLE_KEY APPLE_API_KEY_ID:APPLE_KEY_ID \
+                        APPLE_API_ISSUER:APPLE_ISSUER; do
+              var=${pair#*:}
+              if [[ -z "${!var:-}" ]]; then
+                echo "::error::secret ${pair%%:*} is not set; a tagged Mac release must be signed and notarized"
+                missing=1
+              fi
+            done
+            [[ $missing -eq 0 ]] || exit 1
+          fi
           carry CSC_LINK "$MACOS_CERTIFICATE"
           carry CSC_KEY_PASSWORD "$MACOS_CERTIFICATE_PASSWORD"
-          carry APPLE_API_KEY "$APPLE_KEY"
+          # @electron/notarize reads APPLE_API_KEY as a *path* to the .p8, and
+          # the key is several lines, which a NAME=value line cannot carry.
+          if [[ -n "${APPLE_KEY:-}" && "$RUNNER_OS" == "macOS" ]]; then
+            printf '%s\n' "$APPLE_KEY" > "$RUNNER_TEMP/AuthKey.p8"
+            carry APPLE_API_KEY "$RUNNER_TEMP/AuthKey.p8"
+          else
+            carry APPLE_API_KEY ""
+          fi
           carry APPLE_API_KEY_ID "$APPLE_KEY_ID"
           carry APPLE_API_ISSUER "$APPLE_ISSUER"
           carry WIN_CSC_LINK "$WINDOWS_CERTIFICATE"
@@ -141,7 +169,8 @@ jobs:
 
       # electron-builder signs when it finds an identity and says so when it
       # does not. Both cases produce a usable artifact rather than a failed
-      # job.
+      # job. With the certificate and all three APPLE_API_* set it also
+      # notarizes and staples the app before zipping it.
       #
       # **With no certificate, the Mac bundle is still sealed, ad hoc.**
       # Unsealed, macOS judges each binary in it by its own path: the Core the
@@ -204,6 +233,19 @@ jobs:
             ditto -x -k packaging/out/installers/*-mac.zip "$unpacked"
             codesign --verify --deep --strict "$unpacked/EverTranscript.app"
             echo "  sealed: EverTranscript.app"
+            if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+              # Notarized, and by the team every signed release names: a
+              # Developer ID requirement names the team, so an update signed
+              # by any other team is refused by every installed copy.
+              verdict=$(spctl -a -vv "$unpacked/EverTranscript.app" 2>&1) || true
+              echo "$verdict"
+              grep -q 'source=Notarized Developer ID' <<< "$verdict" \
+                || { echo "::error::the app is not notarized"; exit 1; }
+              team=$(codesign -dv "$unpacked/EverTranscript.app" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+              [[ "$team" == "9958A27J47" ]] \
+                || { echo "::error::signed by team '$team', not 9958A27J47; installed copies would refuse it as an update"; exit 1; }
+              echo "  notarized, team $team"
+            fi
           fi
 
       # **The updater downloads by name, so the names have to agree.**
@@ -232,8 +274,11 @@ jobs:
                 ;;
             esac
           done
-          for meta in latest*.yml; do
+          # Every channel's feed: a beta build writes beta.yml / beta-mac.yml
+          # and no latest*.yml at all.
+          for meta in *.yml; do
             [ -e "$meta" ] || continue
+            [ "$meta" = builder-debug.yml ] && continue
             names=$(grep -E '^[[:space:]]*(-[[:space:]]+)?(url|path):' "$meta" \
                     | sed -E 's/.*:[[:space:]]*//' | tr -d '\r' | sort -u)
             while IFS= read -r name; do
@@ -398,7 +443,9 @@ jobs:
       # behind, which was invisible until a release was actually assembled.
       #
       # `.blockmap` travels with them: it is what lets an update download a
-      # diff instead of another hundred megabytes.
+      # diff instead of another hundred megabytes. Every channel's feed goes,
+      # because a pre-release writes `beta*.yml` instead of `latest*.yml`, and
+      # an installed beta reads the next beta's feed by that name.
       - uses: actions/upload-artifact@v4
         with:
           name: evertranscript-${{ matrix.os }}
@@ -406,6 +453,7 @@ jobs:
             packaging/out/installers/*.zip
             packaging/out/installers/*.exe
             packaging/out/installers/*.blockmap
-            packaging/out/installers/latest*.yml
+            packaging/out/installers/*.yml
+            !packaging/out/installers/builder-debug.yml
             packaging/out/installers/SHA256SUMS
           if-no-files-found: error

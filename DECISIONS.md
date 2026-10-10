@@ -3640,3 +3640,43 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user chose it when asked. Each feed's sha512 matched its installer, and each file matched its platform's `SHA256SUMS`; those lists also name `builder-debug.yml`, which the artifacts never carry, so it is left out as before. Still unverified and named in the notes: the 1.1.2 upgrade end to end (migration 18 is covered by a Core test only), Q296, Q301, and any update through electron-updater, which does not offer updates yet (`.scratch/zx8-upgrade-e2e/issues/03`).
 **Outcome:** applied
 **Ref:** v1.1.2 (tag on f962524), https://github.com/EverTranscript/EverTranscript/releases/tag/v1.1.2
+
+## Q324 — interactive/signed-in-app-updates — gate-resolution
+
+**Question:** How should the in-app updater offer an update (`.scratch/zx8-upgrade-e2e/issues/03`), and how should the macOS app be signed so the offer can install?
+**Options considered:** seventeen questions in one grilling session; the options for each are in the spec.
+**Chosen:** CI signs and notarizes with a Developer ID Application certificate from team `9958A27J47`; one strip in the main window offers Download, then Restart to update; no install while the Core is recording or diarizing, and never on quit; this Mac moves to Developer ID; Windows ships the offer unsigned; a `beta.1` → `beta.2` rehearsal on this Mac and windows-zx8 comes before stable 1.2.0. The whole set is Q1–Q17 in `.scratch/signed-in-app-updates/spec.md`.
+**Decided-by:** human
+**Justification:** The Operator accepted every recommendation ("yes to all", three rounds). The deciding fact: every release so far is ad hoc, so its designated requirement is its own `cdhash`, and Squirrel.Mac installs only a bundle that satisfies the running app's requirement. No existing install can update in-app, and no signing scheme short of a stable Developer ID requirement can change that.
+**Outcome:** applied
+**Ref:** `.scratch/signed-in-app-updates/spec.md`
+
+## Q325 — signed-in-app-updates/slice-1 — gate-resolution
+
+**Question:** The plan was put to the Operator for confirmation, and they answered by starting an advisor pair instead of saying yes. Does slice 1 (CI and signing) start?
+**Options considered:** start slice 1 / wait for an explicit yes
+**Chosen:** Start slice 1. Land it on `main` only after fmt, clippy, the full Rust suite and the Electron tests pass. Apple-account steps and permission re-grants stay the Operator's, and any check that needs the missing certificate is reported as pending, not passed.
+**Decided-by:** advisor
+**Justification:** Starting the pair after the plan was the Operator's answer to it, and the spec settles every slice-1 choice.
+**Outcome:** applied
+**Ref:** `.scratch/signed-in-app-updates/spec.md` §Slices
+
+## Q326 — signed-in-app-updates/slice-1 — deviation
+
+**Question:** `packaging/README.md` said the bundle's codesigning identifiers "must agree" or macOS refuses to launch the Core. What identifier will a Developer ID build give the Core, and does anything depend on it?
+**Options considered:** set `--identifier` through the signer's per-file options / leave the signer's default and correct the README
+**Chosen:** Leave the default, and correct the README. Under a real identity the Core is `evertranscript` and the sidecar `evertranscript-summarizer`, stable across builds and equal to a local build's.
+**Decided-by:** agent
+**Justification:** Measured on a copy of the built Core, with the argument list `@electron/osx-sign` 1.3.3 passes (`--sign --force --options runtime --entitlements`, no `--identifier`). Re-signed ad hoc it is `evertranscript-55554944ca130452…`, the build's LC_UUID, new every build. Re-signed with the Apple Development identity it is `evertranscript`, team `9958A27J47`. The identifier-derivation rule does not depend on the certificate type, so Developer ID gives the same. The README's claim was never measured (it dates from facd5da, before anything was signed), and the installed build disproves it: app `com.evertranscript.client`, Core `evertranscript`, and the Core starts. Nothing keys on the Core's identifier: Q264's tccd log charges its access to the bundle, and both binaries link only `/System` and `/usr/lib`, so library validation has nothing to check. What must agree is the team, which the Developer ID requirement names. The real Developer ID signature stays pending until the Operator's certificate exists.
+**Outcome:** applied
+**Ref:** `packaging/README.md` §What only the Operator can do, item 1
+
+## Q327 — signed-in-app-updates/slice-1 — tradeoff
+
+**Question:** Q16 (Q324) fails a tag build that lacks the secrets. Should a tag build also prove the result is notarized and signed by the expected team?
+**Options considered:** trust electron-builder once the secrets are present / check Gatekeeper's verdict and the Team ID on the unzipped app
+**Chosen:** Check both. On a tag, the packaging job requires `spctl` to report `source=Notarized Developer ID` and `TeamIdentifier` to be `9958A27J47`. The team is written into the workflow.
+**Decided-by:** agent
+**Justification:** electron-builder skips notarization with only a log line when it cannot build its options (the v1.1.2 run log shows exactly that), and a release from any other team would be refused as an update by every installed copy, since the Developer ID requirement names the team. The cost is a hard-coded team, which changes only if the project changes owners. Checked locally both ways that can be checked today: the installed Apple Development build fails as not notarized, and Granola (notarized, team `QZ7DHHLN25`) fails on the team. The passing case needs the Operator's certificate and is pending.
+**Outcome:** applied
+**Ref:** `.github/workflows/package.yml`, step "The package must actually contain the product"
