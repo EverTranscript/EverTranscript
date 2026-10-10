@@ -3549,7 +3549,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The lock lives in the Core, so a `Downloader`-only test would not cover it, and a test-only registry hook is production code added for a test. "Both succeed" follows from taking turns: `Downloader::fetch` returns early when the model is already `Ready` (`models/mod.rs:316`), which `a_verified_model_is_not_downloaded_again` covers. Removing the lock fails the first test; removing the cancel counter fails the second.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 6d42379
 
 ## Q315 — windows-zx8-live-check/01 — gate-resolution
 
@@ -3559,7 +3559,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** whisper-rs-sys's CMakeCache on windows-zx8 read `CMAKE_C_FLAGS_RELEASE= -nologo -MD -Brepro -W0`, with no `/O` flag, so MSVC compiled ggml at `/Od`. cmake-rs 0.1.58 (`src/lib.rs` around line 746) overwrites `CMAKE_<LANG>_FLAGS_<CONFIG>` for the Visual Studio generator and drops every `-O`/`/O` argument (rust-lang/cmake-rs#240). llama-cpp-sys-2 0.1.154 adds `/O2 /DNDEBUG /Ob2` back in its `build.rs`, so the summarizer was never affected; whisper-rs-sys 0.15.0 does not. whisper-rs-sys forwards every `CMAKE_*` variable as a define, and cmake-rs leaves a flag variable alone once it is defined, so the environment fixes it without touching the dependency. This follows Q310, which set `GGML_NATIVE` the same way. `.cargo/config.toml` cannot scope an `[env]` entry to Windows, and the MSVC-style value would break the macOS build. Dashes instead of slashes keep Git Bash from rewriting the values as paths. Measured on windows-zx8 with `main`: unoptimized, no chunk had finished 5 minutes after the stop; with the flags, the drain took 4 min 12 s, and each chunk decoded in about 55 s. Local Windows builds outside CI stay unoptimized unless a developer sets the same two variables.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 544a519
 
 ## Q316 — windows-zx8-live-check/01 — tradeoff
 
@@ -3569,4 +3569,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** On the i5-8400 with the Q315 flags, a chunk took about 55 s on 3 threads and about 37 s on 6, whatever its length, because whisper encodes a fixed 30 s window. Neither keeps up with two legs of live speech, so 6 threads moves the limit without removing it. The half-the-cores rule is deliberate: the code comment keeps headroom for capture and encoding, and during a meeting the call app is also on this CPU. Spending that headroom is a product call that needs a measurement during a real call, which this run did not make. The cheaper levers named in ticket 03 (cutting the cost of short chunks, a clang build, a smaller model on slow CPUs) can come first.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 544a519
