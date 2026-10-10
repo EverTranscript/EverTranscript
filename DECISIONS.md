@@ -3539,4 +3539,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** windows-zx8 has an Intel Core i5-8400 (AVX2, no AVX-512), the kind of CPU an AVX-512 build would crash on. I copied the installer's `resources/evertranscript.exe` there, ran it as a daemon with its own History and app-support folders, and recorded 53 s while a 27 s spoken clip played through the speakers. Both the microphone and WASAPI loopback legs were captured, and the loopback transcript matched the clip word for word. The daemon never exited during the run. Two problems surfaced and are filed as `.scratch/windows-zx8-live-check/issues/01` (transcription took 48 minutes to drain) and `02` (two downloads of one model clash). The test copy registered itself in the user's `Run` key because the run did not set `EVERTRANSCRIPT_NO_LOGIN_ITEM`; I removed that value and the 3.3 GB test folder afterwards.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 6a54568
