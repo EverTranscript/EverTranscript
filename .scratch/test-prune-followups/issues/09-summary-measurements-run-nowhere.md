@@ -32,7 +32,7 @@ there, because its generation has its own switch,
 `EVERTRANSCRIPT_MEASURE_NINETY_MINUTES`, that no workflow sets.
 
 Cost: `summary_inference` took 267 s on Windows in run 37984670056, and the
-Tests step took about 23 of its 55 minutes. The quality suite adds one model
-load and five generations, about 10 minutes by estimate.
+Tests step took about 23 of its 55 minutes. On PR #1 (run 37998052049) the
+quality suite loaded the 4B and passed all 8 checks in 140 s on Windows.
 
 ## Comments
