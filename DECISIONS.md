@@ -3819,7 +3819,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Read from each stage's CLI output and from database copies taken after each Core stopped (`diarize_rerun.started_at`, `meetings.diarized_at`, `speaker_exemplars`). The window was not driven: the Voices panel and the installer over a running app were driven in Q319, and the CLI calls the same Core methods. Afterwards everything was uninstalled and removed, including the installer copy in `%LOCALAPPDATA%\@evertranscriptclient-updater`; the real History (3 files, 1,866,176 bytes, newest 2026-08-31 05:34:23) and `%APPDATA%\EverTranscript\settings.json` were unchanged. Not covered: macOS, and a History with many Meetings.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** ca26859
 
 ## Q342 — interactive/zx8-upgrade-e2e — deviation
 
@@ -3829,4 +3829,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Both fix the root cause the same way; `main`'s also restricts links to the project's pages and is wired to the Core's update hold, and two update paths would contradict each other. Merging would only re-add what it replaced.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** ca26859
