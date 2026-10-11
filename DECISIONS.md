@@ -3859,4 +3859,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The shared copy alone was tried first and the e2e caught it closing setup right after the Briefing. A renderer test would need a DOM library the client does not have; the e2e drives the real window and Core instead. It failed on the old code and on the shared copy alone, and passed on the fix; client typecheck and 55 unit tests pass. It runs locally only, like every e2e script here.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** e2bace7
