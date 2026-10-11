@@ -3830,3 +3830,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Both fix the root cause the same way; `main`'s also restricts links to the project's pages and is wired to the Core's update hold, and two update paths would contradict each other. Merging would only re-add what it replaced.
 **Outcome:** applied
 **Ref:** ca26859
+
+## Q343 — interactive/release-1.1.3 — tradeoff
+
+**Question:** The user asked for 1.1.3 to carry the update-check fix, but a tag on `main` now fails its Mac build without the five signing and notarization secrets (Q324), and none are set. Where does 1.1.3 come from?
+**Options considered:** a release branch from v1.1.2 with only a link-only fix / set up signing and release `main`, as the planned v1.2.0-beta.1 / let a tagged build without Mac secrets publish Windows only
+**Chosen:** A release branch, `release/1.1.x`, from v1.1.2. Its one change: the update check runs on the shared, initialized connection, so it reaches GitHub at all (the defect Q328 found); a found version shows in the sidebar as a link to its release page; nothing is downloaded or installed, and the unused download and install handlers are removed; every `target="_blank"` link opens in the browser. The tag builds with v1.1.2's `package.yml`, which still allows an ad hoc Mac build. Not merged back: `main` keeps the signed in-app updater.
+**Decided-by:** human
+**Justification:** The user chose it when asked. Without it, everyone on 1.0.1 to 1.1.2 never hears of 1.2.0, since none of those versions checks. A link is what works for an unsigned build, and the first signed install is by hand anyway (Q324's spec). Verified before the release on a locally packaged Mac build numbered 1.1.1: a cold launch found 1.1.2 and showed the notice, the link went to `shell.openExternal` and opened no window, and with the setting off no check ran.
+**Outcome:** applied
+**Ref:** 06d8347 (`release/1.1.x`), PR #2
