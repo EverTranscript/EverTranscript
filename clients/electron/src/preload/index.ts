@@ -91,6 +91,17 @@ const api = {
   rerunSetup: (): void => ipcRenderer.send("setup:rerun"),
   confirm: (request: ConfirmRequest): Promise<boolean> =>
     ipcRenderer.invoke("dialog:confirm", request),
+  /** A newer version the update check found: one it found already, then any it finds later. */
+  onUpdateAvailable: (handler: (version: string) => void) => {
+    void (ipcRenderer.invoke("updates:available") as Promise<string | null>).then(
+      (version) => version && handler(version),
+    );
+    const listener = (_event: unknown, version: string) => handler(version);
+    ipcRenderer.on("updates:available", listener);
+    return (): void => {
+      ipcRenderer.off("updates:available", listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("evertranscript", api);

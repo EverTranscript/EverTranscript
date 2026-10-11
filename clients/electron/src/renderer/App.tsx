@@ -378,7 +378,33 @@ function Sidebar({
           ))
         )}
       </ul>
+      <UpdateOffer />
     </aside>
+  );
+}
+
+/**
+ * A newer version the update check found, and where to get it.
+ *
+ * A link to the release page rather than an install: neither build is signed,
+ * and Squirrel.Mac will not install into an app that is not (Q343).
+ */
+function UpdateOffer(): React.JSX.Element | null {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => window.evertranscript.onUpdateAvailable(setVersion), []);
+  if (!version) return null;
+  return (
+    <div role="status" className="border-t border-line px-4 py-3 text-xs">
+      {t("updates.available")} {version}
+      <a
+        href={`https://github.com/EverTranscript/EverTranscript/releases/tag/v${version}`}
+        target="_blank"
+        rel="noreferrer"
+        className="block py-1 underline"
+      >
+        {t("updates.download")}
+      </a>
+    </div>
   );
 }
 

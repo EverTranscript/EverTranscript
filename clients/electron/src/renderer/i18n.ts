@@ -192,6 +192,8 @@ const en = {
   "posture.amended": "Where these promises changed",
   "posture.source": "Read the source",
   "updates.title": "Check for updates",
+  "updates.available": "A new version is available:",
+  "updates.download": "Download it from GitHub",
   "updates.hint":
     "Asks GitHub which version is latest, and sends only the version you are running. Turn it off and — with models downloaded — this app makes no network calls at all.",
   "notes.title": "Notes",
@@ -487,6 +489,8 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "posture.amended": "这些承诺在何处发生过变化",
     "posture.source": "阅读源代码",
     "updates.title": "检查更新",
+    "updates.available": "有新版本可用：",
+    "updates.download": "从 GitHub 下载",
     "updates.hint":
       "向 GitHub 询问最新版本，只发送你当前运行的版本号。关闭它，并在模型已下载的情况下，本应用不会发起任何网络请求。",
     "notes.title": "笔记",

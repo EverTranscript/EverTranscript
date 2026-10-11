@@ -16,6 +16,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  shell,
   systemPreferences,
   type MenuItemConstructorOptions,
 } from "electron";
@@ -26,7 +27,7 @@ import type { ConfirmRequest, MenuState } from "../preload/index";
 import { CoreClient } from "./core-client.js";
 import { locateCore } from "./core-location.js";
 import { classifyCoreExit } from "./core-start.js";
-import { downloadUpdate, installUpdate, startUpdateChecks } from "./updates.js";
+import { startUpdateChecks } from "./updates.js";
 
 /**
  * The app icon, for the surfaces packaging does not cover yet.
@@ -191,6 +192,9 @@ async function coreClient(): Promise<CoreClient> {
         }
       });
       client = connected;
+      // On the first connection that works rather than at launch, so a Core
+      // still starting then does not cost the check.
+      void maybeCheckForUpdates(connected);
       return connected;
     })().catch((error) => {
       // Let the next request try again rather than caching the failure.
@@ -469,27 +473,33 @@ function forgetClient(): void {
 }
 
 
+/** The newer version a check found, for a window that opens after it did. */
+let availableUpdate: string | null = null;
+
 /**
  * Starts update checks only if the Operator has them on.
  *
  * The setting is read from the Core rather than kept here, because it is
  * the same switch the trust surface shows — two sources for one switch is how a switch ends up meaning different
- * things in two places. A Core that is not up yet simply means no check
- * this launch, which is the safe direction: the failure mode of asking
- * later is a missed update, and of assuming yes is traffic the Operator
- * turned off.
+ * things in two places. Asked on the shared connection, which has sent
+ * `initialize`: a connection of its own that had not was refused every
+ * time, so no release before this one ever checked (Q343).
  */
-async function maybeCheckForUpdates(): Promise<void> {
+async function maybeCheckForUpdates(core: CoreClient): Promise<void> {
   // Unpackaged builds have no update to install and no signature to check.
   if (!app.isPackaged) return;
   try {
-    const core = await connectWithRetry();
     const settings = (await core.request("settings/get", {})) as {
       checkForUpdates?: boolean;
     };
-    startUpdateChecks(settings.checkForUpdates === true);
+    startUpdateChecks(settings.checkForUpdates === true, (version) => {
+      availableUpdate = version;
+      for (const target of BrowserWindow.getAllWindows()) {
+        target.webContents.send("updates:available", version);
+      }
+    });
   } catch {
-    // No Core, no check.
+    // No answer, no check.
   }
 }
 
@@ -650,12 +660,16 @@ function buildMenu(): void {
   );
 }
 
-ipcMain.handle("updates:download", async () => {
-  await downloadUpdate();
-});
+ipcMain.handle("updates:available", () => availableUpdate);
 
-ipcMain.handle("updates:install", () => {
-  installUpdate();
+// A `target="_blank"` link opens in the browser. Without this Electron opens
+// it in a window of its own that inherits the preload, which would put the
+// Core's bridge in reach of whatever page it loads.
+app.on("web-contents-created", (_event, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("https://")) void shell.openExternal(url);
+    return { action: "deny" };
+  });
 });
 
 void app.whenReady().then(() => {
@@ -685,7 +699,6 @@ void app.whenReady().then(() => {
   }
 
   createWindow();
-  void maybeCheckForUpdates();
   // The Dock icon brings back the main window, even with Settings still open.
   app.on("activate", () => {
     if (!window) createWindow();

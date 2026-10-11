@@ -29,15 +29,18 @@ let started = false;
  * separately. Two sources for one
  * switch is how a switch ends up meaning different things in two places.
  */
-export function startUpdateChecks(enabled: boolean): void {
+export function startUpdateChecks(
+  enabled: boolean,
+  onAvailable: (version: string) => void,
+): void {
   if (!enabled || started) return;
   started = true;
 
-  // Downloading is opt-in per update. An updater that fetched a hundred
-  // megabytes in the background would be spending someone's tethered
-  // connection on a decision they have not made.
+  // Found, never fetched: the offer links to the release page (Q343).
+  // Squirrel.Mac refuses to install into an ad-hoc-signed app, so installing
+  // from here waits for ADR-0016's Developer ID signing.
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("update-available", (info) => onAvailable(info.version));
 
   // Never surfaced as an error the Operator must dismiss. A laptop on a
   // plane is not a problem to report, and nothing here may interrupt a
@@ -46,17 +49,4 @@ export function startUpdateChecks(enabled: boolean): void {
   autoUpdater.on("error", () => {});
 
   void autoUpdater.checkForUpdates().catch(() => {});
-}
-
-/** Downloads a found update, when the Operator asks for it. */
-export async function downloadUpdate(): Promise<void> {
-  await autoUpdater.downloadUpdate();
-}
-
-/** Quits and installs a downloaded update. */
-export function installUpdate(): void {
-  // The Core is a separate process and is quit by the app's own teardown;
-  // installing while it holds the History database open would leave a WAL
-  // behind for the next version to recover from.
-  autoUpdater.quitAndInstall();
 }
