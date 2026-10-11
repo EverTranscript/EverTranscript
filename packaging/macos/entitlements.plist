@@ -34,9 +34,13 @@
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
 
-    <!-- Sanctioned Traffic, entries one to three (ADR-0034). Outgoing only:
-         nothing in this product listens on a socket, so there is no server
-         entitlement here and its absence is the point. -->
+    <!-- Sanctioned Traffic, entries one to three (ADR-0034). Outgoing, with
+         one exception: once an update has downloaded, the updater listens on
+         127.0.0.1, on a port the system picks and behind a password it makes
+         up, to hand the downloaded app to Squirrel.Mac. It stops when the
+         install begins or the app quits, and nothing beyond this machine can
+         reach it (DECISIONS Q335). The app is not sandboxed, so no server
+         entitlement is needed for that, and none is here. -->
     <key>com.apple.security.network.client</key>
     <true/>
 

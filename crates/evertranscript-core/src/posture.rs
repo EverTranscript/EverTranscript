@@ -160,8 +160,14 @@ pub fn sanctioned_traffic(
     vec![
         SanctionedTraffic {
             name: "Update check",
-            host: crate::updates::UPDATE_FEED_HOST.to_string(),
-            what_it_sends: "The version you are running. Nothing about your \
+            host: format!(
+                "{}, {}",
+                crate::updates::UPDATE_FEED_HOST,
+                crate::updates::UPDATE_FILES_HOST
+            ),
+            what_it_sends: "The version you are running, to learn which is \
+                            latest. Only when you press Download, a request \
+                            for that version's files. Nothing about your \
                             meetings, your machine, or you.",
             enabled: updates_enabled,
             disableable: true,
@@ -281,6 +287,21 @@ mod tests {
         // matters.
         let traffic = sanctioned_traffic(true, false, Some("local"), None);
         assert!(!currently_silent(&traffic, true));
+    }
+
+    #[test]
+    fn the_update_entry_names_every_host_a_check_or_download_reaches() {
+        // The feed file itself redirects to GitHub's file host, so naming
+        // only the feed host understated even a plain check (Q335).
+        let traffic = sanctioned_traffic(true, false, Some("local"), None);
+        let update = traffic.iter().find(|entry| entry.name == "Update check");
+        let update = update.expect("an update entry");
+        assert!(update.host.contains(crate::updates::UPDATE_FEED_HOST));
+        assert!(update.host.contains(crate::updates::UPDATE_FILES_HOST));
+        assert!(
+            update.what_it_sends.contains("Download"),
+            "the download is named"
+        );
     }
 
     #[test]

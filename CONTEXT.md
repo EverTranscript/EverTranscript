@@ -138,7 +138,7 @@ The input-side twin of the Closed Boundary, twice narrowed: the product processe
 _Avoid_: passive capture, background monitoring
 
 **Sanctioned Traffic**:
-The enumerable network calls the product may ever make: the disableable update check, checksummed model downloads, and the cloud Backend the Operator chose. Beyond this list, the wire is silent. **Model downloads are not all Operator-initiated**: a fresh install fetches what it needs by itself, and saying otherwise would describe a product this is not. **Two of the three are content-free; the third is not, and calling the whole list content-free would be false.** The cloud Summary Backend sends the text of a meeting — that is its purpose, it happens only under an explicit choice (ADR-0013), and it is the single path by which anything said in a meeting can leave the machine.
+The enumerable network calls the product may ever make: the disableable update check (and the update it found, downloaded only when the Operator presses Download), checksummed model downloads, and the cloud Backend the Operator chose. Beyond this list, the wire is silent. **Model downloads are not all Operator-initiated**: a fresh install fetches what it needs by itself, and saying otherwise would describe a product this is not. **Two of the three are content-free; the third is not, and calling the whole list content-free would be false.** The cloud Summary Backend sends the text of a meeting — that is its purpose, it happens only under an explicit choice (ADR-0013), and it is the single path by which anything said in a meeting can leave the machine.
 _Avoid_: allowlist, phoning home, "content-free" as a description of the whole list
 
 ### Onboarding

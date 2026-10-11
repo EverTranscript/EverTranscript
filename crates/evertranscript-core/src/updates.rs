@@ -18,6 +18,11 @@
 /// can show the exact host an Operator would see in a firewall log.
 pub const UPDATE_FEED_HOST: &str = "https://github.com/EverTranscript/EverTranscript";
 
+/// Where GitHub serves a release's files: the feed file every check reads,
+/// and the update itself when the Operator presses Download. Release links
+/// on the feed host redirect here, so a firewall log shows both (Q335).
+pub const UPDATE_FILES_HOST: &str = "https://release-assets.githubusercontent.com";
+
 /// Whether any process is running the executable at `path` (DECISIONS Q333).
 ///
 /// The Windows installer stops every process under the install folder, this

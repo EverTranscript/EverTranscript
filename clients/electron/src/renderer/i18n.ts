@@ -195,7 +195,7 @@ const en = {
   "posture.source": "Read the source",
   "updates.title": "Check for updates",
   "updates.hint":
-    "Asks GitHub which version is latest, and sends only the version you are running. Turn it off and — with models downloaded — this app makes no network calls at all.",
+    "Asks GitHub which version is latest, and sends only the version you are running. A new version downloads only when you press Download. Turn it off and — with models downloaded — this app makes no network calls at all.",
   "updates.available": "A new version is available:",
   "updates.download": "Download",
   "updates.notes": "Release notes",
@@ -503,7 +503,7 @@ const catalogs: Record<string, Partial<Record<MessageKey, string>>> = {
     "posture.source": "阅读源代码",
     "updates.title": "检查更新",
     "updates.hint":
-      "向 GitHub 询问最新版本，只发送你当前运行的版本号。关闭它，并在模型已下载的情况下，本应用不会发起任何网络请求。",
+      "向 GitHub 询问最新版本，只发送你当前运行的版本号。只有在你点击“下载”后才会下载新版本。关闭它，并在模型已下载的情况下，本应用不会发起任何网络请求。",
     "updates.available": "有新版本可用：",
     "updates.download": "下载",
     "updates.notes": "更新说明",

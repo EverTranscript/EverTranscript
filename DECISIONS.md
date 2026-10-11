@@ -3750,3 +3750,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Q12 says the Client restarts an *older* Core. Restarting on any difference would let an older Client — a rollback, or a second copy of the app — replace a newer Core, and saving a version comparison does not authorize that. A version that does not parse proves nothing about which side is older, so it must not cause a stop.
 **Outcome:** pending
 **Ref:** `clients/electron/src/main/updates.ts` (`catchUpCore`), `packaging/README.md`, Q12, Q333
+
+## Q335 — signed-in-app-updates/slice-5 — interpretation
+
+**Question:** What exactly must the trust surface say about updates once the Client can download one (Q14)?
+**Options considered:** add "and the download" to entry one's wording / measure what a check and a download actually reach, and state that
+**Chosen:** Measured, then stated. Entry one is the check and, only when the Operator presses Download, the download of the update it found. It reaches two hosts, and the What It Knows entry now names both: `github.com/EverTranscript/EverTranscript` and `release-assets.githubusercontent.com` (new `UPDATE_FILES_HOST`). ADR-0034 carries a third amendment note; the Settings hint and the `CONTEXT.md` glossary say the download happens only on Download, in English and Chinese. The entitlements comment no longer says nothing listens on a socket: it names the macOS updater's `127.0.0.1` listener and how long it lives.
+**Decided-by:** Claude
+**Justification:** `curl -sI` on the v1.1.2 release shows `releases/download/v1.1.2/latest-mac.yml` answering 302 to `release-assets.githubusercontent.com`, so even a plain check reached a host the surface never named — an understatement that predates this work. In `MacUpdater.js` (electron-updater 6.8.9) the listener binds `127.0.0.1` on port 0 with generated basic-auth credentials. With `autoInstallOnAppQuit` off (Q11) it starts when a download finishes and closes when the install begins or the app quits, so it can stay open for as long as the Operator leaves the update unapplied — not "a few seconds", as the spec's Q14 row put it. What It Knows never claimed that nothing listens, so only its update entry changed. The app is not sandboxed, so no server entitlement is needed, and none was added.
+**Outcome:** A posture test asserts the update entry names both hosts and the download. The plist passes `plutil -lint`.
+**Ref:** `crates/evertranscript-core/src/updates.rs` (`UPDATE_FILES_HOST`), `crates/evertranscript-core/src/posture.rs`, `docs/adr/0034-no-telemetry-sanctioned-traffic-only.md`, `packaging/macos/entitlements.plist`, `clients/electron/src/renderer/i18n.ts`, `CONTEXT.md`, Q14
