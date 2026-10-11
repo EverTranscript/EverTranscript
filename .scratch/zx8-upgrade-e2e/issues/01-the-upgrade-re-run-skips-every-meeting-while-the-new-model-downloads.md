@@ -93,3 +93,8 @@ Fixed in 1.1.2 (Q321).
 
 `tests/diarize_queue.rs` used "no models → leaves the line" as its sign that
 a run was let through. Its Meetings now have no audio instead.
+
+Verified end to end on 2026-10-10 (Q341): on windows-zx8 the published
+1.0.1 → 1.1.1 → 1.1.2 installers reproduced the skip on 1.1.1, and 1.1.2's
+first start relearned Alice Test in 3 s. Still not checked: macOS, and a
+History with many Meetings.

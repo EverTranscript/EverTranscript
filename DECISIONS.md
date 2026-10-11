@@ -3810,3 +3810,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Q339 requires isolation that is in place before the app can touch data, and that survives a relaunch. With defaults that are isolated by construction, nothing depends on the environment, so the relaunch path no longer matters.
 **Outcome:** Instructions only. The account is the Operator's to create; Q319 found that none existed. The fingerprint of the real History stays in the checklist as detection, not as protection. Not run: the three checks and the rehearsal itself, which wait for the account and for `beta.1`.
 **Ref:** `clients/electron/src/main/updates.ts` (`quitAndInstall(true, true)`), `app-builder-lib/templates/nsis/installSection.nsh`, `common.nsh` (`StartApp`), `assistedInstaller.nsh`, `crates/evertranscript-core/src/paths.rs` (`history_dir`, `pipe_name`), Q319, Q339
+
+## Q341 — interactive/zx8-upgrade-e2e — finding
+
+**Question:** Does 1.1.2 repair a History that 1.1.1's upgrade left without Voiceprints, as Q321 and the 1.1.2 release notes say?
+**Options considered:** —
+**Chosen:** **Yes, on windows-zx8, with one Meeting.** The published installers ran silently, per-user, in sequence, each Core started in test folders (Q319's variables) and driven through its own CLI. 1.0.1 recorded the two-voice clip and the second voice was named Alice Test (a `wespeaker` Voiceprint). 1.1.1 then reproduced Q320 exactly: at 22:46:28.96 it discarded the old embedding, answered "models are not downloaded" for the Meeting, and stamped the re-run done with no Voiceprints left; the model landed 6 s later. On 1.1.2's first start, migration 18 (schema 17 → 18) put the stamp back, the re-run began at 22:49:44.8, and 3 s later the Meeting was re-attributed and Alice Test had a `redimnet2-b3` Voiceprint. The unnamed operator voice got none, as ADR-0037 intends.
+**Decided-by:** agent
+**Justification:** Read from each stage's CLI output and from database copies taken after each Core stopped (`diarize_rerun.started_at`, `meetings.diarized_at`, `speaker_exemplars`). The window was not driven: the Voices panel and the installer over a running app were driven in Q319, and the CLI calls the same Core methods. Afterwards everything was uninstalled and removed, including the installer copy in `%LOCALAPPDATA%\@evertranscriptclient-updater`; the real History (3 files, 1,866,176 bytes, newest 2026-08-31 05:34:23) and `%APPDATA%\EverTranscript\settings.json` were unchanged. Not covered: macOS, and a History with many Meetings.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q342 — interactive/zx8-upgrade-e2e — deviation
+
+**Question:** The user asked to push a fix for ticket 03 (the update check sent `settings/get` before `initialize`, plus a sidebar link to the release page), but `main` had meanwhile gained the signed-in-app-updates work (Q324–Q340), which fixes the same defect and builds a click-to-install offer. Push both?
+**Options considered:** merge the two / push mine on top / drop mine
+**Chosen:** Dropped mine: the client changes, its own journal entry and its answer on ticket 03. Kept only what `main` lacked: the 1.0.1 → 1.1.2 upgrade finding (Q341) and its note on ticket 01. The dropped diff is saved in `/tmp/etprune/superseded/` on mac-mini-m6.
+**Decided-by:** agent
+**Justification:** Both fix the root cause the same way; `main`'s also restricts links to the project's pages and is wired to the Core's update hold, and two update paths would contradict each other. Merging would only re-add what it replaced.
+**Outcome:** applied
+**Ref:** (pending)
