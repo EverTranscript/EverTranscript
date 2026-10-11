@@ -3840,3 +3840,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user chose it when asked. Without it, everyone on 1.0.1 to 1.1.2 never hears of 1.2.0, since none of those versions checks. A link is what works for an unsigned build, and the first signed install is by hand anyway (Q324's spec). Verified before the release on a locally packaged Mac build numbered 1.1.1: a cold launch found 1.1.2 and showed the notice, the link went to `shell.openExternal` and opened no window, and with the setting off no check ran.
 **Outcome:** applied
 **Ref:** 06d8347 (`release/1.1.x`), PR #2
+
+## Q344 — interactive/release-1.1.3 — irreversible-action
+
+**Question:** Publish 1.1.3 from `release/1.1.x` (Q343) as the Latest release?
+**Options considered:** —
+**Chosen:** Released v1.1.3, tagged on 06d8347 after PR #2's CI passed on both platforms, published as the Latest GitHub release with packaging run 38149023156's artifacts and one combined `SHA256SUMS` laid out as v1.1.2's was.
+**Decided-by:** human
+**Justification:** The user asked for 1.1.3. Each file matched its platform's `SHA256SUMS`, each feed's sha512 matched its installer, and the Mac app's `app.asar` carries the fix (`updates:available`, `setWindowOpenHandler`, version 1.1.3) and not the removed `updates:download`/`updates:install`. The Windows packaging job installed and ran the build. Not verified: the update notice on Windows, Q296, Q301. The first version that can show the notice is 1.1.3 itself, so a user learns of the next release only once they are on 1.1.3.
+**Outcome:** applied
+**Ref:** v1.1.3 (tag on 06d8347), https://github.com/EverTranscript/EverTranscript/releases/tag/v1.1.3
