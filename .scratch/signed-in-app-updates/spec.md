@@ -76,6 +76,10 @@ Each lands on `main` after fmt, clippy, the Rust suite and the Electron tests.
 1. Create a Developer ID Application certificate and export it as `.p12`.
 2. Create an App Store Connect API key: the `.p8`, its Key ID and Issuer ID.
 3. Add the five secrets named above.
+
+   Steps 1–3 done 2026-10-11: certificate `GNRPYNG73P` (G2 Sub-CA, expires
+   2031-09-16), notarization key `9Y7ZV5GRZQ` with Developer access, and all
+   five secrets set on `github.com/EverTranscript/EverTranscript`.
 4. Cut `v1.2.0-beta.1`, then `beta.2`, then stable once both rehearsals pass,
    following "Rehearsing an update" in `packaging/README.md`: set both
    versions before each tag, and collect its evidence on both machines.

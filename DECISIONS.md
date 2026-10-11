@@ -3860,3 +3860,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The shared copy alone was tried first and the e2e caught it closing setup right after the Briefing. A renderer test would need a DOM library the client does not have; the e2e drives the real window and Core instead. It failed on the old code and on the shared copy alone, and passed on the fix; client typecheck and 55 unit tests pass. It runs locally only, like every e2e script here.
 **Outcome:** applied
 **Ref:** e2bace7
+
+## Q346 — signed-in-app-updates/operator — deviation
+
+**Question:** The Operator's checklist (`packaging/README.md` §Signing and notarizing releases) goes through Keychain Access and a browser by hand. How is it done from an agent session, and which Developer ID intermediary?
+**Options considered:** Keychain Access + the user clicking / openssl key and CSR + jev-chrome / openssl + a raw Chrome DevTools Protocol script against the signed-in CDP Chrome / the Xcode Accounts pane
+**Chosen:** openssl made the 2048-bit key and CSR; the Apple pages were driven over raw CDP (`Runtime.evaluate`, `DOM.setFileInputFiles`, `Page.setDownloadBehavior`) in the user's signed-in Chrome after jev-chrome stalled on the certificate type page and Playwright's `connectOverCDP` hung on this Chrome build. The certificate is issued from the **G2 Sub-CA**: Apple's form preselected "Previous Sub-CA", whose certificates expire 2027-02-01, and the checklist does not name an intermediary. The `.p12` carries the identity plus the Developer ID G2 intermediate, exported with SHA1/3DES PBE so `security import` accepts it; the API key has Developer access, as the checklist says.
+**Decided-by:** agent
+**Justification:** Same artifacts the checklist produces, each step checkable: the key matches the certificate, the `.p12` imports into a throwaway keychain and signs a binary with a trusted timestamp (`TeamIdentifier=9958A27J47`, chain to Apple Root CA), and `notarytool history` authenticates with the new key. G2 is the only intermediary that outlives the certificate's own 2031-09-16 expiry. Chrome's download chooser never fired without a CDP download path, so the `.cer` and the once-only `.p8` were saved through `Page.setDownloadBehavior`.
+**Outcome:** applied
+**Ref:** (pending)
+
+## Q347 — signed-in-app-updates/operator — gate-resolution
+
+**Question:** Where do the `.p8` and the login-keychain copy of the identity live once the secrets are set, given the checklist deletes only the `.p12`?
+**Options considered:** keep the `.p8` only in GitHub / `~/.private_keys/AuthKey_<KEYID>.p8` / import the identity into the login keychain now
+**Chosen:** The `.p8` is at `~/.private_keys/AuthKey_9Y7ZV5GRZQ.p8` (0600), where `notarytool` looks by default, so a lost secret is re-set from disk instead of revoking the key. The login-keychain import is deferred: this session cannot unlock the login keychain ("User interaction is not allowed"), so the `.p12` and its password stay in the 0700 work folder until the user unlocks the keychain and the import runs, then both are deleted.
+**Decided-by:** agent
+**Justification:** The checklist (step 5) says the identity stays in the login keychain for local builds and that a lost `.p8` is revoked, not recovered; keeping the file is the cheapest way to avoid that. Deleting the `.p12` before the import would strand the private key that the spec's slice 6 (this Mac's local signing) needs.
+**Outcome:** assumed
+**Ref:** (pending)
