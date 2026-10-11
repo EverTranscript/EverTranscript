@@ -3869,7 +3869,7 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** Same artifacts the checklist produces, each step checkable: the key matches the certificate, the `.p12` imports into a throwaway keychain and signs a binary with a trusted timestamp (`TeamIdentifier=9958A27J47`, chain to Apple Root CA), and `notarytool history` authenticates with the new key. G2 is the only intermediary that outlives the certificate's own 2031-09-16 expiry. Chrome's download chooser never fired without a CDP download path, so the `.cer` and the once-only `.p8` were saved through `Page.setDownloadBehavior`.
 **Outcome:** applied
-**Ref:** (pending)
+**Ref:** 40bb542
 
 ## Q347 — signed-in-app-updates/operator — gate-resolution
 
@@ -3879,4 +3879,4 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Decided-by:** agent
 **Justification:** The checklist (step 5) says the identity stays in the login keychain for local builds and that a lost `.p8` is revoked, not recovered; keeping the file is the cheapest way to avoid that. Deleting the `.p12` before the import would strand the private key that the spec's slice 6 (this Mac's local signing) needs.
 **Outcome:** assumed
-**Ref:** (pending)
+**Ref:** 40bb542
