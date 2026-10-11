@@ -80,12 +80,16 @@ Each lands on `main` after fmt, clippy, the Rust suite and the Electron tests.
    following "Rehearsing an update" in `packaging/README.md`: set both
    versions before each tag, and collect its evidence on both machines.
 5. Re-grant the five permissions on this Mac when beta.1 is installed.
+6. On windows-zx8, before anything is installed there, create the separate
+   standard test account and pass its three checks (Q339, Q340). The
+   Windows rehearsal runs only inside that account.
 
 ## Done when
 
 - beta.1 → beta.2 installs in-app on this Mac: the new `LC_UUID` matches the
   release, the Core runs the new version, and History matches a backup.
-- The same holds on windows-zx8.
+- The same holds on windows-zx8, inside the test account, with the real
+  History's fingerprint unchanged.
 
 ## Out of scope
 

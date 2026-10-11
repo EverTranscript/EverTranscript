@@ -3790,3 +3790,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The advisor asked for this check before waiting on the Operator, and the steps were missing. A tag changes no version: electron-builder reads `package.json` and the Core reports `Cargo.toml`, and CI checks neither against the tag. A version left behind fails silently, because the feed offers nothing or the Core is never restarted (Q334). Q319 already showed that a Windows test on zx8 must not touch its real History, which OneDrive syncs.
 **Outcome:** Instructions only. The backup snippet was run read-only against this Mac's History: it resolves `.data/EverTranscript.db`, `user_version` 17, 23 Meetings. Nothing in it has run against a beta, because no beta exists yet.
 **Ref:** `packaging/README.md` ("Rehearsing an update"), `.scratch/signed-in-app-updates/spec.md`, Q319, Q324, Q333, Q334
+
+## Q339 — signed-in-app-updates/rehearsal — decision
+
+**Question:** Does Q338's Windows rehearsal protect the real History on windows-zx8, given that it runs the app with test-path variables and checks `status` after launch?
+**Options considered:** keep the variables and the after-launch `status` and fingerprint checks / prove that the variables survive this exact relaunch path with a harmless offline probe before any live run / require a separate disposable Windows account or profile that has no real History or OneDrive data the app could reach
+**Chosen:** Q338 is not accepted as protection. Isolation must hold before the app can touch data, and it must survive a relaunch. Either the second or the third option establishes it, and the checklist blocks the first live launch until one of them has. A `status` check after launch, or a fingerprint compared afterwards, detects damage; it does not prevent it.
+**Decided-by:** advisor
+**Justification:** Q319 records that electron-builder's installer relaunched the app through Explorer without the test variables. If the update's relaunch does the same, the app opens the real History, which OneDrive syncs, before anything can check it.
+**Outcome:** The rehearsal section of `packaging/README.md` is corrected in the same change. This turn is instructions and proof only: no real History is touched, and no account, install, version, tag or release is made.
+**Ref:** Q319, Q338, `packaging/README.md` ("Rehearsing an update")
+
+## Q340 — signed-in-app-updates/rehearsal — finding
+
+**Question:** Of Q339's two ways to isolate the Windows rehearsal, which one can hold: proving that the test-path variables survive the relaunch, or a separate account?
+**Options considered:** an offline probe of environment preservation through the update's relaunch / a separate standard Windows account with no real History or OneDrive it could reach
+**Chosen:** The separate account. The probe would re-test a path the record already shows failing. The Client calls `quitAndInstall(true, true)`. For an assisted installer (`oneClick: false`), that runs the silent `--force-run` branch of electron-builder 26.15.3's `installSection.nsh`, which calls `doStartApp` → `StartApp` → `StdUtils.ExecShellAsUser` on `$launchLink`, the Start Menu shortcut. The finish page in Q319 made the same call, and there it started the app through Explorer without the test variables. The account route needs no variable: the Core's History is `dirs::document_dir()`, which is the account's own Documents folder, and its pipe name carries `USERNAME`. A standard account cannot read another profile, which is where the real History lives (`OneDrive\Documents\EverTranscript`). The checklist blocks every install until three checks pass in that account: Documents is local to its profile, the real History folder gives "access denied", and no `EVERTRANSCRIPT_*` variable is set.
+**Decided-by:** Claude
+**Justification:** Q339 requires isolation that is in place before the app can touch data, and that survives a relaunch. With defaults that are isolated by construction, nothing depends on the environment, so the relaunch path no longer matters.
+**Outcome:** Instructions only. The account is the Operator's to create; Q319 found that none existed. The fingerprint of the real History stays in the checklist as detection, not as protection. Not run: the three checks and the rehearsal itself, which wait for the account and for `beta.1`.
+**Ref:** `clients/electron/src/main/updates.ts` (`quitAndInstall(true, true)`), `app-builder-lib/templates/nsis/installSection.nsh`, `common.nsh` (`StartApp`), `assistedInstaller.nsh`, `crates/evertranscript-core/src/paths.rs` (`history_dir`, `pipe_name`), Q319, Q339

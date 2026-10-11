@@ -182,6 +182,31 @@ release.
 signature to check, SmartScreen warns at the manual beta.1 install, and the
 updater's only check is the sha512 in `beta.yml`.
 
+**On windows-zx8, isolate first: nothing is installed or launched until a
+separate account is ready** (Q339, Q340). Test-path variables cannot protect
+the real History there. The in-app update relaunches the app through
+`StdUtils.ExecShellAsUser`, which is the same call that dropped Q319's
+variables. A check after launch would only find damage that was already done.
+So the rehearsal runs in an account that has no real History to reach:
+
+1. Create a new **standard (not administrator) local account**, used only for
+   the rehearsal. Don't sign it in to a Microsoft account or OneDrive.
+2. Sign in as that account. Before installing anything, check in PowerShell:
+
+   ```powershell
+   [Environment]::GetFolderPath('MyDocuments')   # under C:\Users\<test>, not OneDrive
+   Get-ChildItem C:\Users\<operator>\OneDrive\Documents\EverTranscript   # must fail: access denied
+   Get-ChildItem env:EVERTRANSCRIPT*             # must list nothing
+   ```
+
+   A standard account cannot read another account's profile, and its
+   History, settings and Core pipe (which carries `USERNAME`) are its own by
+   default. So there is no variable for a relaunch to lose.
+3. If any check fails, stop. Don't install.
+4. Run the whole rehearsal in this account's session: the beta.1 install,
+   the update, and every relaunch. Afterwards, uninstall the app and delete
+   the account and its profile.
+
 **Evidence, on both machines.** Collect it before the manual beta.1 install,
 again before pressing **Restart to Update** for beta.2, and after each
 install. `$ET` is the installed Core, as in the first-install steps above.
@@ -197,13 +222,11 @@ install. `$ET` is the installed Core, as in the first-install steps above.
      sqlite3 "$B" 'PRAGMA integrity_check; PRAGMA user_version; SELECT count(*) FROM meetings;'
      ```
 
-   - windows-zx8: the rehearsal never touches the real History. Run it on a
-     test History the way Q319 did: start the installer and the app with
-     `EVERTRANSCRIPT_HISTORY_DIR`, `EVERTRANSCRIPT_APP_SUPPORT_DIR` and
-     `EVERTRANSCRIPT_NO_LOGIN_ITEM` set, untick "Run EverTranscript" on the
-     installer's last page, and run every command below with the same
-     variables. Record the real History folder's fingerprint (entries, total
-     bytes, newest file) before and after.
+   - windows-zx8: the test account's History is new and disposable, so its
+     record is the `$ET list` output. From the Operator's own account,
+     record the real History folder's fingerprint (entries, total bytes,
+     newest file) before and after. This detects damage and doesn't prevent
+     it; the account above is what prevents it.
 2. **Release and build identity.** Download the beta's artifact and
    `SHA256SUMS` with `gh release download v1.2.0-beta.N -R
    github.com/EverTranscript/EverTranscript`, and check the artifact's hash
@@ -220,7 +243,7 @@ install. `$ET` is the installed Core, as in the first-install steps above.
    binary on disk) and `$ET status` (the Core that is running, with its pid)
    must both name the beta. A `status` that still names the previous version,
    under the old pid, means the Core was not restarted (Q333, Q334). On
-   zx8, `status` must also still name the test History.
+   zx8, `status` must name a History under the test account's profile.
 4. **History compared.** After each install, `$ET list` names the same
    Meetings as before it. On the Mac, the database passes `integrity_check`,
    and its Meeting count and `user_version` match the backup, unless the beta
