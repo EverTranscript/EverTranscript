@@ -34,7 +34,13 @@ export function App(): React.JSX.Element {
   const [showingRegistry, setShowingRegistry] = useState(false);
   const [showingPosture, setShowingPosture] = useState(false);
   const [showingOnboarding, setShowingOnboarding] = useState(false);
-  const { briefing } = useBriefing();
+  // One copy for the gate and for setup: when each held its own, acknowledging
+  // refreshed only setup's, and Done left setup showing (zx8-upgrade-e2e/02).
+  const { briefing, acknowledge } = useBriefing();
+  // Setup, once started, runs to Done: acknowledging is only its first step.
+  useEffect(() => {
+    if (briefing && !briefing.acknowledged) setShowingOnboarding(true);
+  }, [briefing]);
 
   const recording = useMemo(
     () => core.meetings.find((meeting) => !meeting.endedAt) ?? null,
@@ -155,7 +161,11 @@ export function App(): React.JSX.Element {
   if (!briefing?.acknowledged || showingOnboarding) {
     return (
       <Frame>
-        <Onboarding onDone={() => setShowingOnboarding(false)} />
+        <Onboarding
+          briefing={briefing}
+          acknowledge={acknowledge}
+          onDone={() => setShowingOnboarding(false)}
+        />
       </Frame>
     );
   }
@@ -1822,8 +1832,11 @@ function PosturePanel({ onClose }: { onClose: () => void }): React.JSX.Element {
  * the Backend step is not skippable, because ADR-0013 requires an explicit
  * choice and "decide later" is a preselection with better manners.
  */
-function Onboarding({ onDone }: { onDone: () => void }): React.JSX.Element {
-  const { briefing, acknowledge } = useBriefing();
+function Onboarding({
+  briefing,
+  acknowledge,
+  onDone,
+}: ReturnType<typeof useBriefing> & { onDone: () => void }): React.JSX.Element {
   const [step, setStep] = useState(0);
   const { backends } = useSummaryBackends();
 

@@ -3850,3 +3850,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The user asked for 1.1.3. Each file matched its platform's `SHA256SUMS`, each feed's sha512 matched its installer, and the Mac app's `app.asar` carries the fix (`updates:available`, `setWindowOpenHandler`, version 1.1.3) and not the removed `updates:download`/`updates:install`. The Windows packaging job installed and ran the build. Not verified: the update notice on Windows, Q296, Q301. The first version that can show the notice is 1.1.3 itself, so a user learns of the next release only once they are on 1.1.3.
 **Outcome:** applied
 **Ref:** v1.1.3 (tag on 06d8347), https://github.com/EverTranscript/EverTranscript/releases/tag/v1.1.3
+
+## Q345 — zx8-upgrade-e2e/02 — deviation
+
+**Question:** How should setup close after Done when the gate and setup each hold their own copy of the Briefing, and how is that tested?
+**Options considered:** one `useBriefing()` in `App`, passed down / refresh `App`'s copy from `onDone` / a renderer unit test with a DOM library / an e2e script on the real Client
+**Chosen:** One copy, passed down, plus `App` setting `showingOnboarding` when it finds the Briefing unacknowledged, so that setup runs to Done instead of closing at step 1. Tested by `scripts/e2e-setup.sh`, modelled on `e2e-update-strip.sh`, rather than the renderer test the ticket asked for.
+**Decided-by:** agent
+**Justification:** The shared copy alone was tried first and the e2e caught it closing setup right after the Briefing. A renderer test would need a DOM library the client does not have; the e2e drives the real window and Core instead. It failed on the old code and on the shared copy alone, and passed on the fix; client typecheck and 55 unit tests pass. It runs locally only, like every e2e script here.
+**Outcome:** applied
+**Ref:** (pending)

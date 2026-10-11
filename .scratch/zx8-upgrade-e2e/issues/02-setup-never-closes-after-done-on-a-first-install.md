@@ -1,6 +1,6 @@
 # 02: Setup never closes after "Done" on a first install
 
-Status: ready-for-agent
+Status: done
 
 Priority: medium. Every first install hits it. Closing and reopening the app
 gets past it, but nothing tells the Operator to do that.
@@ -35,3 +35,21 @@ watch a fresh 1.1.1 install.
   and asserts the main view appears after "Done". It must fail on `main`.
 - No test covers setup today. `scripts/e2e-registry.sh` seeds
   `briefingAcknowledged`, so it skips setup.
+
+## Answer
+
+Fixed on `main` (Q345).
+
+- `App` calls `useBriefing()` once and passes `briefing` and `acknowledge` to
+  `Onboarding`, so the gate sees the acknowledgement.
+- That alone closed setup the moment the Briefing was acknowledged, skipping
+  steps 2 to 7. So `App` now also sets `showingOnboarding` when it finds the
+  Briefing unacknowledged, and setup runs until Done clears it.
+- **Test:** `scripts/e2e-setup.sh`, not a renderer unit test: the client's
+  tests run without a DOM. It starts the real Client against an isolated
+  debug Core with the Briefing unacknowledged, acknowledges, presses Continue
+  through every step and Done on the last, and asserts the main view. It
+  fails on the old code ("setup is still showing after Done") and on the
+  shared copy alone ("nothing to press on step 1"), and passes on the fix.
+  Like the other e2e scripts it runs locally, not in CI; it needs
+  `playwright-cli`.
