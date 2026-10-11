@@ -76,7 +76,9 @@ Each lands on `main` after fmt, clippy, the Rust suite and the Electron tests.
 1. Create a Developer ID Application certificate and export it as `.p12`.
 2. Create an App Store Connect API key: the `.p8`, its Key ID and Issuer ID.
 3. Add the five secrets named above.
-4. Cut `v1.2.0-beta.1`, then `beta.2`, then stable once both rehearsals pass.
+4. Cut `v1.2.0-beta.1`, then `beta.2`, then stable once both rehearsals pass,
+   following "Rehearsing an update" in `packaging/README.md`: set both
+   versions before each tag, and collect its evidence on both machines.
 5. Re-grant the five permissions on this Mac when beta.1 is installed.
 
 ## Done when

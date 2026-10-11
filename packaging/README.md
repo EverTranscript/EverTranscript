@@ -152,6 +152,80 @@ old Core while it is Idle:
 Every update after that one arrives in the app, and the release notes of the
 first signed release say so.
 
+### Rehearsing an update: two betas before a stable release
+
+Stable 1.2.0 is cut only after `v1.2.0-beta.1` → `beta.2` has installed
+through the app on the Operator's Mac and on windows-zx8 (DECISIONS Q324).
+It is the one test of the whole chain: CI signing, notarization, the GitHub
+feed, Squirrel.Mac and NSIS.
+
+**Set the version before each tag.** A tag names a commit and changes no
+version. electron-builder names the artifacts and writes `beta-mac.yml` /
+`beta.yml` from `clients/electron/package.json`, and the Core reports the
+version in `Cargo.toml`. So, for each `v1.2.0-beta.N`:
+
+1. Set `version` in the root `Cargo.toml` (`[workspace.package]`) and in
+   `clients/electron/package.json` to `1.2.0-beta.N`: no `v`, the same string
+   in both.
+2. Run `cargo check`, so `Cargo.lock` follows, and commit the three files as
+   `Version 1.2.0-beta.N`, as every earlier version was.
+3. Tag that commit `v1.2.0-beta.N`, and publish its release as a
+   **pre-release**.
+
+A version left behind fails silently. A feed that still says beta.1 offers no
+update, and a Core that still says beta.1 is never restarted, because the
+Client restarts only an older Core (Q334). The `-beta.` part puts the build
+on the `beta` channel, which is offered later betas and then the stable
+release.
+
+**Windows stays unsigned** (Q324, Q13 of the grill). There is no Authenticode
+signature to check, SmartScreen warns at the manual beta.1 install, and the
+updater's only check is the sha512 in `beta.yml`.
+
+**Evidence, on both machines.** Collect it before the manual beta.1 install,
+again before pressing **Restart to Update** for beta.2, and after each
+install. `$ET` is the installed Core, as in the first-install steps above.
+
+1. **History backup.**
+   - Mac: the rehearsal runs on the real History. With `$ET status` Idle,
+     back up the database and check the copy:
+
+     ```sh
+     H="$($ET status | awk '/history/ {print $2}')/.data/EverTranscript.db"
+     B=~/EverTranscript-backups/EverTranscript.db.before-beta-$(date +%Y%m%d-%H%M%S)
+     sqlite3 "$H" ".backup '$B'"
+     sqlite3 "$B" 'PRAGMA integrity_check; PRAGMA user_version; SELECT count(*) FROM meetings;'
+     ```
+
+   - windows-zx8: the rehearsal never touches the real History. Run it on a
+     test History the way Q319 did: start the installer and the app with
+     `EVERTRANSCRIPT_HISTORY_DIR`, `EVERTRANSCRIPT_APP_SUPPORT_DIR` and
+     `EVERTRANSCRIPT_NO_LOGIN_ITEM` set, untick "Run EverTranscript" on the
+     installer's last page, and run every command below with the same
+     variables. Record the real History folder's fingerprint (entries, total
+     bytes, newest file) before and after.
+2. **Release and build identity.** Download the beta's artifact and
+   `SHA256SUMS` with `gh release download v1.2.0-beta.N -R
+   github.com/EverTranscript/EverTranscript`, and check the artifact's hash
+   against its line.
+   - Mac: in the unzipped release, `dwarfdump --uuid
+     EverTranscript.app/Contents/Resources/evertranscript` gives the
+     `LC_UUID`, and the installed Core must give the same one. `spctl -a -vv
+     /Applications/EverTranscript.app` must say `Notarized Developer ID`, and
+     `codesign -dv` must show `TeamIdentifier=9958A27J47`.
+   - windows-zx8: before **Restart to Update**, `certutil -hashfile` of
+     `%LOCALAPPDATA%\@evertranscriptclient-updater\pending\EverTranscript-Setup-1.2.0-beta.2.exe`
+     must match that file's line in `SHA256SUMS`.
+3. **The running Core's version.** After each install, `$ET --version` (the
+   binary on disk) and `$ET status` (the Core that is running, with its pid)
+   must both name the beta. A `status` that still names the previous version,
+   under the old pid, means the Core was not restarted (Q333, Q334). On
+   zx8, `status` must also still name the test History.
+4. **History compared.** After each install, `$ET list` names the same
+   Meetings as before it. On the Mac, the database passes `integrity_check`,
+   and its Meeting count and `user_version` match the backup, unless the beta
+   adds a migration. On zx8, the real History's fingerprint is unchanged.
+
 ## Artifact names are load-bearing
 
 The in-app updater downloads by filename. electron-builder writes
