@@ -3880,3 +3880,33 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** The checklist (step 5) says the identity stays in the login keychain for local builds and that a lost `.p8` is revoked, not recovered; keeping the file is the cheapest way to avoid that. Deleting the `.p12` before the import would strand the private key that the spec's slice 6 (this Mac's local signing) needs.
 **Outcome:** assumed
 **Ref:** 40bb542
+
+## Q348 — upstream-harvest/02-mic-channel-recovery — deviation
+
+**Question:** anarlog `693500220d` (#8048) makes each capture channel reopen on its own. Which parts come over, and how does an async loop over a pulled stream fit a leg that is a thread behind cpal's pushed callbacks?
+**Options considered:** the mic leg only, as `UH-2026-10-10` "The port" describes / both legs / no reopen, ending the leg on its first failure instead
+**Chosen:** **The mic leg only.** `run_mic_leg` in `audio/live.rs` is upstream's `run_channel` as a thread: an attempt ends on cpal's error callback or on 5s without frames, then the leg waits 1s/2s/4s and reopens the default input, skipping the device that just failed while another exists (`new_excluding`). Every failed attempt is a `StreamFailed`, and a reopen onto another device is a `DeviceChanged { Mic }`, so `MicIsolation` stops claiming isolation. A failure with no delay left ends the loop, and the supervisor's consecutive count ends the leg on that same failure, so `EndLeg` marks the Meeting partial with the reason. Three adaptations: the stall timer starts at the leg's first frame, because a mic that never delivers is the recorder's silent-leg watchdog's to judge; a Meeting's first start is still not retried, so a mic that cannot start at all stays `Unavailable`, as before; and a reopen whose start never returns ends the leg with `Unavailable` and its reason, because it still holds the startup permit and nothing more can be tried. Not ported: the manual retry command, the joiner's `pop_available_pair`, and the speaker channel (`PORTS.md`).
+**Decided-by:** Frank (approved `UH-2026-10-10`, 2026-10-14, through the mac-mini-m6 session); agent (the adaptations)
+**Justification:** `ChurnPolicy` answered a `StreamFailed` with `RestartLeg`, and nothing restarted anything: one cpal error made the Operator's own voice silent for the rest of the Meeting, while the record called it complete. ADR-0029's amendment (ii) requires the respawn, and this is a row where we deliberately match anarlog. The system leg is a process tap that delivers nothing while nothing plays, so upstream's frame timeout would convict every quiet stretch there.
+**Outcome:** applied. Six tests drive the loop with a fake opener: a dropped mic reopened onto another device, a stall reopened, a mic that cannot come back ending its leg after four failures, a hung reopen ending it with the reason, a first start not retried, and the permit. With the reopen disabled, three of them fail. Untested by anything automatic: a real disconnect, and cpal's unplug behaviour on Windows. The hand check is in issue 02.
+**Ref:** `.scratch/upstream-harvest/issues/02-mic-channel-recovery.md`, `crates/evertranscript-core/src/audio/live.rs`, `PORTS.md`, ADR-0029
+
+## Q349 — upstream-harvest/02-mic-channel-recovery — tradeoff
+
+**Question:** The supervisor's restart count must reset when a leg recovers. What counts as recovered, and how does the supervisor learn it?
+**Options considered:** the first frame after a restart, as the proposal words it / 30s of steady delivery, as upstream measures it, judged by the supervisor from the frames it sees / the same 30s, judged by the leg and sent as an event
+**Chosen:** **30s of steady delivery, judged by the leg, sent as a new `CaptureEvent::Healthy { channel }`.** `RestartTracker` now counts consecutive failures (`record_consecutive_restart`) and `reset`s on `Healthy`, replacing the 22s window and 30s of quiet. `RestartBudget` keeps only `max_restarts`.
+**Decided-by:** agent
+**Justification:** A first frame would let a device that comes back for a moment and dies again loop forever without ending its leg. Upstream forgives after 30s, in both `run_channel` and `SessionMsg::SourceHealthy`. One judge, sending through the same ordered queue as the failures, keeps the leg's ladder and the supervisor's count in step: if they drifted, the leg could give up while the supervisor still had budget, which is the unmarked silent leg again. The Windows system leg sends `StreamFailed` and never `Healthy`, so its count never resets; it also never reopens, so in practice its first failure is its last either way.
+**Outcome:** applied. Upstream's `consecutive_failures_stay_bounded_until_capture_is_healthy` is ported as `consecutive_failures_stay_bounded_until_the_leg_is_healthy`.
+**Ref:** `crates/evertranscript-core/src/audio/supervisor.rs`, `crates/evertranscript-core/src/audio/mod.rs`, Q348
+
+## Q350 — upstream-harvest/02-mic-channel-recovery — deviation
+
+**Question:** Upstream's `StartupPermit` refuses a microphone start at once while another is in flight. Should ours?
+**Options considered:** refuse at once, as upstream does / wait for the other start, bounded below the 3s start timeout / no permit
+**Chosen:** **Wait up to 1s, then refuse.** A healthy start holds the permit for milliseconds and a stuck one never releases it, so 1s tells them apart. It stays under `MICROPHONE_START_TIMEOUT`, so a refusal is reported as a refusal, not a hang.
+**Decided-by:** agent
+**Justification:** Upstream can refuse at once because it retries every start a second later. Here a Meeting's first start is never retried, so an audio check starting in the same instant would cost the whole Meeting its microphone. That was measured, not guessed: with an immediate refusal, `one_leg_failing_does_not_take_the_other_down_with_it` failed in 3 of 4 parallel runs on this Mac, because a parallel test's start held the permit and the probe concluded the machine had no microphone. With the wait, it passed 5 of 5.
+**Outcome:** applied
+**Ref:** `crates/evertranscript-core/src/audio/live.rs` (`PERMIT_WAIT`, `only_one_microphone_start_is_in_flight`), Q348

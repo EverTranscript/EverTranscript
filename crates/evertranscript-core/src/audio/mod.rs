@@ -134,6 +134,12 @@ pub enum CaptureEvent {
         channel: AudioChannel,
         error: String,
     },
+    /// This leg has delivered steadily since its last failure, so its
+    /// restart budget is restored. Sent by the leg that judged it, so the
+    /// supervisor's count and the leg's own reopen ladder reset together.
+    Healthy {
+        channel: AudioChannel,
+    },
     /// This leg will produce nothing on this machine (for example system
     /// audio where the platform capture is unavailable). Reported once, and
     /// never retried — retrying an unsupported thing is just noise.

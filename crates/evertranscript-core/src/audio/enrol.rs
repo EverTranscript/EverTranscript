@@ -111,7 +111,7 @@ pub async fn record(mut source: Box<dyn AudioSource>, seconds: u64) -> anyhow::R
                 CaptureEvent::StreamFailed { error, .. } => {
                     failure.get_or_insert(error);
                 }
-                CaptureEvent::DeviceChanged { .. } => {}
+                CaptureEvent::DeviceChanged { .. } | CaptureEvent::Healthy { .. } => {}
             }
         }
         if failure.is_some() {

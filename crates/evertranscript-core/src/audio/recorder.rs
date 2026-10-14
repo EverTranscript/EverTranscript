@@ -257,8 +257,9 @@ async fn run(
             Action::Continue => {}
             Action::RestartLeg { channel, after, .. } => {
                 debug!(?channel, ?after, "capture leg restarting");
-                // The source owns its own reconnection; the timeline simply
-                // shows the gap, which the joiner fills with silence.
+                // The source owns its own reconnection — the microphone
+                // reopens itself (`live.rs`) — and the timeline simply shows
+                // the gap, which the joiner fills with silence.
             }
             Action::EndLeg { channel, reason } => {
                 info!(?channel, reason, "capture leg ended; the Meeting continues");

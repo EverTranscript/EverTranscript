@@ -14,6 +14,15 @@
 //! - The **session outlives every stream.** Nothing here can create a second
 //!   Meeting, which is why device churn cannot split one recording in two —
 //!   the failure both open-source competitors have shipped.
+//! - Failures count **consecutively**, and only proof of health — a leg that
+//!   has delivered steadily since ([`CaptureEvent::Healthy`]) — earns the
+//!   budget back. Time passing does not: a device that dies, comes back for a
+//!   second and dies again is the same broken device.
+//!
+//! The consecutive count and its reset are PORTED from `fastrepl/anarlog`,
+//! Copyright (c) 2023-present Fastrepl, Inc., licensed MIT:
+//! `crates/supervisor/src/restart.rs` (`record_consecutive_restart`, `reset`)
+//! at rev `693500220d`. See `PORTS.md`.
 
 use std::collections::HashMap;
 
@@ -24,64 +33,42 @@ use tracing::warn;
 
 use super::CaptureEvent;
 
-/// How many restarts a leg gets, and how quickly the count forgives.
+/// How many consecutive restarts a leg gets before it is ended.
+///
+/// Three, matching the microphone's reopen ladder in `live.rs` (1s, 2s, 4s):
+/// the failure that finds no delay left there is the one that exceeds this.
 #[derive(Debug, Clone, Copy)]
 pub struct RestartBudget {
     pub max_restarts: u32,
-    pub window: std::time::Duration,
-    /// Quiet time after which the count resets: a leg that ran fine for a
-    /// while has earned its retries back.
-    pub reset_after: std::time::Duration,
 }
 
 impl Default for RestartBudget {
     fn default() -> Self {
-        Self {
-            max_restarts: 3,
-            window: std::time::Duration::from_secs(22),
-            reset_after: std::time::Duration::from_secs(30),
-        }
+        Self { max_restarts: 3 }
     }
 }
 
-/// Tracks one leg's restarts against its budget.
-#[derive(Debug)]
+/// Tracks one leg's consecutive restarts against its budget.
+#[derive(Debug, Default)]
 struct RestartTracker {
-    budget: RestartBudget,
-    attempts: Vec<std::time::Instant>,
-    last_restart: Option<std::time::Instant>,
+    count: u32,
 }
 
 impl RestartTracker {
-    fn new(budget: RestartBudget) -> Self {
-        Self {
-            budget,
-            attempts: Vec::new(),
-            last_restart: None,
-        }
-    }
-
     /// Records a restart that counts, returning whether the leg may continue.
-    fn record(&mut self, now: std::time::Instant) -> bool {
-        if let Some(last) = self.last_restart
-            && now.duration_since(last) >= self.budget.reset_after
-        {
-            self.attempts.clear();
-        }
-        self.attempts
-            .retain(|attempt| now.duration_since(*attempt) < self.budget.window);
-        self.attempts.push(now);
-        self.last_restart = Some(now);
-        self.attempts.len() as u32 <= self.budget.max_restarts
+    fn record_consecutive_restart(&mut self, budget: &RestartBudget) -> bool {
+        self.count = self.count.saturating_add(1);
+        self.count <= budget.max_restarts
     }
 
-    fn attempts_in_window(&self) -> u32 {
-        self.attempts.len() as u32
+    /// The leg has proved itself healthy since its last failure.
+    fn reset(&mut self) {
+        self.count = 0;
     }
 
     /// Backoff before the next attempt: 1s, 2s, 4s…
     fn backoff(&self) -> std::time::Duration {
-        let exponent = self.attempts.len().saturating_sub(1).min(4) as u32;
+        let exponent = self.count.saturating_sub(1).min(4);
         std::time::Duration::from_secs(1 << exponent)
     }
 }
@@ -140,18 +127,26 @@ impl ChurnPolicy {
                 }
             }
 
+            CaptureEvent::Healthy { channel } => {
+                if let Some(tracker) = self.trackers.get_mut(channel) {
+                    info!(
+                        ?channel,
+                        "capture leg is healthy again; its budget is restored"
+                    );
+                    tracker.reset();
+                }
+                Action::Continue
+            }
+
             CaptureEvent::StreamFailed { channel, error } => {
-                let tracker = self
-                    .trackers
-                    .entry(*channel)
-                    .or_insert_with(|| RestartTracker::new(self.budget));
-                let may_continue = tracker.record(std::time::Instant::now());
+                let tracker = self.trackers.entry(*channel).or_default();
+                let may_continue = tracker.record_consecutive_restart(&self.budget);
                 if may_continue {
                     let after = tracker.backoff();
                     warn!(
                         ?channel,
                         error,
-                        attempt = tracker.attempts_in_window(),
+                        attempt = tracker.count,
                         "capture stream failed; restarting this leg"
                     );
                     Action::RestartLeg {
@@ -167,8 +162,8 @@ impl ChurnPolicy {
                     Action::EndLeg {
                         channel: *channel,
                         reason: format!(
-                            "{channel:?} capture failed {} times: {error}",
-                            tracker.attempts_in_window()
+                            "{channel:?} capture failed {} times in a row: {error}",
+                            tracker.count
                         ),
                     }
                 }
@@ -241,10 +236,7 @@ mod tests {
 
     #[test]
     fn stream_failures_back_off_and_then_give_up_on_the_leg() {
-        let mut policy = ChurnPolicy::new(RestartBudget {
-            max_restarts: 3,
-            ..RestartBudget::default()
-        });
+        let mut policy = ChurnPolicy::new(RestartBudget { max_restarts: 3 });
 
         let mut delays = Vec::new();
         for _ in 0..3 {
@@ -274,10 +266,7 @@ mod tests {
 
     #[test]
     fn one_legs_failures_do_not_consume_the_others_budget() {
-        let mut policy = ChurnPolicy::new(RestartBudget {
-            max_restarts: 2,
-            ..RestartBudget::default()
-        });
+        let mut policy = ChurnPolicy::new(RestartBudget { max_restarts: 2 });
 
         // Exhaust the system leg entirely.
         policy.decide(&failure(AudioChannel::System));
@@ -336,28 +325,41 @@ mod tests {
         }
     }
 
+    /// Upstream's `consecutive_failures_stay_bounded_until_capture_is_healthy`.
     #[test]
-    fn a_quiet_spell_restores_the_budget() {
-        let budget = RestartBudget {
-            max_restarts: 2,
-            window: std::time::Duration::from_millis(50),
-            reset_after: std::time::Duration::from_millis(10),
-        };
-        let mut tracker = RestartTracker::new(budget);
-        let start = std::time::Instant::now();
-
-        assert!(tracker.record(start));
-        assert!(tracker.record(start));
+    fn consecutive_failures_stay_bounded_until_the_leg_is_healthy() {
+        let mut policy = ChurnPolicy::new(RestartBudget { max_restarts: 3 });
+        for _ in 0..3 {
+            assert!(matches!(
+                policy.decide(&failure(AudioChannel::Mic)),
+                Action::RestartLeg { .. }
+            ));
+        }
         assert!(
-            !tracker.record(start),
-            "three restarts inside the window exceed a budget of two"
+            matches!(
+                policy.decide(&failure(AudioChannel::Mic)),
+                Action::EndLeg { .. }
+            ),
+            "a fourth failure in a row exceeds a budget of three, however long it took"
         );
 
-        // After a long enough quiet spell, the leg is trusted again.
-        let later = start + std::time::Duration::from_millis(500);
-        assert!(
-            tracker.record(later),
-            "a leg that behaved for a while should get its retries back"
+        let mut policy = ChurnPolicy::new(RestartBudget { max_restarts: 3 });
+        for _ in 0..3 {
+            policy.decide(&failure(AudioChannel::Mic));
+        }
+        assert_eq!(
+            policy.decide(&CaptureEvent::Healthy {
+                channel: AudioChannel::Mic
+            }),
+            Action::Continue
         );
+        match policy.decide(&failure(AudioChannel::Mic)) {
+            Action::RestartLeg { after, .. } => assert_eq!(
+                after,
+                std::time::Duration::from_secs(1),
+                "a healthy leg starts the ladder again from the bottom"
+            ),
+            other => panic!("a healthy leg should get its retries back, got {other:?}"),
+        }
     }
 }

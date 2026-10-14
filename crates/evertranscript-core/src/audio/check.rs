@@ -80,7 +80,7 @@ pub async fn run(seconds: u64) -> AudioCheckResponse {
             CaptureEvent::Unavailable { channel, reason }
             | CaptureEvent::Degraded { channel, reason } => unavailable.push((channel, reason)),
             CaptureEvent::StreamFailed { channel, error } => unavailable.push((channel, error)),
-            CaptureEvent::DeviceChanged { .. } => {}
+            CaptureEvent::DeviceChanged { .. } | CaptureEvent::Healthy { .. } => {}
         }
     }
 
