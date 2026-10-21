@@ -1034,10 +1034,16 @@ mod tests {
                     then: Then::Lasts,
                 },
             ],
-            Some(Duration::from_millis(300)),
+            // Past FAST's health threshold, as the dropped-mic test runs: stopping
+            // just short of it left 40 ms that a slow CI runner overshot.
+            Some(Duration::from_millis(600)),
         );
 
-        assert_eq!(run.kinds(), vec!["failed"]);
+        assert_eq!(
+            run.kinds(),
+            vec!["failed", "healthy"],
+            "a stall, then the reopened microphone delivering steadily"
+        );
         match &run.events[0] {
             CaptureEvent::StreamFailed { error, .. } => assert!(
                 error.contains("stopped delivering"),
