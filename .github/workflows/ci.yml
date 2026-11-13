@@ -48,8 +48,8 @@ jobs:
       # cache then carried that build to a runner without it, and
       # `transcription_quality` died with STATUS_ILLEGAL_INSTRUCTION on a
       # commit that changed only Markdown (DECISIONS Q310). Off, ggml's own
-      # defaults are the AVX2 set without AVX-512. Windows only: macos-14 is
-      # an M1, the oldest Apple Silicon there is.
+      # defaults are the AVX2 set without AVX-512. Windows only: macos-15 is
+      # an M1 (it prints "Apple M1 (Virtual)"), the oldest Apple Silicon there is.
       #
       # **And optimized.** On MSVC, cmake-rs replaces the flags of the CMake
       # build type it is given and drops every `/O` (rust-lang/cmake-rs#240).

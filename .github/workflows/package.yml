@@ -66,7 +66,8 @@ jobs:
       # AVX-512 included, and an Operator's machine without it crashes the
       # first time it transcribes (DECISIONS Q310). `GGML_NATIVE=OFF` leaves
       # ggml's defaults, the AVX2 set. The sidecar's llama.cpp already builds
-      # this way. macos-14 is an M1, the oldest Apple Silicon there is.
+      # this way. macos-15 is an M1 (its CI log prints "Apple M1 (Virtual)"),
+      # the oldest Apple Silicon there is.
       #
       # It is also built optimized. On MSVC, cmake-rs drops every `/O` from
       # CMake's Release flags (rust-lang/cmake-rs#240), so v1.0.1 shipped
