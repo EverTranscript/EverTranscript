@@ -45,7 +45,8 @@ fn main() -> anyhow::Result<()> {
     let reference: PathBuf = args.next().expect("reference.json").into();
 
     let started = std::time::Instant::now();
-    let mut session = Session::builder()?.commit_from_file(&model)?;
+    let environment = ort::init().build()?;
+    let mut session = Session::builder(&environment)?.commit_from_file(&model)?;
     let loaded = started.elapsed();
 
     let inputs: Vec<String> = session

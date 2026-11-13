@@ -3920,3 +3920,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Q271 makes every bump one deliberate commit. Both fixes were measured on m6 with 1.100.0, not guessed. Tests now build to `target/debug/build/evertranscript-core/<hash>/out/`, and `target/debug/deps/` no longer exists. The old glob matched nothing, and since `ls` then fails under `bash -e`, the step would have gone red rather than pass vacuously. The upward search must match a **file**: `target/debug/build/evertranscript-summarizer/` is a directory, and the first try, with `exists()`, found it and failed with "Permission denied". fmt, clippy `-D warnings` and `cargo test --workspace` raised nothing new on 1.100.
 **Outcome:** applied
 **Ref:** (this commit), Q271
+
+## Q352 — interactive/rust-1.100 — deviation
+
+**Question:** After Q351, Windows CI failed in `Lints`: the build script of `ort-sys` 2.0.0-rc.13 panicked under Rust 1.100. It finds the folder to copy the ONNX Runtime DLLs into by going three directories up from `OUT_DIR`, and on the new build-dir layout that lands in `target/<profile>/build/`. How should this be fixed?
+**Options considered:** move `ort` to rc.14, the first release whose build script reads both layouts (`vars::target_dir`) / rc.15, the latest / go back to 1.98.1 until ort settles
+**Chosen:** `cargo update -p ort --precise 2.0.0-rc.14`. It moves `ort` and `ort-sys` and nothing else. rc.14 makes the environment explicit: `Session::builder` takes `&Environment`, and a process may build only one, even after the first is dropped. So `diarize/live.rs` keeps one `LazyLock` environment for the life of the process, and `open()` reports a failed build as `Unavailable`, as it already did for a model that will not load. `examples/redimnet_spike.rs` builds its own.
+**Decided-by:** agent
+**Justification:** rc.14 is the smallest step past the fix; rc.15 would bring a release more of change and no layout fix rc.14 lacks. The manifest's `"2.0.0-rc.10"` already admits rc.14, so `Cargo.toml` is unchanged. Checked on m6 with the CI's two diarization models: `diarize::live`'s 27 tests (including `the_models_load_and_actually_run` and `a_whole_meeting_diarizes_end_to_end`), `enrolment_vertical` and `guarantees` all pass, each building segmentation and embedding sessions on the one environment. The DLL copy itself only runs on Windows, so the Windows job is the check that it now lands beside the executables.
+**Outcome:** applied
+**Ref:** (this commit), Q351

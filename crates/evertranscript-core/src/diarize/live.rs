@@ -36,8 +36,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::LazyLock;
 
 use evertranscript_protocol::AudioChannel;
+use ort::environment::Environment;
 use ort::session::Session;
 use ort::value::Value;
 
@@ -142,10 +144,18 @@ fn failed(error: impl std::fmt::Display) -> DiarizeError {
     DiarizeError::Failed(anyhow::anyhow!("{error}"))
 }
 
+/// ort allows one ONNX Runtime environment per process, and building a second
+/// fails even after the first is dropped, so it lives as long as the process.
+static ENVIRONMENT: LazyLock<ort::Result<Environment>> = LazyLock::new(|| ort::init().build());
+
 fn open(path: &Path) -> Result<Session, DiarizeError> {
-    Session::builder()
+    let unavailable = |error: &dyn std::fmt::Display| {
+        DiarizeError::Unavailable(format!("{}: {error}", path.display()))
+    };
+    let environment = ENVIRONMENT.as_ref().map_err(|error| unavailable(error))?;
+    Session::builder(environment)
         .and_then(|mut builder| builder.commit_from_file(path))
-        .map_err(|error| DiarizeError::Unavailable(format!("{}: {error}", path.display())))
+        .map_err(|error| unavailable(&error))
 }
 
 /// The embedding model and its front end.
