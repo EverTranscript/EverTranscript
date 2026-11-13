@@ -173,8 +173,13 @@ fn sidecar() -> Option<PathBuf> {
     } else {
         "evertranscript-summarizer"
     };
-    let beside = std::env::current_exe().ok()?.parent()?.parent()?.join(name);
-    beside.exists().then_some(beside)
+    // Cargo 1.100 builds tests in `target/<profile>/build/<pkg>/<hash>/out/`
+    // (it was `target/<profile>/deps/`), so search upward for `target/<profile>/`.
+    std::env::current_exe()
+        .ok()?
+        .ancestors()
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 /// Every Summary this binary needs.

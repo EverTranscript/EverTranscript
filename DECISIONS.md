@@ -3910,3 +3910,13 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** Upstream can refuse at once because it retries every start a second later. Here a Meeting's first start is never retried, so an audio check starting in the same instant would cost the whole Meeting its microphone. That was measured, not guessed: with an immediate refusal, `one_leg_failing_does_not_take_the_other_down_with_it` failed in 3 of 4 parallel runs on this Mac, because a parallel test's start held the permit and the probe concluded the machine had no microphone. With the wait, it passed 5 of 5.
 **Outcome:** applied
 **Ref:** `crates/evertranscript-core/src/audio/live.rs` (`PERMIT_WAIT`, `only_one_microphone_start_is_in_flight`), Q348
+
+## Q351 — interactive/rust-1.100 — deviation
+
+**Question:** Rust 1.100.0 is out and Frank asked for every one of his Rust projects to move to it. Rust 1.100 also moves Cargo's build directory to a new layout. What changes with the pin?
+**Options considered:** bump the pin only / bump the pin and fix whatever the new build-dir layout breaks
+**Chosen:** Pin `1.100.0`, plus two layout fixes. (1) The Windows "whisper.cpp was built for the baseline" step in `ci.yml` and `package.yml` now globs `target/*/build/whisper-rs-sys/*/out/build/CMakeCache.txt`; the hash is a directory now, not a `-<hash>` suffix. (2) The three summary tests find the sidecar by searching upward from their own executable for the first ancestor that holds it as a file. They used to go two directories up, which assumed tests ran from `target/<profile>/deps/`.
+**Decided-by:** human (the bump); agent (the layout fixes)
+**Justification:** Q271 makes every bump one deliberate commit. Both fixes were measured on m6 with 1.100.0, not guessed. Tests now build to `target/debug/build/evertranscript-core/<hash>/out/`, and `target/debug/deps/` no longer exists. The old glob matched nothing, and since `ls` then fails under `bash -e`, the step would have gone red rather than pass vacuously. The upward search must match a **file**: `target/debug/build/evertranscript-summarizer/` is a directory, and the first try, with `exists()`, found it and failed with "Permission denied". fmt, clippy `-D warnings` and `cargo test --workspace` raised nothing new on 1.100.
+**Outcome:** applied
+**Ref:** (this commit), Q271

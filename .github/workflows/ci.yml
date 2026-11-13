@@ -117,7 +117,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          caches=$(ls target/*/build/whisper-rs-sys-*/out/build/CMakeCache.txt)
+          caches=$(ls target/*/build/whisper-rs-sys/*/out/build/CMakeCache.txt)
           ! grep -H 'GGML_NATIVE:BOOL=ON\|GGML_AVX512:BOOL=ON' $caches || exit 1
           ! grep -H 'CMAKE_C\(XX\)\?_FLAGS_RELEASE:STRING=' $caches | grep -v -- '-O2'
 

@@ -326,12 +326,13 @@ fn sidecar() -> Option<PathBuf> {
         let path = PathBuf::from(path);
         return path.exists().then_some(path);
     }
-    let beside = std::env::current_exe()
+    // Cargo 1.100 builds tests in `target/<profile>/build/<pkg>/<hash>/out/`
+    // (it was `target/<profile>/deps/`), so search upward for `target/<profile>/`.
+    std::env::current_exe()
         .ok()?
-        .parent()?
-        .parent()?
-        .join("evertranscript-summarizer");
-    beside.exists().then_some(beside)
+        .ancestors()
+        .map(|dir| dir.join("evertranscript-summarizer"))
+        .find(|path| path.is_file())
 }
 
 fn spawn() -> Option<SidecarBackend> {

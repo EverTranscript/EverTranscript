@@ -68,9 +68,10 @@ fn model() -> Option<PathBuf> {
 /// The sidecar binary, beside this test's own executable.
 ///
 /// `EVERTRANSCRIPT_SUMMARIZER_BIN` first, matching what the Core itself reads
-/// (`server.rs`), so one override works for both. Otherwise `target/<profile>/`
-/// — an integration test runs from `target/<profile>/deps/`, and `--workspace`
-/// has built the sidecar into its parent.
+/// (`server.rs`), so one override works for both. Otherwise `target/<profile>/`,
+/// where `--workspace` built the sidecar: the nearest ancestor of this test's
+/// executable that holds it. Cargo 1.100 moved test binaries from
+/// `target/<profile>/deps/` to `target/<profile>/build/<pkg>/<hash>/out/`.
 fn sidecar() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("EVERTRANSCRIPT_SUMMARIZER_BIN") {
         let path = PathBuf::from(path);
@@ -81,8 +82,11 @@ fn sidecar() -> Option<PathBuf> {
     } else {
         "evertranscript-summarizer"
     };
-    let beside = std::env::current_exe().ok()?.parent()?.parent()?.join(name);
-    beside.exists().then_some(beside)
+    std::env::current_exe()
+        .ok()?
+        .ancestors()
+        .map(|dir| dir.join(name))
+        .find(|path| path.is_file())
 }
 
 /// Both, or a reason. **A present model and an absent binary is a failure**,
