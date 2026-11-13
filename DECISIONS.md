@@ -3930,3 +3930,23 @@ Granola 7.515.1 never waits longer after a release; within 5 minutes of the sche
 **Justification:** rc.14 is the smallest step past the fix; rc.15 would bring a release more of change and no layout fix rc.14 lacks. The manifest's `"2.0.0-rc.10"` already admits rc.14, so `Cargo.toml` is unchanged. Checked on m6 with the CI's two diarization models: `diarize::live`'s 27 tests (including `the_models_load_and_actually_run` and `a_whole_meeting_diarizes_end_to_end`), `enrolment_vertical` and `guarantees` all pass, each building segmentation and embedding sessions on the one environment. The DLL copy itself only runs on Windows, so the Windows job is the check that it now lands beside the executables.
 **Outcome:** applied
 **Ref:** (this commit), Q351
+
+## Q353 — interactive/rust-1.100 — deviation
+
+**Question:** GitHub no longer accepts the `macos-14` runner. Since 2026-10-21 it has cancelled the macOS legs of `ci.yml` and `package.yml` before they start, so no macOS build or test has checked Q351 or Q352. Which runner replaces it?
+**Options considered:** `macos-15` / `macos-latest` (moves without a commit) / `macos-26`
+**Chosen:** `macos-15`, named exactly, so the runner moves only on a commit that says so, as the toolchain does (Q271). The Rust toolchain step now prints the macOS CPU. The comments that said "macos-14 is an M1, the oldest Apple Silicon" are rewritten from that print, not assumed. They matter because the macOS whisper.cpp build stays native, and a newer chip could compile in instructions an M1 lacks.
+**Decided-by:** human (go-ahead, 2026-11-12); agent (runner pick)
+**Justification:** Frank's go-ahead ("do 1,2,3,4,5", item 1). `macos-15` is the smallest step from `macos-14` that GitHub still runs.
+**Outcome:** applied
+**Ref:** (this commit)
+
+## Q354 — interactive/rust-1.100 — tradeoff
+
+**Question:** Q352 stopped at `ort` rc.14 as the smallest step past the build-dir fix. Should it go on to rc.15, the latest?
+**Options considered:** stay on rc.14 / `cargo update -p ort -p ort-sys --precise 2.0.0-rc.15`
+**Chosen:** rc.15. Only `ort` and `ort-sys` move in `Cargo.lock`. No code changes: clippy with `-D warnings` is clean, and the manifest's `"2.0.0-rc.10"` already admits rc.15.
+**Decided-by:** human (go-ahead, 2026-11-12, item 5); agent (precise, two-crate update)
+**Justification:** Checked on m6 against the CI's two diarization models (sha256 verified). `diarize::live` passes 27 of 27, `enrolment_vertical` 1, `guarantees` 8, and the workspace suite, the sidecar build and the bindings check all pass. Windows and macOS CI on this commit are the remaining check.
+**Outcome:** applied
+**Ref:** (this commit), Q352

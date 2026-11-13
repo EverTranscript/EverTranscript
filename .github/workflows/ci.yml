@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, windows-latest]
+        os: [macos-15, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -39,6 +39,8 @@ jobs:
         run: |
           rustup toolchain install --no-self-update
           rustc --version && cargo clippy --version && cargo fmt --version
+          # The comments below rely on which Apple Silicon this is.
+          if [ "$RUNNER_OS" = macOS ]; then sysctl -n machdep.cpu.brand_string; fi
 
       # **whisper.cpp builds for the machine that builds it, unless told
       # otherwise.** whisper-rs-sys leaves ggml's `GGML_NATIVE` on, and on
